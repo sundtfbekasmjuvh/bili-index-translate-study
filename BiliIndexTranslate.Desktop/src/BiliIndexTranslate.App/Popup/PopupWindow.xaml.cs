@@ -17,7 +17,7 @@ namespace BiliIndexTranslate.App.Popup;
 /// never appears in Alt+Tab or the taskbar, and all of its controls are non-focusable so that a click
 /// inside it leaves the source application's focus and selection untouched.
 /// </summary>
-public partial class PopupWindow : Window
+public partial class PopupWindow : Window, IPopupSurface
 {
     /// <summary>Logical margin around the card reserved for the shadow (matches Root.Margin in XAML).</summary>
     public const double ShadowMarginLogical = 14;
@@ -42,6 +42,15 @@ public partial class PopupWindow : Window
         Card.MouseLeftButtonDown += OnCardMouseDown;
         Card.MouseMove += OnCardMouseMove;
         Card.MouseLeftButtonUp += OnCardMouseUp;
+
+        var hoverTimer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(120) };
+        hoverTimer.Tick += (_, _) =>
+        {
+            hoverTimer.Stop();
+            StudyPrewarmRequested?.Invoke();
+        };
+        StudyButton.MouseEnter += (_, _) => hoverTimer.Start();
+        StudyButton.MouseLeave += (_, _) => hoverTimer.Stop();
     }
 
     public event Action? CopyRequested;
@@ -49,6 +58,8 @@ public partial class PopupWindow : Window
     public event Action? CloseRequested;
     public event Action? RetryRequested;
     public event Action? SettingsRequested;
+    public event Action? StudyRequested;
+    public event Action? StudyPrewarmRequested;
     public event Action<bool>? OriginalToggled;
     /// <summary>Raised after a pinned card has been dragged to a new place.</summary>
     public event Action? Moved;
@@ -104,6 +115,8 @@ public partial class PopupWindow : Window
         BodyScroll.Visibility = Visibility.Collapsed;
         OriginalPanel.Visibility = Visibility.Collapsed;
         Footer.Visibility = Visibility.Collapsed;
+        StudyButton.Visibility = Visibility.Collapsed;
+        SetStudyOpen(false);
         Caption.Text = caption ?? string.Empty;
         CopyButton.IsEnabled = false;
         PinButton.IsEnabled = false;
@@ -124,6 +137,7 @@ public partial class PopupWindow : Window
         BodyScroll.Visibility = Visibility.Visible;
         BodyScroll.ScrollToTop();
         Footer.Visibility = Visibility.Visible;
+        StudyButton.Visibility = Visibility.Visible;
         Caption.Text = caption ?? string.Empty;
         CopyButton.IsEnabled = true;
         PinButton.IsEnabled = !IsPinned;
@@ -154,6 +168,8 @@ public partial class PopupWindow : Window
         OriginalPanel.Visibility = Visibility.Collapsed;
         ErrorPanel.Visibility = Visibility.Visible;
         Footer.Visibility = Visibility.Visible;
+        StudyButton.Visibility = Visibility.Collapsed;
+        SetStudyOpen(false);
         Caption.Text = caption ?? string.Empty;
         CopyButton.IsEnabled = false;
         PinButton.IsEnabled = false;
@@ -167,6 +183,13 @@ public partial class PopupWindow : Window
         OriginalButton.Foreground = show ? (Brush)FindResource("Popup.Accent") : (Brush)FindResource("Popup.TextSecondary");
         if (BodyScroll.Visibility == Visibility.Visible)
             OriginalPanel.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    public void SetStudyOpen(bool open)
+    {
+        StudyButton.Background = open ? (Brush)FindResource("Popup.AccentSoft") : Brushes.Transparent;
+        StudyButton.BorderBrush = open ? (Brush)FindResource("Popup.Accent") : (Brush)FindResource("Popup.Border");
+        StudyButton.Foreground = open ? (Brush)FindResource("Popup.Accent") : (Brush)FindResource("Popup.TextSecondary");
     }
 
     public void SetPinned(bool pinned)
@@ -301,6 +324,7 @@ public partial class PopupWindow : Window
     private void OnCloseClick(object sender, RoutedEventArgs e) => CloseRequested?.Invoke();
     private void OnRetryClick(object sender, RoutedEventArgs e) => RetryRequested?.Invoke();
     private void OnSettingsClick(object sender, RoutedEventArgs e) => SettingsRequested?.Invoke();
+    private void OnStudyClick(object sender, RoutedEventArgs e) => StudyRequested?.Invoke();
 
     private void OnOriginalClick(object sender, RoutedEventArgs e)
     {

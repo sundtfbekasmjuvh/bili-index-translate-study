@@ -1,9 +1,8 @@
-// manifest.json
 {
   "manifest_version": 3,
   "name": "Bili Index Translate",
-  "version": "1.0.0",
-  "description": "Translate selected text on any page with the Bilibili Index-Translate OpenAI-compatible API.",
+  "version": "1.2.0",
+  "description": "Lightweight inline translation + companion Language Study Card powered by Bilibili Index-Translate.",
   "permissions": ["storage", "contextMenus", "activeTab", "scripting"],
   "host_permissions": [
     "https://index-translate.bilibili.com/*",
@@ -27,6 +26,6 @@
     "open_in_tab": true
   },
   "action": {
-    "default_title": "Bili Index Translate - open options"
+    "default_title": "Bili Index Translate — Settings"
   }
 }

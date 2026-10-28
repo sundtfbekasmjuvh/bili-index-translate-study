@@ -1,104 +1,805 @@
-/* content.css */
+/* content.css — Editorial Minimalist Dual-Popup System (Light & Dark, High-Perf Containment) */
 
-/* Root: wipe inherited page styles first, then set everything the panel needs. */
-#bili-index-translate-panel {
+:root {
+  --bit-scale: 1;
+  --bit-surface: rgba(255, 255, 255, 0.96);
+  --bit-surface-alt: rgba(248, 250, 252, 0.92);
+  --bit-pill-bg: rgba(15, 23, 42, 0.045);
+  --bit-pill-hover: rgba(15, 23, 42, 0.085);
+  --bit-border: rgba(15, 23, 42, 0.09);
+  --bit-divider: rgba(15, 23, 42, 0.065);
+  --bit-ink: #0f172a;
+  --bit-ink-secondary: #475569;
+  --bit-ink-faint: #94a3b8;
+  --bit-accent: #2563eb;
+  --bit-accent-soft: rgba(37, 99, 235, 0.085);
+  --bit-accent-border: rgba(37, 99, 235, 0.24);
+  --bit-reg-fg: #047857;
+  --bit-reg-bg: rgba(16, 185, 129, 0.09);
+  --bit-nuance-fg: #6d28d9;
+  --bit-nuance-bg: rgba(124, 58, 237, 0.09);
+  --bit-mem-fg: #b45309;
+  --bit-mem-bg: rgba(245, 158, 11, 0.11);
+  --bit-hl-bg: rgba(37, 99, 235, 0.11);
+  --bit-err-fg: #dc2626;
+  --bit-err-bg: rgba(220, 38, 38, 0.07);
+  --bit-shadow:
+    0 0 0 1px rgba(15, 23, 42, 0.04),
+    0 4px 12px -2px rgba(15, 23, 42, 0.08),
+    0 20px 40px -8px rgba(15, 23, 42, 0.14);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-bit-theme="light"]) {
+    --bit-surface: rgba(20, 24, 33, 0.95);
+    --bit-surface-alt: rgba(28, 34, 46, 0.9);
+    --bit-pill-bg: rgba(255, 255, 255, 0.06);
+    --bit-pill-hover: rgba(255, 255, 255, 0.11);
+    --bit-border: rgba(255, 255, 255, 0.1);
+    --bit-divider: rgba(255, 255, 255, 0.07);
+    --bit-ink: #f1f5f9;
+    --bit-ink-secondary: #94a3b8;
+    --bit-ink-faint: #64748b;
+    --bit-accent: #60a5fa;
+    --bit-accent-soft: rgba(96, 165, 250, 0.14);
+    --bit-accent-border: rgba(96, 165, 250, 0.3);
+    --bit-reg-fg: #34d399;
+    --bit-reg-bg: rgba(52, 211, 153, 0.13);
+    --bit-nuance-fg: #c4b5fd;
+    --bit-nuance-bg: rgba(167, 139, 250, 0.15);
+    --bit-mem-fg: #fcd34d;
+    --bit-mem-bg: rgba(251, 191, 36, 0.15);
+    --bit-hl-bg: rgba(96, 165, 250, 0.2);
+    --bit-err-fg: #f87171;
+    --bit-err-bg: rgba(248, 113, 113, 0.12);
+    --bit-shadow:
+      0 0 0 1px rgba(255, 255, 255, 0.05),
+      0 8px 20px -4px rgba(0, 0, 0, 0.45),
+      0 24px 48px -10px rgba(0, 0, 0, 0.6);
+  }
+}
+
+html[data-bit-theme="dark"] {
+  --bit-surface: rgba(20, 24, 33, 0.95);
+  --bit-surface-alt: rgba(28, 34, 46, 0.9);
+  --bit-pill-bg: rgba(255, 255, 255, 0.06);
+  --bit-pill-hover: rgba(255, 255, 255, 0.11);
+  --bit-border: rgba(255, 255, 255, 0.1);
+  --bit-divider: rgba(255, 255, 255, 0.07);
+  --bit-ink: #f1f5f9;
+  --bit-ink-secondary: #94a3b8;
+  --bit-ink-faint: #64748b;
+  --bit-accent: #60a5fa;
+  --bit-accent-soft: rgba(96, 165, 250, 0.14);
+  --bit-accent-border: rgba(96, 165, 250, 0.3);
+  --bit-reg-fg: #34d399;
+  --bit-reg-bg: rgba(52, 211, 153, 0.13);
+  --bit-nuance-fg: #c4b5fd;
+  --bit-nuance-bg: rgba(167, 139, 250, 0.15);
+  --bit-mem-fg: #fcd34d;
+  --bit-mem-bg: rgba(251, 191, 36, 0.15);
+  --bit-hl-bg: rgba(96, 165, 250, 0.2);
+  --bit-err-fg: #f87171;
+  --bit-err-bg: rgba(248, 113, 113, 0.12);
+  --bit-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.05),
+    0 8px 20px -4px rgba(0, 0, 0, 0.45),
+    0 24px 48px -10px rgba(0, 0, 0, 0.6);
+}
+
+/* ---- Shared Base Floating Surface ---- */
+
+#bili-index-translate-panel,
+#bili-index-study-panel {
   all: initial;
-  position: absolute !important;
-  z-index: 2147483647 !important;
-  display: none !important;
+  position: fixed;
   box-sizing: border-box;
-  width: 360px;
-  max-width: calc(100vw - 24px);
-  margin: 0;
-  padding: 0;
-  border: 1px solid #d0d4da;
-  border-radius: 8px;
-  background: #ffffff;
-  color: #1f2328;
-  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.18);
-  font: 14px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial,
-    "PingFang SC", "Microsoft YaHei", sans-serif;
-  text-align: left;
-  direction: ltr;
-  letter-spacing: normal;
-  overflow-wrap: anywhere;
+  display: none;
+  flex-direction: column;
+  background: var(--bit-surface);
+  -webkit-backdrop-filter: blur(18px) saturate(1.45);
+  backdrop-filter: blur(18px) saturate(1.45);
+  color: var(--bit-ink);
+  border: 1px solid var(--bit-border);
+  border-radius: 12px;
+  box-shadow: var(--bit-shadow);
+  font: calc(13.5px * var(--bit-scale))/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI",
+    "Inter", Roboto, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  user-select: text;
   overflow: hidden;
+  contain: layout style;
 }
 
-#bili-index-translate-panel[data-open] {
-  display: block !important;
+#bili-index-translate-panel {
+  z-index: 2147483646;
+  min-width: 220px;
+  max-width: 390px;
 }
 
-/* Children: unset page rules (keeps inheritance from the panel), re-apply below. */
-#bili-index-translate-panel * {
-  all: unset;
-  box-sizing: border-box;
+#bili-index-study-panel {
+  z-index: 2147483647;
+  width: 384px;
+  min-width: 280px;
+  max-width: min(404px, calc(100vw - 24px));
 }
 
-#bili-index-translate-panel .bit-header {
+#bili-index-translate-panel[data-open],
+#bili-index-study-panel[data-open] {
+  display: flex;
+  animation: bit-pop-in 0.14s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes bit-pop-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes bit-shimmer {
+  0% { opacity: 0.45; }
+  50% { opacity: 0.85; }
+  100% { opacity: 0.45; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #bili-index-translate-panel[data-open],
+  #bili-index-study-panel[data-open] {
+    animation: none;
+  }
+}
+
+/* ---- Crisp Inline SVG Icons ---- */
+
+#bili-index-translate-panel .bit-icon,
+#bili-index-study-panel .bit-icon {
+  width: 13px;
+  height: 13px;
+  flex-shrink: 0;
+  display: inline-block;
+  vertical-align: -2px;
+}
+
+/* ---- Slim Draggable Headers ---- */
+
+#bili-index-translate-panel .bit-header,
+#bili-index-study-panel .bit-study-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 8px;
   padding: 6px 8px 6px 12px;
-  background: #f6f8fa;
-  border-bottom: 1px solid #e3e6ea;
+  border-bottom: 1px solid var(--bit-divider);
+  cursor: move;
   user-select: none;
 }
 
 #bili-index-translate-panel .bit-title {
-  display: block;
-  font-size: 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
   font-weight: 600;
-  color: #57606a;
+  letter-spacing: 0.01em;
+  color: var(--bit-ink-secondary);
 }
 
-#bili-index-translate-panel .bit-close {
+#bili-index-translate-panel .bit-title-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--bit-accent);
+}
+
+#bili-index-study-panel .bit-study-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--bit-ink);
+  min-width: 0;
+}
+
+#bili-index-study-panel .bit-study-title .bit-icon {
+  color: var(--bit-accent);
+}
+
+#bili-index-study-panel .bit-lang-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--bit-accent-soft);
+  color: var(--bit-accent);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+#bili-index-translate-panel .bit-header-actions,
+#bili-index-study-panel .bit-study-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex-shrink: 0;
+}
+
+/* ---- Micro Icon & Pill Controls ---- */
+
+#bili-index-translate-panel .bit-icon-btn,
+#bili-index-study-panel .bit-icon-btn,
+#bili-index-translate-panel .bit-close,
+#bili-index-study-panel .bit-close {
+  all: unset;
+  box-sizing: border-box;
+  width: 23px;
+  height: 23px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 24px;
-  height: 24px;
-  border-radius: 4px;
-  font-size: 18px;
+  border-radius: 6px;
+  color: var(--bit-ink-secondary);
+  font-size: 15px;
   line-height: 1;
-  color: #57606a;
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+#bili-index-translate-panel .bit-icon-btn:hover,
+#bili-index-study-panel .bit-icon-btn:hover,
+#bili-index-translate-panel .bit-close:hover,
+#bili-index-study-panel .bit-close:hover {
+  background: var(--bit-pill-hover);
+  color: var(--bit-ink);
+}
+
+#bili-index-translate-panel .bit-icon-btn[data-copied],
+#bili-index-study-panel .bit-icon-btn[data-copied] {
+  color: var(--bit-reg-fg);
+}
+
+#bili-index-translate-panel .bit-study-trigger {
+  all: unset;
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2.5px 8px;
+  margin-right: 1px;
+  border-radius: 999px;
+  border: 1px solid var(--bit-border);
+  background: var(--bit-pill-bg);
+  color: var(--bit-ink-secondary);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.35;
+  cursor: pointer;
+  transition: all 0.14s ease;
+}
+
+#bili-index-translate-panel .bit-study-trigger:hover {
+  border-color: var(--bit-accent-border);
+  background: var(--bit-accent-soft);
+  color: var(--bit-accent);
+}
+
+#bili-index-translate-panel .bit-study-trigger[data-active] {
+  border-color: var(--bit-accent);
+  background: var(--bit-accent);
+  color: #ffffff;
+}
+
+#bili-index-study-panel .bit-pill-ctrl {
+  all: unset;
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 6.5px;
+  border-radius: 999px;
+  border: 1px solid var(--bit-border);
+  background: transparent;
+  color: var(--bit-ink-secondary);
+  font-size: 10.5px;
+  font-weight: 600;
+  line-height: 1.35;
+  cursor: pointer;
+  transition: all 0.12s ease;
+}
+
+#bili-index-study-panel .bit-pill-ctrl:hover {
+  background: var(--bit-pill-hover);
+  color: var(--bit-ink);
+}
+
+#bili-index-study-panel .bit-pill-ctrl[data-active] {
+  border-color: var(--bit-accent-border);
+  background: var(--bit-accent-soft);
+  color: var(--bit-accent);
+}
+
+/* ---- Scrollable Bodies & Ultra-Thin Scrollbar ---- */
+
+#bili-index-translate-panel .bit-body {
+  padding: 10px 13px;
+  max-height: 280px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: calc(14px * var(--bit-scale));
+  line-height: 1.62;
+  color: var(--bit-ink);
+}
+
+#bili-index-study-panel .bit-study-body {
+  padding: 11px 14px 10px;
+  max-height: min(470px, calc(100vh - 96px));
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+#bili-index-translate-panel .bit-body::-webkit-scrollbar,
+#bili-index-study-panel .bit-study-body::-webkit-scrollbar {
+  width: 5px;
+}
+
+#bili-index-translate-panel .bit-body::-webkit-scrollbar-thumb,
+#bili-index-study-panel .bit-study-body::-webkit-scrollbar-thumb {
+  background: var(--bit-border);
+  border-radius: 999px;
+}
+
+/* ---- Skeleton Shimmer & Error States ---- */
+
+#bili-index-translate-panel .bit-loading,
+#bili-index-study-panel .bit-loading {
+  color: var(--bit-ink-secondary);
+  font-size: 12.5px;
+}
+
+#bili-index-study-panel .bit-skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 3px 0 4px;
+}
+
+#bili-index-study-panel .bit-skel-bar {
+  height: 11px;
+  border-radius: 5px;
+  background: var(--bit-pill-hover);
+  animation: bit-shimmer 1.2s ease-in-out infinite;
+}
+
+#bili-index-study-panel .bit-skel-bar[data-w="title"] { width: 42%; height: 18px; }
+#bili-index-study-panel .bit-skel-bar[data-w="mid"] { width: 76%; }
+#bili-index-study-panel .bit-skel-bar[data-w="full"] { width: 94%; }
+
+#bili-index-translate-panel .bit-error,
+#bili-index-study-panel .bit-error {
+  color: var(--bit-err-fg);
+  background: var(--bit-err-bg);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11.5px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+#bili-index-study-panel .bit-retry-btn {
+  all: unset;
+  align-self: flex-start;
+  margin-top: 7px;
+  padding: 3px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--bit-border);
+  background: var(--bit-pill-bg);
+  color: var(--bit-ink);
+  font-size: 11.5px;
+  font-weight: 500;
   cursor: pointer;
 }
 
-#bili-index-translate-panel .bit-close:hover {
-  background: #e3e6ea;
-  color: #1f2328;
+/* ---- Sentence Grammar Banner & Multi-Card Navigation ---- */
+
+#bili-index-study-panel .bit-grammar-box {
+  background: var(--bit-accent-soft);
+  border-left: 2.5px solid var(--bit-accent);
+  border-radius: 5px;
+  padding: 6px 9px;
+  margin-bottom: 9px;
+  font-size: calc(12px * var(--bit-scale));
+  line-height: 1.52;
+  color: var(--bit-ink);
 }
 
-#bili-index-translate-panel .bit-body {
-  display: block;
-  max-height: 50vh;
-  overflow-y: auto;
-  padding: 10px 12px;
-  white-space: pre-wrap;
-  user-select: text;
-  cursor: text;
+#bili-index-study-panel .bit-grammar-label {
+  font-weight: 700;
+  color: var(--bit-accent);
+  margin-right: 4px;
 }
 
-#bili-index-translate-panel .bit-loading {
-  color: #8c959f;
+#bili-index-study-panel .bit-nav-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding-bottom: 8px;
+  margin-bottom: 8px;
+  border-bottom: 1px solid var(--bit-divider);
 }
 
-#bili-index-translate-panel .bit-error {
-  color: #d1242f;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 12px;
+#bili-index-study-panel .bit-chip-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  min-width: 0;
+  flex: 1;
 }
 
-#bili-index-translate-panel .bit-foot {
-  display: block;
-  padding: 4px 12px 6px;
-  border-top: 1px solid #f0f2f4;
+#bili-index-study-panel .bit-word-chip {
+  all: unset;
+  box-sizing: border-box;
+  max-width: 136px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  background: var(--bit-pill-bg);
+  color: var(--bit-ink-secondary);
+  font-size: 11.5px;
+  cursor: pointer;
+  transition: all 0.12s ease;
+}
+
+#bili-index-study-panel .bit-word-chip:hover {
+  background: var(--bit-pill-hover);
+  color: var(--bit-ink);
+}
+
+#bili-index-study-panel .bit-word-chip[data-active] {
+  border-color: var(--bit-accent-border);
+  background: var(--bit-accent-soft);
+  color: var(--bit-accent);
+  font-weight: 600;
+}
+
+#bili-index-study-panel .bit-step-group {
+  display: inline-flex;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+#bili-index-study-panel .bit-step-btn {
+  all: unset;
+  box-sizing: border-box;
+  width: 21px;
+  height: 21px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 5px;
+  background: var(--bit-pill-bg);
+  color: var(--bit-ink-secondary);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+#bili-index-study-panel .bit-step-btn:hover {
+  background: var(--bit-pill-hover);
+  color: var(--bit-ink);
+}
+
+/* ---- Editorial Hero Row (Headword + Phonetic + Segmented Audio) ---- */
+
+#bili-index-study-panel .bit-head-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+#bili-index-study-panel .bit-head-main {
+  min-width: 0;
+  flex: 1;
+}
+
+#bili-index-study-panel .bit-term-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+}
+
+#bili-index-study-panel .bit-term {
+  font-size: calc(19.5px * var(--bit-scale));
+  font-weight: 700;
+  line-height: 1.24;
+  letter-spacing: -0.018em;
+  color: var(--bit-ink);
+  overflow-wrap: anywhere;
+}
+
+#bili-index-study-panel .bit-surface-tag {
   font-size: 11px;
-  color: #8c959f;
+  color: var(--bit-ink-secondary);
+  background: var(--bit-pill-bg);
+  padding: 1px 6px;
+  border-radius: 4px;
+}
+
+#bili-index-study-panel .bit-meta-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+  margin-top: 4px;
+}
+
+#bili-index-study-panel .bit-pos-tag {
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--bit-accent);
+  background: var(--bit-accent-soft);
+  padding: 1px 5.5px;
+  border-radius: 4px;
+}
+
+#bili-index-study-panel .bit-register-tag {
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--bit-reg-fg);
+  background: var(--bit-reg-bg);
+  padding: 1px 5.5px;
+  border-radius: 4px;
+}
+
+#bili-index-study-panel .bit-reading {
+  font-size: calc(12.5px * var(--bit-scale));
+  color: var(--bit-ink-secondary);
+  font-family: "SF Pro Text", "Segoe UI", "Hiragino Sans", sans-serif;
+  letter-spacing: 0.01em;
+}
+
+/* Segmented Audio Pill (🔊 发音 | 0.7x) */
+#bili-index-study-panel .bit-tts-seg {
+  display: inline-flex;
+  align-items: stretch;
+  border-radius: 999px;
+  border: 1px solid var(--bit-border);
+  background: var(--bit-pill-bg);
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+#bili-index-study-panel .bit-tts-btn,
+#bili-index-study-panel .bit-tts-slow {
+  all: unset;
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  gap: 3.5px;
+  padding: 3.5px 8px;
+  color: var(--bit-ink);
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+#bili-index-study-panel .bit-tts-slow {
+  padding: 3.5px 6.5px;
+  border-left: 1px solid var(--bit-divider);
+  color: var(--bit-ink-secondary);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+#bili-index-study-panel .bit-tts-btn:hover,
+#bili-index-study-panel .bit-tts-slow:hover {
+  background: var(--bit-accent-soft);
+  color: var(--bit-accent);
+}
+
+/* ---- Core Definition & Active Recall Mask ---- */
+
+#bili-index-study-panel .bit-meaning-box {
+  padding: 8px 0 9px;
+  font-size: calc(14.5px * var(--bit-scale));
+  font-weight: 600;
+  line-height: 1.48;
+  color: var(--bit-ink);
+}
+
+#bili-index-study-panel .bit-meaning-box[data-masked] {
+  margin: 7px 0 6px;
+  padding: 9px 12px;
+  border-radius: 8px;
+  background: var(--bit-accent-soft);
+  border: 1px dashed var(--bit-accent-border);
+  color: var(--bit-accent);
+  font-size: 12px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  cursor: pointer;
   user-select: none;
 }
 
-#bili-index-translate-panel .bit-foot:empty {
+/* ---- Editorial Hairline Insight Rows (Zero Box Soup!) ---- */
+
+#bili-index-study-panel .bit-insights {
+  display: flex;
+  flex-direction: column;
+}
+
+#bili-index-study-panel[data-compact] .bit-insights {
   display: none;
+}
+
+#bili-index-study-panel .bit-row {
+  display: grid;
+  grid-template-columns: 36px 1fr;
+  align-items: baseline;
+  gap: 8px;
+  padding: 7px 0;
+  border-top: 1px solid var(--bit-divider);
+}
+
+#bili-index-study-panel .bit-row-tag {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1px 4px;
+  border-radius: 4px;
+  font-size: 10.5px;
+  font-weight: 700;
+  line-height: 1.4;
+  user-select: none;
+}
+
+#bili-index-study-panel .bit-row-tag[data-kind="nuance"] {
+  color: var(--bit-nuance-fg);
+  background: var(--bit-nuance-bg);
+}
+
+#bili-index-study-panel .bit-row-tag[data-kind="memory"] {
+  color: var(--bit-mem-fg);
+  background: var(--bit-mem-bg);
+}
+
+#bili-index-study-panel .bit-row-tag[data-kind="colloc"] {
+  color: var(--bit-ink-secondary);
+  background: var(--bit-pill-bg);
+}
+
+#bili-index-study-panel .bit-row-val {
+  font-size: calc(12.2px * var(--bit-scale));
+  line-height: 1.54;
+  color: var(--bit-ink);
+  min-width: 0;
+}
+
+#bili-index-study-panel .bit-colloc-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4.5px;
+}
+
+#bili-index-study-panel .bit-colloc-pill {
+  all: unset;
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: calc(11.8px * var(--bit-scale));
+  line-height: 1.4;
+  color: var(--bit-ink);
+  background: var(--bit-pill-bg);
+  border: 1px solid transparent;
+  border-radius: 6px;
+  padding: 2.5px 7.5px;
+  cursor: pointer;
+  transition: all 0.12s ease;
+}
+
+#bili-index-study-panel .bit-colloc-pill:hover {
+  border-color: var(--bit-accent-border);
+  background: var(--bit-accent-soft);
+  color: var(--bit-accent);
+}
+
+/* ---- Context-Highlighted Bilingual Example ---- */
+
+#bili-index-study-panel .bit-example-wrap {
+  padding-top: 8px;
+  border-top: 1px solid var(--bit-divider);
+}
+
+#bili-index-study-panel .bit-example-box {
+  border-left: 2px solid var(--bit-accent-border);
+  padding: 1px 0 1px 9px;
+}
+
+#bili-index-study-panel .bit-example-src {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 6px;
+  font-size: calc(12.5px * var(--bit-scale));
+  line-height: 1.55;
+  color: var(--bit-ink);
+}
+
+#bili-index-study-panel mark.bit-hl {
+  background: var(--bit-hl-bg);
+  color: inherit;
+  font-weight: 600;
+  padding: 0 2px;
+  border-radius: 3px;
+}
+
+#bili-index-study-panel .bit-ex-audio {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+#bili-index-study-panel .bit-tts-mini {
+  all: unset;
+  box-sizing: border-box;
+  padding: 1.5px 4.5px;
+  border-radius: 4px;
+  color: var(--bit-ink-secondary);
+  font-size: 10px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+#bili-index-study-panel .bit-tts-mini:hover {
+  background: var(--bit-pill-hover);
+  color: var(--bit-accent);
+}
+
+#bili-index-study-panel .bit-example-tgt {
+  margin-top: 2px;
+  font-size: calc(11.8px * var(--bit-scale));
+  line-height: 1.48;
+  color: var(--bit-ink-secondary);
+}
+
+/* ---- Whisper-Quiet Footers ---- */
+
+#bili-index-translate-panel .bit-foot,
+#bili-index-study-panel .bit-study-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 12px 6px;
+  border-top: 1px solid var(--bit-divider);
+  font-size: 10.5px;
+  color: var(--bit-ink-faint);
+  user-select: none;
+}
+
+#bili-index-study-panel .bit-kbd-hint {
+  opacity: 0.85;
+  font-variant-numeric: tabular-nums;
 }

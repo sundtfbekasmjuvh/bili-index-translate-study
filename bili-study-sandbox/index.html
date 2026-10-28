@@ -1,0 +1,483 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="zh-CN" data-bit-theme="light">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Bili Index Translate · 极简流式双浮窗语言私教</title>
+  <link rel="stylesheet" href="ext/content.css" />
+  <style>
+    :root {
+      --bg: #f8f7f4;
+      --card: #ffffff;
+      --border: rgba(15, 23, 42, 0.08);
+      --ink: #0f172a;
+      --muted: #64748b;
+      --topbar: rgba(255, 255, 255, 0.86);
+      --accent: #2563eb;
+      --accent-soft: rgba(37, 99, 235, 0.08);
+      --hint-bg: rgba(245, 158, 11, 0.14);
+      --hint-ink: #0f172a;
+    }
+    html[data-bit-theme="dark"] {
+      --bg: #0c1017;
+      --card: #151a24;
+      --border: rgba(255, 255, 255, 0.09);
+      --ink: #f1f5f9;
+      --muted: #94a3b8;
+      --topbar: rgba(15, 19, 28, 0.86);
+      --accent: #60a5fa;
+      --accent-soft: rgba(96, 165, 250, 0.13);
+      --hint-bg: rgba(251, 191, 36, 0.16);
+      --hint-ink: #fef3c7;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font: 15px/1.68 -apple-system, BlinkMacSystemFont, "Segoe UI", "Inter", Roboto, "PingFang SC",
+        "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
+      -webkit-font-smoothing: antialiased;
+      transition: background 0.18s ease, color 0.18s ease;
+    }
+    .topbar {
+      position: sticky;
+      top: 0;
+      z-index: 20;
+      background: var(--topbar);
+      -webkit-backdrop-filter: blur(14px);
+      backdrop-filter: blur(14px);
+      border-bottom: 1px solid var(--border);
+      padding: 11px 24px;
+    }
+    .topbar-inner {
+      max-width: 1120px;
+      margin: 0 auto;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+    }
+    .brand-dot {
+      width: 9px;
+      height: 9px;
+      border-radius: 999px;
+      background: var(--accent);
+      box-shadow: 0 0 0 4px var(--accent-soft);
+    }
+    .brand h1 {
+      margin: 0;
+      font-size: 15px;
+      font-weight: 700;
+      letter-spacing: -0.01em;
+    }
+    .controls {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 9px;
+      font-size: 12.5px;
+    }
+    .controls label {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      color: var(--muted);
+      font-weight: 500;
+    }
+    .controls select, .theme-btn {
+      padding: 4.5px 9.5px;
+      border-radius: 7px;
+      border: 1px solid var(--border);
+      background: var(--card);
+      color: var(--ink);
+      font-size: 12px;
+      font-weight: 500;
+      cursor: pointer;
+    }
+    .status-pill {
+      padding: 4px 10px;
+      border-radius: 999px;
+      background: var(--accent-soft);
+      color: var(--accent);
+      font-size: 11.5px;
+      font-weight: 600;
+      font-variant-numeric: tabular-nums;
+    }
+    main {
+      max-width: 1120px;
+      margin: 22px auto 120px;
+      padding: 0 24px;
+    }
+    .toolbar-strip {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 13px;
+      padding: 13px 18px;
+      margin-bottom: 18px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      box-shadow: 0 2px 10px rgba(0, 0, 0, 0.025);
+    }
+    .kbd-bar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 5px 15px;
+      font-size: 12.5px;
+      color: var(--muted);
+    }
+    .kbd-bar strong { color: var(--ink); }
+    .kbd {
+      display: inline-block;
+      padding: 0 5px;
+      border-radius: 4px;
+      border: 1px solid var(--border);
+      background: var(--bg);
+      color: var(--ink);
+      font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+    .quick-row {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 7px;
+    }
+    .quick-label {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--muted);
+    }
+    .quick-btn {
+      padding: 4.5px 11.5px;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      background: var(--bg);
+      color: var(--ink);
+      font-size: 12px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.12s ease;
+    }
+    .quick-btn:hover {
+      border-color: var(--accent);
+      background: var(--accent-soft);
+      color: var(--accent);
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(325px, 1fr));
+      gap: 16px;
+    }
+    .reading-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 13px;
+      padding: 20px 22px;
+      box-shadow: 0 2px 12px rgba(0, 0, 0, 0.025);
+    }
+    .card-tag {
+      display: inline-block;
+      padding: 1.5px 7px;
+      border-radius: 4px;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      color: var(--muted);
+      font-size: 10.5px;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      margin-bottom: 8px;
+    }
+    .reading-card h2 {
+      margin: 0 0 9px;
+      font-size: 16px;
+      letter-spacing: -0.01em;
+    }
+    .reading-card p {
+      margin: 0 0 12px;
+      font-size: 15px;
+      line-height: 1.82;
+    }
+    .reading-card p:last-child { margin-bottom: 0; }
+    .vocab-hint {
+      background: var(--hint-bg);
+      color: var(--hint-ink);
+      padding: 0 4px;
+      border-radius: 3px;
+    }
+    .custom-area {
+      margin-top: 16px;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 13px;
+      padding: 16px 20px;
+    }
+    .custom-area h3 { margin: 0 0 8px; font-size: 13.5px; color: var(--muted); font-weight: 600; }
+    .custom-area textarea {
+      width: 100%;
+      min-height: 76px;
+      padding: 10px 12px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--bg);
+      color: var(--ink);
+      font: 14px/1.6 inherit;
+      resize: vertical;
+      outline: none;
+    }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <div class="brand">
+        <span class="brand-dot"></span>
+        <h1>Bili Index Translate · 极简流式双浮窗语言私教</h1>
+      </div>
+      <div class="controls">
+        <label>
+          解释语言
+          <select id="opt-target">
+            <option value="中文" selected>简体中文</option>
+            <option value="Traditional Chinese (繁體中文)">繁體中文</option>
+            <option value="English">English</option>
+            <option value="Japanese (日本語)">日本語</option>
+            <option value="Korean (한국어)">한국어</option>
+          </select>
+        </label>
+        <label>
+          默认模型
+          <select id="opt-model">
+            <option value="Index-Translate-9B" selected>Index-Translate-9B</option>
+            <option value="Index-Translate-2B">Index-Translate-2B</option>
+          </select>
+        </label>
+        <button class="theme-btn" id="theme-toggle" type="button">深色主题</button>
+        <span class="status-pill" id="api-status">就绪 · 双流式 SSE + 内存瞬时预热</span>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <section class="toolbar-strip">
+      <div class="kbd-bar">
+        <span><strong>快捷键：</strong><span class="kbd">S</span> 词卡</span>
+        <span><span class="kbd">Space</span> / <span class="kbd">Shift+Space</span> 1x / 0.7x 朗读</span>
+        <span><span class="kbd">E</span> 朗读例句</span>
+        <span><span class="kbd">D</span> 精简/详尽</span>
+        <span><span class="kbd">F</span> 自测翻转</span>
+        <span><span class="kbd">M</span> 9B/2B</span>
+        <span><span class="kbd">C</span> 复制笔记</span>
+        <span><span class="kbd">1-4</span> / <span class="kbd">←→</span> 切词</span>
+        <span><span class="kbd">Ctrl+滚轮</span> 字号</span>
+      </div>
+      <div class="quick-row">
+        <span class="quick-label">一键实测：</span>
+        <button class="quick-btn" type="button" data-sample="s-ja-word" data-open-study="1">日语汉字词 · 木漏れ日</button>
+        <button class="quick-btn" type="button" data-sample="s-en-sent" data-open-study="1">英文倒装长句 · 流式渐进拆解</button>
+        <button class="quick-btn" type="button" data-sample="s-en-word" data-open-study="1">英文高阶词 · ephemeral</button>
+        <button class="quick-btn" type="button" data-sample="s-fr-sent" data-open-study="1">法语格言 · L'habitude</button>
+      </div>
+    </section>
+
+    <div class="grid">
+      <article class="reading-card">
+        <span class="card-tag">English · Literature</span>
+        <h2>On Fleeting Seasons &amp; Serendipity</h2>
+        <p>
+          <span id="s-en-sent">Had I known how <span id="s-en-word" class="vocab-hint">ephemeral</span> the cherry blossoms were, I would have lingered beneath the eaves a little longer.</span>
+        </p>
+        <p>
+          True <span class="vocab-hint">serendipity</span> rarely announces itself with fanfare; instead, it hides inside <span class="vocab-hint">ubiquitous</span> everyday routines until curiosity nudges us to look twice.
+        </p>
+      </article>
+
+      <article class="reading-card">
+        <span class="card-tag">日本語 · 随筆・語彙</span>
+        <h2>森の散歩と季節の移ろい</h2>
+        <p>
+          昨日の雨が嘘のように晴れ渡り、朝の森では美しい<span id="s-ja-word" class="vocab-hint">木漏れ日</span>が石畳を静かに照らしていた。
+        </p>
+        <p>
+          旅先での<span class="vocab-hint">一期一会</span>を大切にしながら、日々の<span class="vocab-hint">試行錯誤</span>を楽しむ心の余裕を持ちたいものだ。
+        </p>
+      </article>
+
+      <article class="reading-card">
+        <span class="card-tag">Français / 한국어</span>
+        <h2>Fragments Multilingues</h2>
+        <p id="s-fr-sent">
+          L'habitude est une seconde nature qui nous empêche parfois de voir l'extraordinaire.
+        </p>
+        <p>
+          작은 <span class="vocab-hint">설렘</span>이 모여 일상의 풍경을 바꾸고, 낯선 단어를 배우는 순간 세상의 경계가 넓어진다.
+        </p>
+      </article>
+    </div>
+
+    <section class="custom-area">
+      <h3>自由划词测试区（支持任意多语种文本选中翻译 + 悬停预热学习卡片）</h3>
+      <textarea placeholder="粘贴任意外语单词、台词或长句并选中测试…">Notwithstanding the turbulent weather, the expedition persevered toward the summit.</textarea>
+    </section>
+  </main>
+
+  <script>
+    (function () {
+      const statusEl = document.getElementById("api-status");
+      const targetSel = document.getElementById("opt-target");
+      const modelSel = document.getElementById("opt-model");
+      const themeBtn = document.getElementById("theme-toggle");
+
+      themeBtn.addEventListener("click", () => {
+        const cur = document.documentElement.getAttribute("data-bit-theme") || "light";
+        const next = cur === "dark" ? "light" : "dark";
+        document.documentElement.setAttribute("data-bit-theme", next);
+        themeBtn.textContent = next === "dark" ? "浅色主题" : "深色主题";
+      });
+
+      function streamEndpoint(endpoint, bodyObj, abortCtrl, onEvent) {
+        fetch(endpoint, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          signal: abortCtrl.signal,
+          body: JSON.stringify(bodyObj)
+        })
+          .then(async (res) => {
+            const reader = res.body.getReader();
+            const dec = new TextDecoder();
+            let buf = "";
+            while (true) {
+              const { value, done } = await reader.read();
+              if (done) break;
+              buf += dec.decode(value, { stream: true });
+              const lines = buf.split(/\r?\n/);
+              buf = lines.pop() || "";
+              for (const line of lines) {
+                const t = line.trim();
+                if (!t.startsWith("data:")) continue;
+                onEvent(JSON.parse(t.slice(5).trim()));
+              }
+            }
+          })
+          .catch((err) => {
+            if (abortCtrl.signal.aborted) return;
+            onEvent({ type: "DONE", ok: false, status: 0, body: String((err && err.message) || err) });
+          });
+      }
+
+      window.chrome = {
+        runtime: {
+          lastError: null,
+          onMessage: { addListener() {} },
+          connect(info) {
+            const msgHandlers = [];
+            const abortCtrl = new AbortController();
+            const portName = info && info.name;
+            return {
+              name: portName,
+              onMessage: { addListener(fn) { msgHandlers.push(fn); } },
+              onDisconnect: { addListener() {} },
+              disconnect() { abortCtrl.abort(); },
+              postMessage(msg) {
+                if (!msg) return;
+                if (portName === "bili-translate-stream" && msg.type === "START_TRANSLATE_STREAM") {
+                  streamEndpoint(
+                    "api/translate-stream",
+                    { text: msg.text, target: targetSel.value, model: modelSel.value },
+                    abortCtrl,
+                    (ev) => {
+                      if (ev.type === "DONE" && ev.ok) {
+                        statusEl.textContent = ev.cached
+                          ? "译文 · ⚡内存瞬时"
+                          : "译文完成 · " + (ev.elapsedMs || 0) + " ms";
+                      }
+                      msgHandlers.forEach((fn) => fn(ev));
+                    }
+                  );
+                } else if (portName === "bili-study-stream" && msg.type === "START_STUDY_STREAM") {
+                  streamEndpoint(
+                    "api/study-stream",
+                    {
+                      text: msg.text,
+                      target: targetSel.value,
+                      model: modelSel.value,
+                      modelOverride: msg.modelOverride || ""
+                    },
+                    abortCtrl,
+                    (ev) => {
+                      if (ev.type === "PARTIAL") {
+                        statusEl.textContent = "流式首卡 · " + (ev.elapsedMs || 0) + " ms";
+                      } else if (ev.type === "DONE") {
+                        statusEl.textContent = ev.ok
+                          ? ev.cached
+                            ? "词卡 · ⚡内存瞬时"
+                            : "词卡完成 · " + (ev.elapsedMs || 0) + " ms · " + (ev.model || "").replace("Index-Translate-", "")
+                          : "请求异常";
+                      }
+                      msgHandlers.forEach((fn) => fn(ev));
+                    }
+                  );
+                }
+              }
+            };
+          },
+          sendMessage(payload, callback) {
+            fetch("api/runtime", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(payload || {})
+            })
+              .then((r) => r.json())
+              .then((d) => callback && callback(d))
+              .catch((err) => callback && callback({ ok: false, status: 0, body: String(err) }));
+          }
+        }
+      };
+
+      document.querySelectorAll(".quick-btn").forEach((btn) => {
+        btn.addEventListener("click", (ev) => {
+          ev.stopPropagation();
+          const id = btn.getAttribute("data-sample");
+          const openStudy = btn.getAttribute("data-open-study") === "1";
+          const el = document.getElementById(id);
+          if (!el) return;
+
+          const range = document.createRange();
+          range.selectNodeContents(el);
+          const sel = window.getSelection();
+          sel.removeAllRanges();
+          sel.addRange(range);
+
+          const rect = el.getBoundingClientRect();
+          document.dispatchEvent(
+            new MouseEvent("mouseup", {
+              bubbles: true,
+              cancelable: true,
+              button: 0,
+              clientX: rect.left + 16,
+              clientY: rect.bottom
+            })
+          );
+
+          if (openStudy) {
+            setTimeout(() => {
+              const trigger = document.querySelector("#bili-index-translate-panel .bit-study-trigger");
+              if (trigger && !trigger.hasAttribute("data-active")) {
+                trigger.click();
+              }
+            }, 340);
+          }
+        });
+      });
+    })();
+  </script>
+  <script src="ext/content.js"></script>
+</body>
+</html>

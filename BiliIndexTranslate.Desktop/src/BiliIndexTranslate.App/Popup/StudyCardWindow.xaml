@@ -1,0 +1,293 @@
+<Window x:Class="BiliIndexTranslate.App.Popup.StudyCardWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Bili Language Study Card"
+        WindowStyle="None" AllowsTransparency="True" Background="Transparent"
+        ResizeMode="NoResize" SizeToContent="WidthAndHeight"
+        ShowInTaskbar="False" ShowActivated="False" Topmost="True"
+        Focusable="False" IsTabStop="False"
+        UseLayoutRounding="True" SnapsToDevicePixels="True"
+        TextOptions.TextFormattingMode="Ideal" TextOptions.TextRenderingMode="ClearType"
+        FontFamily="{StaticResource Popup.FontFamily}"
+        AutomationProperties.Name="Language study card">
+
+  <Window.Resources>
+    <Style x:Key="StudyPillButton" TargetType="Button">
+      <Setter Property="Focusable" Value="False" />
+      <Setter Property="IsTabStop" Value="False" />
+      <Setter Property="Padding" Value="6.5,1.5" />
+      <Setter Property="Margin" Value="1.5,0" />
+      <Setter Property="Background" Value="Transparent" />
+      <Setter Property="BorderBrush" Value="{DynamicResource Popup.Border}" />
+      <Setter Property="BorderThickness" Value="1" />
+      <Setter Property="Foreground" Value="{DynamicResource Popup.TextSecondary}" />
+      <Setter Property="FontFamily" Value="{StaticResource Ui.FontFamily}" />
+      <Setter Property="FontSize" Value="10.5" />
+      <Setter Property="FontWeight" Value="SemiBold" />
+      <Setter Property="Cursor" Value="Hand" />
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Button">
+            <Border x:Name="Bd" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
+                    BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="10" Padding="{TemplateBinding Padding}" SnapsToDevicePixels="True">
+              <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" RecognizesAccessKey="False" />
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True">
+                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource Popup.Hover}" />
+                <Setter Property="Foreground" Value="{DynamicResource Popup.Text}" />
+              </Trigger>
+              <Trigger Property="IsPressed" Value="True">
+                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource Popup.Pressed}" />
+              </Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+  </Window.Resources>
+
+  <Grid x:Name="Root" Margin="14">
+    <Border x:Name="Card"
+            Background="{DynamicResource Popup.Surface}"
+            BorderBrush="{DynamicResource Popup.PinnedBorder}"
+            BorderThickness="1"
+            CornerRadius="10"
+            MinWidth="280"
+            Width="390">
+      <Border.Effect>
+        <DropShadowEffect BlurRadius="20" ShadowDepth="3" Direction="270" Opacity="0.16" Color="Black" />
+      </Border.Effect>
+
+      <Grid>
+        <Grid.RowDefinitions>
+          <RowDefinition Height="Auto" />
+          <RowDefinition Height="*" />
+          <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <!-- Slim Draggable Header -->
+        <Border x:Name="HeaderBar" Grid.Row="0"
+                Background="{DynamicResource Popup.Surface}"
+                BorderBrush="{DynamicResource Popup.Divider}"
+                BorderThickness="0,0,0,1"
+                CornerRadius="10,10,0,0"
+                Padding="12,6,8,6"
+                Cursor="SizeAll">
+          <Grid>
+            <Grid.ColumnDefinitions>
+              <ColumnDefinition Width="*" />
+              <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+
+            <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
+              <TextBlock Text="&#xE82D;" FontFamily="{StaticResource Icon.FontFamily}" FontSize="12"
+                         Foreground="{DynamicResource Popup.Accent}" VerticalAlignment="Center" Margin="0,0,6,0" />
+              <TextBlock Text="语言学习卡片" FontFamily="{StaticResource Ui.FontFamily}" FontSize="12" FontWeight="SemiBold"
+                         Foreground="{DynamicResource Popup.Text}" VerticalAlignment="Center" />
+              <Border x:Name="LangBadge" Background="{DynamicResource Popup.AccentSoft}" CornerRadius="4"
+                      Padding="5,1" Margin="6,0,0,0" Visibility="Collapsed" VerticalAlignment="Center">
+                <TextBlock x:Name="LangBadgeText" FontFamily="{StaticResource Ui.FontFamily}" FontSize="10"
+                           FontWeight="Bold" Foreground="{DynamicResource Popup.Accent}" />
+              </Border>
+            </StackPanel>
+
+            <StackPanel x:Name="HeaderActions" Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+              <Button x:Name="CompactButton" Style="{StaticResource StudyPillButton}" Content="详尽"
+                      ToolTip="切换精简视图（仅释义+例句）与详尽解析视图" Click="OnCompactClick" />
+              <Button x:Name="SpeedButton" Style="{StaticResource StudyPillButton}" Content="9B"
+                      ToolTip="切换 9B 深度解析与 2B 极速秒出模式" Click="OnSpeedClick" />
+              <Button x:Name="QuizButton" Style="{StaticResource StudyPillButton}" Content="自测"
+                      ToolTip="主动回忆自测翻转" Visibility="Collapsed" Click="OnQuizClick" />
+              <Button x:Name="CopyCardButton" Style="{StaticResource IconButton}" Width="24" Height="22" Content="&#xE8C8;"
+                      ToolTip="复制当前词卡笔记" Visibility="Collapsed" Click="OnCopyCardClick" AutomationProperties.Name="Copy study card" />
+              <Button x:Name="CloseButton" Style="{StaticResource IconButton}" Width="24" Height="22" Content="&#xE711;"
+                      ToolTip="关闭学习卡片" Click="OnCloseClick" AutomationProperties.Name="Close study card" />
+            </StackPanel>
+          </Grid>
+        </Border>
+
+        <!-- Body -->
+        <ScrollViewer x:Name="BodyScroll" Grid.Row="1" Style="{StaticResource ThinScrollViewer}" Padding="14,10,14,10">
+          <StackPanel>
+            <!-- Skeleton Loading -->
+            <StackPanel x:Name="LoadingPanel" Visibility="Collapsed" Margin="0,2,0,4">
+              <Border Height="17" Width="140" HorizontalAlignment="Left" CornerRadius="4" Background="{DynamicResource Popup.Hover}" Margin="0,0,0,8" x:Name="LoadingBar1" />
+              <Border Height="11" Width="260" HorizontalAlignment="Left" CornerRadius="4" Background="{DynamicResource Popup.Hover}" Margin="0,0,0,6" x:Name="LoadingBar2" />
+              <Border Height="11" Width="320" HorizontalAlignment="Left" CornerRadius="4" Background="{DynamicResource Popup.Hover}" x:Name="LoadingBar3" />
+            </StackPanel>
+
+            <!-- Error -->
+            <StackPanel x:Name="ErrorPanel" Visibility="Collapsed" Margin="0,2,0,4">
+              <StackPanel Orientation="Horizontal">
+                <TextBlock Text="&#xE7BA;" FontFamily="{StaticResource Icon.FontFamily}" FontSize="12" Foreground="{DynamicResource Popup.Error}" VerticalAlignment="Center" Margin="0,1,6,0" />
+                <TextBlock x:Name="ErrorTitle" Text="学习卡片生成失败" Foreground="{DynamicResource Popup.Error}" FontSize="12.5" FontWeight="SemiBold" VerticalAlignment="Center" />
+              </StackPanel>
+              <TextBlock x:Name="ErrorMessage" Foreground="{DynamicResource Popup.Text}" FontSize="12" TextWrapping="Wrap" Margin="0,4,0,0" />
+              <TextBlock x:Name="ErrorHint" Foreground="{DynamicResource Popup.TextSecondary}" FontSize="11.5" TextWrapping="Wrap" Margin="0,3,0,0" />
+              <Button x:Name="RetryButton" Style="{StaticResource TextActionButton}" Content="重试" HorizontalAlignment="Left" Margin="0,8,0,0" Click="OnRetryClick" />
+            </StackPanel>
+
+            <!-- Deck Content -->
+            <StackPanel x:Name="DeckPanel" Visibility="Collapsed">
+              <!-- Sentence Grammar Note -->
+              <Border x:Name="GrammarBorder" Background="{DynamicResource Popup.AccentSoft}"
+                      BorderBrush="{DynamicResource Popup.Accent}" BorderThickness="2.5,0,0,0"
+                      CornerRadius="4" Padding="9,6" Margin="0,0,0,9" Visibility="Collapsed">
+                <TextBlock x:Name="GrammarText" Foreground="{DynamicResource Popup.Text}" FontSize="12" TextWrapping="Wrap" LineHeight="18" />
+              </Border>
+
+              <StackPanel x:Name="StreamingFirstCardHint" Visibility="Collapsed" Margin="0,2,0,4">
+                <Border Height="16" Width="130" HorizontalAlignment="Left" CornerRadius="4" Background="{DynamicResource Popup.Hover}" Margin="0,0,0,6" />
+                <Border Height="11" Width="240" HorizontalAlignment="Left" CornerRadius="4" Background="{DynamicResource Popup.Hover}" />
+              </StackPanel>
+
+              <!-- Main Card Area -->
+              <StackPanel x:Name="CardItemArea">
+                <!-- Multi-card Flashcard Navigation -->
+                <Border x:Name="NavBorder" BorderBrush="{DynamicResource Popup.Divider}" BorderThickness="0,0,0,1" Padding="0,0,0,7" Margin="0,0,0,8" Visibility="Collapsed">
+                  <Grid>
+                    <Grid.ColumnDefinitions>
+                      <ColumnDefinition Width="*" />
+                      <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <WrapPanel x:Name="ChipPanel" Grid.Column="0" VerticalAlignment="Center" />
+                    <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Top" Margin="6,0,0,0">
+                      <Button x:Name="PrevCardButton" Style="{StaticResource IconButton}" Width="21" Height="21" Content="&#xE76B;" ToolTip="上一个词" Click="OnPrevCardClick" />
+                      <Button x:Name="NextCardButton" Style="{StaticResource IconButton}" Width="21" Height="21" Content="&#xE76C;" ToolTip="下一个词" Click="OnNextCardClick" />
+                    </StackPanel>
+                  </Grid>
+                </Border>
+
+                <!-- Editorial Hero: Headword + Segmented Audio -->
+                <Grid Margin="0,0,0,4">
+                  <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                  </Grid.ColumnDefinitions>
+                  <StackPanel Grid.Column="0">
+                    <WrapPanel VerticalAlignment="Center">
+                      <TextBlock x:Name="TermText" Foreground="{DynamicResource Popup.Text}" FontSize="19" FontWeight="Bold" TextWrapping="Wrap" Margin="0,0,6,0" />
+                      <Border x:Name="SurfaceBadge" Background="{DynamicResource Popup.SurfaceAlt}" CornerRadius="4" Padding="5,1" VerticalAlignment="Center" Visibility="Collapsed">
+                        <TextBlock x:Name="SurfaceText" Foreground="{DynamicResource Popup.TextSecondary}" FontSize="11" />
+                      </Border>
+                    </WrapPanel>
+                    <WrapPanel x:Name="MetaPanel" Margin="0,4,0,0" VerticalAlignment="Center">
+                      <Border x:Name="PosBadge" Background="{DynamicResource Popup.AccentSoft}" CornerRadius="4" Padding="5,1" Margin="0,0,5,0" Visibility="Collapsed">
+                        <TextBlock x:Name="PosText" Foreground="{DynamicResource Popup.Accent}" FontSize="10.5" FontWeight="SemiBold" />
+                      </Border>
+                      <Border x:Name="RegisterBadge" Background="{DynamicResource Popup.SurfaceAlt}" BorderBrush="{DynamicResource Popup.Divider}" BorderThickness="1" CornerRadius="4" Padding="5,1" Margin="0,0,6,0" Visibility="Collapsed">
+                        <TextBlock x:Name="RegisterText" Foreground="{DynamicResource Popup.TextSecondary}" FontSize="10.5" FontWeight="SemiBold" />
+                      </Border>
+                      <TextBlock x:Name="ReadingText" Foreground="{DynamicResource Popup.TextSecondary}" FontSize="12.5" VerticalAlignment="Center" TextWrapping="Wrap" />
+                    </WrapPanel>
+                  </StackPanel>
+
+                  <!-- Segmented TTS Pill (🔊 发音 | 0.7x) -->
+                  <Border Grid.Column="1" VerticalAlignment="Top" Margin="6,0,0,0"
+                          Background="{DynamicResource Popup.SurfaceAlt}" BorderBrush="{DynamicResource Popup.Border}" BorderThickness="1" CornerRadius="11">
+                    <StackPanel Orientation="Horizontal">
+                      <Button x:Name="SpeakTermButton" Style="{StaticResource StudyPillButton}" BorderThickness="0" Margin="0" Padding="8,3" ToolTip="常速朗读发音" Click="OnSpeakTermClick">
+                        <StackPanel Orientation="Horizontal">
+                          <TextBlock Text="&#xE767;" FontFamily="{StaticResource Icon.FontFamily}" FontSize="11" VerticalAlignment="Center" Margin="0,0,3.5,0" />
+                          <TextBlock Text="发音" FontSize="11" VerticalAlignment="Center" />
+                        </StackPanel>
+                      </Button>
+                      <Border Width="1" Background="{DynamicResource Popup.Divider}" Margin="0,3" />
+                      <Button x:Name="SpeakSlowButton" Style="{StaticResource StudyPillButton}" BorderThickness="0" Margin="0" Padding="6.5,3" ToolTip="0.7x 慢速清晰跟读" Content="0.7x" Click="OnSpeakSlowClick" />
+                    </StackPanel>
+                  </Border>
+                </Grid>
+
+                <!-- Clean Unboxed Core Definition / Active Recall Mask -->
+                <TextBlock x:Name="MeaningText" Foreground="{DynamicResource Popup.Text}" FontSize="14.5" FontWeight="SemiBold"
+                           TextWrapping="Wrap" LineHeight="21" Margin="0,4,0,8" />
+                <Button x:Name="RevealMaskButton" Style="{StaticResource TextActionButton}" Visibility="Collapsed"
+                        HorizontalContentAlignment="Center" Padding="10,8" Margin="0,4,0,8"
+                        BorderBrush="{DynamicResource Popup.Accent}" Foreground="{DynamicResource Popup.Accent}"
+                        Content="点击揭晓释义与解析（主动回忆自测）" Click="OnRevealMaskClick" />
+
+                <!-- Editorial Hairline Insights (Hidden in Compact Mode) -->
+                <StackPanel x:Name="InsightsPanel">
+                  <!-- Nuance Row -->
+                  <Border x:Name="NuanceRow" BorderBrush="{DynamicResource Popup.Divider}" BorderThickness="0,1,0,0" Padding="0,7" Visibility="Collapsed">
+                    <Grid>
+                      <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="40" />
+                        <ColumnDefinition Width="*" />
+                      </Grid.ColumnDefinitions>
+                      <Border Grid.Column="0" Background="{DynamicResource Popup.SurfaceAlt}" CornerRadius="4" Padding="4,1" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="0,1,0,0">
+                        <TextBlock Text="辨析" Foreground="{DynamicResource Popup.TextSecondary}" FontSize="10.5" FontWeight="Bold" />
+                      </Border>
+                      <TextBlock x:Name="NuanceText" Grid.Column="1" Foreground="{DynamicResource Popup.Text}" FontSize="12" TextWrapping="Wrap" LineHeight="18" />
+                    </Grid>
+                  </Border>
+
+                  <!-- Memory Row -->
+                  <Border x:Name="MemoryRow" BorderBrush="{DynamicResource Popup.Divider}" BorderThickness="0,1,0,0" Padding="0,7" Visibility="Collapsed">
+                    <Grid>
+                      <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="40" />
+                        <ColumnDefinition Width="*" />
+                      </Grid.ColumnDefinitions>
+                      <Border Grid.Column="0" Background="{DynamicResource Popup.SurfaceAlt}" CornerRadius="4" Padding="4,1" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="0,1,0,0">
+                        <TextBlock Text="助记" Foreground="{DynamicResource Popup.TextSecondary}" FontSize="10.5" FontWeight="Bold" />
+                      </Border>
+                      <TextBlock x:Name="MemoryText" Grid.Column="1" Foreground="{DynamicResource Popup.Text}" FontSize="12" TextWrapping="Wrap" LineHeight="18" />
+                    </Grid>
+                  </Border>
+
+                  <!-- Clickable Collocations Row -->
+                  <Border x:Name="CollocationRow" BorderBrush="{DynamicResource Popup.Divider}" BorderThickness="0,1,0,0" Padding="0,7" Visibility="Collapsed">
+                    <Grid>
+                      <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="40" />
+                        <ColumnDefinition Width="*" />
+                      </Grid.ColumnDefinitions>
+                      <Border Grid.Column="0" Background="{DynamicResource Popup.SurfaceAlt}" CornerRadius="4" Padding="4,1" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="0,2,0,0">
+                        <TextBlock Text="搭配" Foreground="{DynamicResource Popup.TextSecondary}" FontSize="10.5" FontWeight="Bold" />
+                      </Border>
+                      <WrapPanel x:Name="CollocationPanel" Grid.Column="1" />
+                    </Grid>
+                  </Border>
+                </StackPanel>
+
+                <!-- Context-Highlighted Bilingual Example -->
+                <Border x:Name="ExampleSection" BorderBrush="{DynamicResource Popup.Divider}" BorderThickness="0,1,0,0" Padding="0,8,0,0" Visibility="Collapsed">
+                  <Border BorderBrush="{DynamicResource Popup.Accent}" BorderThickness="2,0,0,0" Padding="9,1,0,1">
+                    <StackPanel>
+                      <Grid>
+                        <Grid.ColumnDefinitions>
+                          <ColumnDefinition Width="*" />
+                          <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock x:Name="ExampleSourceText" Grid.Column="0" Foreground="{DynamicResource Popup.Text}" FontSize="12.5" TextWrapping="Wrap" LineHeight="19" />
+                        <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Top" Margin="4,0,0,0">
+                          <Button x:Name="SpeakExampleButton" Style="{StaticResource IconButton}" Width="21" Height="20" Content="&#xE767;" ToolTip="常速朗读例句" Click="OnSpeakExampleClick" />
+                          <Button x:Name="SpeakExampleSlowButton" Style="{StaticResource StudyPillButton}" BorderThickness="0" Padding="4,1" Content="0.7x" ToolTip="0.7x 慢读例句" Click="OnSpeakExampleSlowClick" />
+                        </StackPanel>
+                      </Grid>
+                      <TextBlock x:Name="ExampleTargetText" Foreground="{DynamicResource Popup.TextSecondary}" FontSize="11.8" TextWrapping="Wrap" LineHeight="17.5" Margin="0,2,0,0" />
+                    </StackPanel>
+                  </Border>
+                </Border>
+              </StackPanel>
+            </StackPanel>
+          </StackPanel>
+        </ScrollViewer>
+
+        <!-- Whisper-Quiet Footer -->
+        <Border Grid.Row="2" BorderBrush="{DynamicResource Popup.Divider}" BorderThickness="0,1,0,0" Padding="13,4,13,6">
+          <Grid>
+            <Grid.ColumnDefinitions>
+              <ColumnDefinition Width="*" />
+              <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <TextBlock x:Name="Caption" Grid.Column="0" Foreground="{DynamicResource Popup.TextFaint}" FontSize="10.5" FontFamily="{StaticResource Ui.FontFamily}" />
+            <TextBlock Grid.Column="1" Text="Ctrl+滚轮缩放 · 零留痕" Foreground="{DynamicResource Popup.TextFaint}" FontSize="10.5" FontFamily="{StaticResource Ui.FontFamily}" />
+          </Grid>
+        </Border>
+      </Grid>
+    </Border>
+  </Grid>
+</Window>

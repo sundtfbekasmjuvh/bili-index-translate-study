@@ -5,6 +5,7 @@
 !/.gitattributes
 !/BiliIndexTranslate.Desktop/
 !/bili-index-translate/
+!/bili-study-sandbox/
 
 # Build output
 bin/

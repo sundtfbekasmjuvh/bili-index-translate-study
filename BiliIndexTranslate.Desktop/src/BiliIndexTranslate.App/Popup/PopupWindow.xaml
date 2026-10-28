@@ -73,14 +73,24 @@
                      AutomationProperties.Name="Original text" />
         </StackPanel>
 
-        <!-- Footer: caption on the left, controls on the right (controls fade in on hover). -->
-        <Grid x:Name="Footer" Grid.Row="3" Margin="0,6,0,0" MinHeight="18">
+        <!-- Footer: caption on the left, study card trigger + hover controls on the right. -->
+        <Grid x:Name="Footer" Grid.Row="3" Margin="0,6,0,0" MinHeight="22">
           <Grid.ColumnDefinitions>
             <ColumnDefinition Width="*" />
             <ColumnDefinition Width="Auto" />
+            <ColumnDefinition Width="Auto" />
           </Grid.ColumnDefinitions>
           <TextBlock x:Name="Caption" Grid.Column="0" Foreground="{DynamicResource Popup.TextFaint}" FontSize="11" VerticalAlignment="Center" FontFamily="{StaticResource Ui.FontFamily}" />
-          <StackPanel x:Name="Controls" Grid.Column="1" Orientation="Horizontal" Opacity="0" VerticalAlignment="Center" Margin="8,0,-4,0">
+          <Button x:Name="StudyButton" Grid.Column="1" Style="{StaticResource TextActionButton}" Padding="7,2" Margin="6,0,2,0"
+                  Visibility="Collapsed" VerticalAlignment="Center"
+                  ToolTip="打开伴随语言学习卡片（词根助记·常见搭配·双语例句·发音）"
+                  Click="OnStudyClick" AutomationProperties.Name="Open language study card">
+            <StackPanel Orientation="Horizontal">
+              <TextBlock Text="&#xE82D;" FontFamily="{StaticResource Icon.FontFamily}" FontSize="11" VerticalAlignment="Center" Margin="0,0,4,0" />
+              <TextBlock Text="学习卡片" FontSize="11" VerticalAlignment="Center" />
+            </StackPanel>
+          </Button>
+          <StackPanel x:Name="Controls" Grid.Column="2" Orientation="Horizontal" Opacity="0" VerticalAlignment="Center" Margin="2,0,-4,0">
             <Button x:Name="OriginalButton" Style="{StaticResource IconButton}" Content="&#xE8D2;" ToolTip="Show original text" Click="OnOriginalClick" AutomationProperties.Name="Show original text" />
             <Button x:Name="CopyButton" Style="{StaticResource IconButton}" Content="&#xE8C8;" ToolTip="Copy translation" Click="OnCopyClick" AutomationProperties.Name="Copy translation" />
             <Button x:Name="PinButton" Style="{StaticResource IconButton}" Content="&#xE718;" ToolTip="Keep this translation open (pinned window)" Click="OnPinClick" AutomationProperties.Name="Keep open" />

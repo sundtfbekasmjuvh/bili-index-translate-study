@@ -58,6 +58,17 @@ public interface ITranslationTransport
     Task<TransportResponse> PostJsonAsync(Uri url, string apiKey, string jsonBody, TimeSpan timeout, CancellationToken ct);
 }
 
+public interface ISseTranslationTransport : ITranslationTransport
+{
+    Task<TransportResponse> PostSseAsync(
+        Uri url,
+        string apiKey,
+        string jsonBody,
+        TimeSpan timeout,
+        Action<string> onDataLine,
+        CancellationToken ct);
+}
+
 public sealed class TranslationException : Exception
 {
     public TranslationException(TranslationError error) : base(error.Message) { Error = error; }

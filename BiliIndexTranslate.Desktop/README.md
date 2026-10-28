@@ -7,10 +7,11 @@ elsewhere, or press Esc. No visible window otherwise, no shortcut needed for nor
 Built fresh in C# / .NET 8 (WPF for the card, UI Automation for reading selections).
 
 > **Status.** The code compiles cleanly (0 warnings) and the platform-independent core — state
-> machine, placement math, translation client, cache, settings — is covered by 96 passing unit
-> tests. The Windows-only parts (UI Automation, hooks, non-activating popup, tray) were written and
-> compiled on Linux and have **not** been run on a Windows desktop in this environment. Treat
-> `docs/TESTING.md` as the checklist to complete before relying on it.
+> machine, placement math, translation client, study-card streaming parser/placer, cache, settings — is
+> covered by 110 passing unit tests. The Windows-only parts (UI Automation, hooks, non-activating
+> popup, SAPI TTS, tray) were written and compiled on Linux and have **not** been run on a Windows
+> desktop in this environment. Treat `docs/TESTING.md` as the checklist to complete before relying
+> on it.
 
 ## Run
 
@@ -36,7 +37,12 @@ A second instance does not start twice; it opens the Settings window of the runn
    (below if there is no room), translated into Simplified Chinese by default.
 3. Clear the selection, click anywhere outside the card, or press Esc to dismiss it.
    The same selection does not reopen the card until you select something else.
-4. Hover the card for controls: show original text, copy, keep open (pin), close.
+4. Hover the card for controls: show original text, copy, keep open (pin), close. Click **`学习卡片`**
+   in the card footer to open the ephemeral companion Language Study Card beside the translation
+   (progressive SSE streaming, `9B深度` ↔ `⚡ 2B极速` model toggle, normal + `0.7x` slow shadowing
+   pronunciation via Windows SAPI, IPA/reading, register badge, synonym/usage nuance,
+   etymology/mnemonic, collocations, bilingual example, sentence grammar note, pageable key-vocab
+   flashcards, and `自测翻转` active recall).
    Ctrl + mouse wheel over a card changes the text size (remembered).
 
 Optional fallback: `Alt+Q` (configurable, can be disabled) asks for a translation on demand. If

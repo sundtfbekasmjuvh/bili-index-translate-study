@@ -1,89 +1,155 @@
-<!-- options.html -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Bili Index Translate - Options</title>
+  <title>Bili Index Translate — Settings</title>
   <style>
-    :root { color-scheme: light dark; }
-    body {
-      font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial,
-        "PingFang SC", "Microsoft YaHei", sans-serif;
-      max-width: 640px;
-      margin: 32px auto;
-      padding: 0 16px;
+    :root {
+      color-scheme: light dark;
+      --bg: #f8fafc;
+      --card: #ffffff;
+      --border: rgba(15, 23, 42, 0.1);
+      --ink: #0f172a;
+      --muted: #64748b;
+      --accent: #2563eb;
     }
-    h1 { font-size: 20px; margin: 0 0 4px; }
-    p.lead { margin: 0 0 20px; opacity: 0.7; }
-    label { display: block; font-weight: 600; margin: 16px 0 4px; }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #0f131a;
+        --card: #171c26;
+        --border: rgba(255, 255, 255, 0.1);
+        --ink: #f1f5f9;
+        --muted: #94a3b8;
+        --accent: #3b82f6;
+      }
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font: 14px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", "Inter", Roboto,
+        "PingFang SC", "Microsoft YaHei", sans-serif;
+      padding: 40px 16px;
+    }
+    .shell {
+      max-width: 620px;
+      margin: 0 auto;
+    }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 26px 28px;
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.04);
+    }
+    h1 { font-size: 20px; font-weight: 700; margin: 0 0 4px; letter-spacing: -0.01em; }
+    p.lead { margin: 0 0 20px; color: var(--muted); font-size: 13px; }
+    label { display: block; font-weight: 600; font-size: 13px; margin: 16px 0 5px; }
     input, select {
       width: 100%;
-      box-sizing: border-box;
-      padding: 7px 9px;
+      padding: 8px 11px;
       font: inherit;
-      border: 1px solid #9aa0a6;
-      border-radius: 6px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
       background: transparent;
       color: inherit;
+      outline: none;
     }
-    small { display: block; margin-top: 4px; opacity: 0.7; }
-    code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; }
+    input:focus, select:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.14);
+    }
+    small { display: block; margin-top: 4px; color: var(--muted); font-size: 12px; }
+    code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11.5px; }
     .row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 22px; }
     button {
-      padding: 7px 14px;
-      font: inherit;
-      border-radius: 6px;
-      border: 1px solid #9aa0a6;
+      padding: 7.5px 15px;
+      font: 600 13px/1.3 inherit;
+      border-radius: 8px;
+      border: 1px solid var(--border);
       background: transparent;
       color: inherit;
       cursor: pointer;
     }
-    button.primary { background: #0b57d0; border-color: #0b57d0; color: #fff; }
-    #status { margin-top: 14px; min-height: 1.5em; white-space: pre-wrap; overflow-wrap: anywhere; }
-    #status.ok { color: #1a7f37; }
-    #status.err { color: #d1242f; }
+    button:hover { opacity: 0.9; }
+    button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+    #status { margin-top: 14px; min-height: 1.4em; font-size: 13px; white-space: pre-wrap; overflow-wrap: anywhere; }
+    #status.ok { color: #16a34a; }
+    #status.err { color: #dc2626; }
+    .shortcuts {
+      margin-top: 16px;
+      padding: 14px 18px;
+      border-radius: 12px;
+      border: 1px solid var(--border);
+      background: var(--card);
+      font-size: 12.5px;
+      color: var(--muted);
+    }
+    .shortcuts strong { color: var(--ink); }
+    kbd {
+      display: inline-block;
+      padding: 0 5px;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      color: var(--ink);
+    }
   </style>
 </head>
 <body>
-  <h1>Bili Index Translate</h1>
-  <p class="lead">Settings are stored in <code>chrome.storage.sync</code> and apply to the next translation.</p>
+  <div class="shell">
+    <div class="card">
+      <h1>Bili Index Translate</h1>
+      <p class="lead">Synced in <code>chrome.storage.sync</code>. Zero translation history or vocabulary telemetry is stored.</p>
 
-  <form id="form" autocomplete="off">
-    <label for="base">Base URL</label>
-    <input id="base" type="url" placeholder="https://index-translate.bilibili.com/v1" required>
-    <small>OpenAI-compatible root. <code>/chat/completions</code> is appended.</small>
+      <form id="form" autocomplete="off">
+        <label for="base">Base URL</label>
+        <input id="base" type="url" placeholder="https://index-translate.bilibili.com/v1" required>
+        <small>OpenAI-compatible root. <code>/chat/completions</code> is appended automatically.</small>
 
-    <label for="proxy">Relay prefix</label>
-    <input id="proxy" type="text" placeholder="https://seep.eu.org/https://index-translate.bilibili.com/v1">
-    <small>
-      Empty = call the Base URL directly and, only if it answers HTTP 412, retry once through the
-      built-in relay <code>https://seep.eu.org/&lt;Base URL&gt;</code>.
-      Non-empty = send every request to <code>&lt;prefix&gt;/chat/completions</code>.
-    </small>
+        <label for="proxy">Relay prefix (optional)</label>
+        <input id="proxy" type="text" placeholder="https://seep.eu.org/https://index-translate.bilibili.com/v1">
+        <small>Empty = direct first, auto-fallback to <code>https://seep.eu.org/&lt;Base URL&gt;</code> on HTTP 412.</small>
 
-    <label for="model">Model</label>
-    <select id="model">
-      <option value="Index-Translate-2B">Index-Translate-2B</option>
-      <option value="Index-Translate-9B">Index-Translate-9B</option>
-      <option value="Index-Translate-35B-A3B">Index-Translate-35B-A3B</option>
-    </select>
+        <label for="model">Default Model</label>
+        <select id="model">
+          <option value="Index-Translate-2B">Index-Translate-2B (Fastest)</option>
+          <option value="Index-Translate-9B">Index-Translate-9B (Recommended Balance)</option>
+          <option value="Index-Translate-35B-A3B">Index-Translate-35B-A3B (Largest MoE)</option>
+        </select>
 
-    <label for="key">API Key</label>
-    <input id="key" type="text" placeholder="bili">
-    <small>Sent as <code>Authorization: Bearer &lt;key&gt;</code>.</small>
+        <label for="key">API Key</label>
+        <input id="key" type="text" placeholder="bili">
 
-    <label for="target">Target language</label>
-    <input id="target" type="text" placeholder="中文">
-    <small>Inserted into the system prompt: "Translate the user text into &lt;target&gt;."</small>
+        <label for="target">Target language</label>
+        <input id="target" type="text" placeholder="中文">
+        <small>Examples: <code>中文</code>, <code>繁體中文</code>, <code>English</code>, <code>日本語</code>, <code>한국어</code>.</small>
 
-    <div class="row">
-      <button type="submit" id="save" class="primary">Save</button>
-      <button type="button" id="test">Save &amp; test</button>
-      <button type="button" id="reset">Reset to defaults</button>
+        <div class="row">
+          <button type="submit" id="save" class="primary">Save</button>
+          <button type="button" id="test">Save &amp; test</button>
+          <button type="button" id="reset">Reset defaults</button>
+        </div>
+        <div id="status" role="status" aria-live="polite"></div>
+      </form>
     </div>
-    <div id="status" role="status" aria-live="polite"></div>
-  </form>
+
+    <div class="shortcuts">
+      <strong>Study Card Shortcuts:</strong>
+      <kbd>S</kbd> Toggle card ·
+      <kbd>Space</kbd> / <kbd>Shift+Space</kbd> Speak 1x / 0.7x ·
+      <kbd>E</kbd> Speak example ·
+      <kbd>F</kbd> Self-test flip ·
+      <kbd>D</kbd> Compact/Detailed ·
+      <kbd>M</kbd> 9B/2B speed ·
+      <kbd>C</kbd> Copy ·
+      <kbd>1-4</kbd> / <kbd>←</kbd><kbd>→</kbd> Switch word ·
+      <kbd>Ctrl+Wheel</kbd> Text size ·
+      <kbd>Esc</kbd> Dismiss
+    </div>
+  </div>
 
   <script src="options.js"></script>
 </body>

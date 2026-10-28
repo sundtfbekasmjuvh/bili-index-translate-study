@@ -18,6 +18,7 @@ using BiliIndexTranslate.Core.Geometry;
 using BiliIndexTranslate.Core.Selection;
 using BiliIndexTranslate.Core.Session;
 using BiliIndexTranslate.Core.Settings;
+using BiliIndexTranslate.Core.Study;
 using BiliIndexTranslate.Core.Translation;
 
 namespace BiliIndexTranslate.App;
@@ -47,6 +48,7 @@ internal sealed class AppHost : IDisposable
     private readonly TranslationCache _cache = new(500, TimeSpan.FromHours(24));
     private readonly HttpTranslationTransport _transport = new();
     private readonly OpenAiCompatibleTranslator _translator;
+    private readonly StudyCardService _studyService;
     private readonly TranslationCoordinator _coordinator;
 
     private readonly ReadingSession _session = new();
@@ -97,6 +99,7 @@ internal sealed class AppHost : IDisposable
         _forceWelcome = forceWelcome;
         _store = new SettingsStore(Path.Combine(dataDir, "settings.json"), new DpapiSecretProtector());
         _translator = new OpenAiCompatibleTranslator(_transport, TimeSpan.FromSeconds(20));
+        _studyService = new StudyCardService(_transport, TimeSpan.FromSeconds(30));
         _coordinator = new TranslationCoordinator(_translator, _cache, Post, _timings, _log, maxConcurrency: 2);
         _theme = new ThemeManager(app);
     }
@@ -124,7 +127,24 @@ internal sealed class AppHost : IDisposable
         _theme.Apply(_settings.Theme);
         _session.Options = new SessionOptions(_settings.AutoTranslate, _settings.StabilizationDelayMs);
 
-        _popup = new PopupPresenter(_monitors, _log, _timings);
+        _popup = new PopupPresenter(
+            _monitors,
+            _log,
+            _timings,
+            (text, modelOverride, onPartial, ct) =>
+            {
+                var req = BuildRequest(text, _settings);
+                if (!string.IsNullOrWhiteSpace(modelOverride))
+                    req = req with { Model = modelOverride };
+                return _studyService.GenerateAsync(req, ct, onPartial);
+            },
+            (text, modelOverride) =>
+            {
+                var req = BuildRequest(text, _settings);
+                if (!string.IsNullOrWhiteSpace(modelOverride))
+                    req = req with { Model = modelOverride };
+                _ = _studyService.PrewarmAsync(req, CancellationToken.None);
+            });
         _popup.Configure(_settings.TextScale, _settings.ShowOriginalByDefault);
         _popup.PinRequested += () => Dispatch(new SessionEvent.UserPinned());
         _popup.CloseRequested += () => Dispatch(new SessionEvent.UserClosed());
@@ -524,7 +544,11 @@ internal sealed class AppHost : IDisposable
         switch (e.Signal)
         {
             case InputSignal.MouseDown:
-                if (_popup.IsVisible && !_popup.HitTest(e.Point)) Dispatch(new SessionEvent.OutsideClick());
+                if (!_popup.HitTest(e.Point))
+                {
+                    if (_popup.IsStudyVisible) _popup.HideStudy();
+                    if (_popup.IsVisible) Dispatch(new SessionEvent.OutsideClick());
+                }
                 break;
 
             case InputSignal.MouseUp:
@@ -541,6 +565,7 @@ internal sealed class AppHost : IDisposable
                 break;
 
             case InputSignal.Escape:
+                if (_popup.IsStudyVisible) _popup.HideStudy();
                 Dispatch(new SessionEvent.EscapePressed());
                 break;
 
