@@ -18,6 +18,7 @@ const TIMEOUT_MS = 30000;
 const MEM_LIMIT = 64;
 const translateMemCache = new Map();
 const studyMemCache = new Map();
+const visionMemCache = new Map();
 
 function lruGet(map, k) {
   if (!map.has(k)) return null;
@@ -81,7 +82,7 @@ async function readJsonBody(req) {
   let raw = "";
   for await (const chunk of req) {
     raw += chunk;
-    if (raw.length > 96000) throw new Error("Payload too large");
+    if (raw.length > 12 * 1024 * 1024) throw new Error("Payload too large");
   }
   return JSON.parse(raw || "{}");
 }
@@ -140,7 +141,7 @@ const server = http.createServer(async (req, res) => {
       }
 
       const abortCtrl = new AbortController();
-      req.on("close", () => abortCtrl.abort());
+      res.on("close", () => { if (!res.writableEnded) abortCtrl.abort(); });
       const timer = setTimeout(() => abortCtrl.abort(), TIMEOUT_MS);
       const t0 = Date.now();
       const isIndex = bg.isIndexModelOrHost(model, DEFAULT_BASE);
@@ -248,7 +249,7 @@ const server = http.createServer(async (req, res) => {
       const combined = items.join("\n");
       const batchHits = bg.matchGlossaryHits(entries, combined);
       const abortCtrl = new AbortController();
-      req.on("close", () => abortCtrl.abort());
+      res.on("close", () => { if (!res.writableEnded) abortCtrl.abort(); });
       const timer = setTimeout(() => abortCtrl.abort(), TIMEOUT_MS);
       const t0 = Date.now();
       const isIndex = bg.isIndexModelOrHost(model, DEFAULT_BASE);
@@ -377,7 +378,7 @@ const server = http.createServer(async (req, res) => {
       }
 
       const abortCtrl = new AbortController();
-      req.on("close", () => abortCtrl.abort());
+      res.on("close", () => { if (!res.writableEnded) abortCtrl.abort(); });
       const timer = setTimeout(() => abortCtrl.abort(), TIMEOUT_MS);
       const t0 = Date.now();
 
@@ -488,12 +489,141 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    // 4. Zero-OCR Multimodal Vision Image Stream (Alt+S / Image Context Menu)
+    if (req.method === "POST" && url.pathname === "/api/vision-stream") {
+      const msg = await readJsonBody(req);
+      const dataUrl = String(msg.dataUrl || "").trim();
+      const target = String(msg.target || "中文").trim();
+      const glossary = String(msg.glossary || "");
+      const bg = loadBg();
+      const model = bg.resolveVisionModel(msg.visionModel || "Index-Translate-35B-A3B", msg.modelOverride);
+
+      res.writeHead(200, {
+        "Content-Type": "text/event-stream; charset=utf-8",
+        "Cache-Control": "no-cache, no-transform",
+        Connection: "keep-alive"
+      });
+
+      if (!dataUrl.startsWith("data:image/")) {
+        writeSse(res, { type: "DONE", ok: false, status: 0, body: "Invalid image payload." });
+        res.end();
+        return;
+      }
+
+      const cacheKey = `${model}|${target}|${glossary.length}:${dataUrl.length}:${dataUrl.slice(-64)}`;
+      const hit = lruGet(visionMemCache, cacheKey);
+      if (hit) {
+        writeSse(res, { type: "DONE", ok: true, ...hit, cached: true, elapsedMs: 0 });
+        res.end();
+        return;
+      }
+
+      const abortCtrl = new AbortController();
+      res.on("close", () => { if (!res.writableEnded) abortCtrl.abort(); });
+      const timer = setTimeout(() => abortCtrl.abort(), TIMEOUT_MS);
+      const t0 = Date.now();
+
+      try {
+        const reqBody = bg.attachIndexTemplateKwargs(
+          {
+            model,
+            stream: true,
+            temperature: 0.0,
+            max_tokens: 1024,
+            messages: bg.buildVisionTranslateMessages(dataUrl, target, model, DEFAULT_BASE, glossary)
+          },
+          model,
+          DEFAULT_BASE
+        );
+        const { res: upRes, via } = await openUpstreamStream(reqBody, abortCtrl.signal);
+
+        if (!upRes.ok) {
+          const errRaw = await upRes.text();
+          writeSse(res, { type: "DONE", ok: false, status: upRes.status, body: errRaw.slice(0, 1000), via });
+          res.end();
+          return;
+        }
+
+        const reader = upRes.body.getReader();
+        const decoder = new TextDecoder();
+        let sseBuf = "";
+        let full = "";
+        let lastShown = "";
+
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          sseBuf += decoder.decode(value, { stream: true });
+          const lines = sseBuf.split(/\r?\n/);
+          sseBuf = lines.pop() || "";
+
+          for (const line of lines) {
+            const trimmed = line.trim();
+            if (!trimmed.startsWith("data:")) continue;
+            const payload = trimmed.slice(5).trim();
+            if (!payload || payload === "[DONE]") continue;
+            try {
+              const j = JSON.parse(payload);
+              const delta = j?.choices?.[0]?.delta?.content || "";
+              if (delta) {
+                full += delta;
+                const parsed = bg.parseVisionDualOutput(full);
+                if (parsed.translation && parsed.translation !== lastShown) {
+                  lastShown = parsed.translation;
+                  writeSse(res, {
+                    type: "DELTA",
+                    text: parsed.translation,
+                    sourceText: parsed.sourceText,
+                    model,
+                    via,
+                    vision: true,
+                    elapsedMs: Date.now() - t0
+                  });
+                }
+              }
+            } catch (_) {}
+          }
+        }
+
+        const finalParsed = bg.parseVisionDualOutput(full);
+        if (!finalParsed.translation) {
+          writeSse(res, { type: "DONE", ok: false, status: 200, body: "No readable text found in image.", via });
+        } else {
+          const hits = finalParsed.sourceText ? bg.matchGlossaryHits(glossary, finalParsed.sourceText).length : 0;
+          const entry = {
+            text: finalParsed.translation,
+            sourceText: finalParsed.sourceText,
+            model,
+            via,
+            vision: true,
+            glossaryHits: hits
+          };
+          lruSet(visionMemCache, cacheKey, entry);
+          writeSse(res, { type: "DONE", ok: true, ...entry, elapsedMs: Date.now() - t0 });
+        }
+        res.end();
+      } catch (err) {
+        if (!res.writableEnded) {
+          writeSse(res, { type: "DONE", ok: false, status: 0, body: String((err && err.message) || err) });
+          res.end();
+        }
+      } finally {
+        clearTimeout(timer);
+      }
+      return;
+    }
+
     if (req.method === "POST" && url.pathname === "/api/runtime") {
       const msg = await readJsonBody(req);
       if (msg.type === "BILI_PURGE_VOLATILE") {
         translateMemCache.clear();
         studyMemCache.clear();
+        visionMemCache.clear();
         sendJson(res, 200, { ok: true });
+        return;
+      }
+      if (msg.type === "BILI_CAPTURE_TAB") {
+        sendJson(res, 200, { ok: false, body: "Sandbox uses direct <canvas>/<img> region crop" });
         return;
       }
       if (msg.type === "BILI_GET_IMMERSIVE_PREFS") {

@@ -91,6 +91,15 @@
           <TextBlock Style="{StaticResource FieldLabel}" Text="Model" />
           <ComboBox x:Name="ModelBox" Grid.Column="1" IsEditable="True" HorizontalAlignment="Left" MinWidth="220" />
         </Grid>
+        <Grid Margin="0,6,0,0">
+          <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="120" />
+            <ColumnDefinition Width="*" />
+          </Grid.ColumnDefinitions>
+          <TextBlock Style="{StaticResource FieldLabel}" Text="Vision model" />
+          <ComboBox x:Name="VisionModelBox" Grid.Column="1" IsEditable="True" HorizontalAlignment="Left" MinWidth="220" />
+        </Grid>
+        <TextBlock Style="{StaticResource HintText}" Text="Index-Translate-35B-A3B (MoE) is recommended for Zero-OCR screen snip &amp; clipboard image translation (~1.5s)." />
         <CheckBox x:Name="RelayBox" Content="Send requests through the relay instead of directly" Margin="0,8,0,2" Checked="OnRelayToggled" Unchecked="OnRelayToggled" />
         <TextBox x:Name="RelayBox2" Margin="0,2,0,0" />
         <TextBlock Style="{StaticResource HintText}" Text="Direct requests are always tried as configured. If the service answers HTTP 412 for direct requests, you can enable the relay here; the app never switches routes on its own. Your API key is stored encrypted for this Windows account." />
@@ -118,11 +127,18 @@
           <TextBox x:Name="NewExcludedBox" />
         </DockPanel>
 
-        <!-- Fallback shortcut -->
-        <TextBlock Style="{StaticResource GroupTitle}" Text="FALLBACK SHORTCUT" />
-        <CheckBox x:Name="HotkeyEnabledBox" Content="Enable a shortcut that translates the current selection on demand" />
+        <!-- Fallback & Vision Snip shortcuts -->
+        <TextBlock Style="{StaticResource GroupTitle}" Text="SHORTCUTS &amp; VISION SNIP" />
+        <CheckBox x:Name="SnipHotkeyEnabledBox" Content="Enable Zero-OCR screen-region snip shortcut (translates unselectable images, games, videos &amp; unlocks Study Card)" />
+        <DockPanel Margin="0,2,0,6">
+          <TextBlock Style="{StaticResource FieldLabel}" Text="Snip shortcut" Width="120" />
+          <TextBox x:Name="SnipHotkeyBox" Width="140" HorizontalAlignment="Left" />
+        </DockPanel>
+        <TextBlock x:Name="SnipHotkeyStatus" Style="{StaticResource HintText}" Text="Captures the selected screen region strictly in RAM (zero temp files) and extracts source text for TTS &amp; Study Card." Margin="0,0,0,8" />
+
+        <CheckBox x:Name="HotkeyEnabledBox" Content="Enable a fallback shortcut that translates the current text selection on demand" />
         <DockPanel>
-          <TextBlock Style="{StaticResource FieldLabel}" Text="Shortcut" Width="120" />
+          <TextBlock Style="{StaticResource FieldLabel}" Text="Text shortcut" Width="120" />
           <TextBox x:Name="HotkeyBox" Width="140" HorizontalAlignment="Left" />
         </DockPanel>
         <TextBlock x:Name="HotkeyStatus" Style="{StaticResource HintText}" Text="Used when UI Automation cannot read a selection: the app sends one Ctrl+C and translates the copied text. Automatic translation never uses the clipboard." />

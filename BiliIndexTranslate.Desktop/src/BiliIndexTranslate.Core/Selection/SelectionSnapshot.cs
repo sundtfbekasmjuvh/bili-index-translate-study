@@ -8,6 +8,8 @@ public enum SelectionOrigin
     UiAutomation,
     /// <summary>Captured with an explicit user action (fallback shortcut / tray command); anchored to the pointer.</summary>
     Clipboard,
+    /// <summary>Captured via Zero-OCR multimodal screen-region snip or clipboard screenshot.</summary>
+    ScreenSnip,
     /// <summary>Produced by the onboarding demo.</summary>
     Demo,
 }

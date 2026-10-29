@@ -49,6 +49,7 @@ internal sealed class AppHost : IDisposable
     private readonly HttpTranslationTransport _transport = new();
     private readonly OpenAiCompatibleTranslator _translator;
     private readonly StudyCardService _studyService;
+    private readonly VisionTranslationService _visionService;
     private readonly TranslationCoordinator _coordinator;
 
     private readonly ReadingSession _session = new();
@@ -81,6 +82,11 @@ internal sealed class AppHost : IDisposable
     private bool _anchorFromPointer;
     private string? _lastProcessName;
     private string? _hotkeyError;
+    private string? _snipHotkeyError;
+    private CancellationTokenSource? _visionCts;
+    private long _visionSeq;
+    private bool _visionActive;
+    private ScreenSnipCapture? _lastVisionCapture;
 
     private SettingsWindow? _settingsWindow;
     private DiagnosticsWindow? _diagnosticsWindow;
@@ -100,6 +106,7 @@ internal sealed class AppHost : IDisposable
         _store = new SettingsStore(Path.Combine(dataDir, "settings.json"), new DpapiSecretProtector());
         _translator = new OpenAiCompatibleTranslator(_transport, TimeSpan.FromSeconds(20));
         _studyService = new StudyCardService(_transport, TimeSpan.FromSeconds(30));
+        _visionService = new VisionTranslationService(_transport, TimeSpan.FromSeconds(35));
         _coordinator = new TranslationCoordinator(_translator, _cache, Post, _timings, _log, maxConcurrency: 2);
         _theme = new ThemeManager(app);
     }
@@ -139,9 +146,21 @@ internal sealed class AppHost : IDisposable
                 return _studyService.GenerateAsync(req, ct, onPartial);
             });
         _popup.Configure(_settings.TextScale, _settings.ShowOriginalByDefault);
-        _popup.PinRequested += () => Dispatch(new SessionEvent.UserPinned());
-        _popup.CloseRequested += () => Dispatch(new SessionEvent.UserClosed());
-        _popup.RetryRequested += () => Dispatch(new SessionEvent.UserRetry());
+        _popup.PinRequested += () =>
+        {
+            if (_visionActive) { _visionActive = false; CancelVisionRequest(); _popup.Detach(); return; }
+            Dispatch(new SessionEvent.UserPinned());
+        };
+        _popup.CloseRequested += () =>
+        {
+            if (_visionActive) { DismissVisionPopup(); return; }
+            Dispatch(new SessionEvent.UserClosed());
+        };
+        _popup.RetryRequested += () =>
+        {
+            if (_visionActive && _lastVisionCapture is { } cap) { BeginVisionCapture(cap); return; }
+            Dispatch(new SessionEvent.UserRetry());
+        };
         _popup.SettingsRequested += OpenSettings;
         _popup.TextScaleChanged += scale => { _settings.TextScale = scale; ScheduleSave(); };
         _popup.ShowOriginalChanged += show => { _settings.ShowOriginalByDefault = show; ScheduleSave(); };
@@ -157,9 +176,11 @@ internal sealed class AppHost : IDisposable
         _hooks.InputReceived += OnInput;
         _hooks.WheelOverPopup += (delta, ctrl) => _popup.HandleWheel(delta, ctrl);
         _hooks.HotkeyStatusChanged += OnHotkeyStatus;
+        _hooks.SnipHotkeyStatusChanged += OnSnipHotkeyStatus;
         _hooks.Start();
         if (!_hooks.HooksInstalled) _log.Error("input", _hooks.HookError ?? "input hooks not installed");
         ApplyHotkey();
+        ApplySnipHotkey();
 
         _tracker = new SourceWindowTracker();
         _tracker.ForegroundChanged += OnForegroundChanged;
@@ -172,6 +193,7 @@ internal sealed class AppHost : IDisposable
         _tray.IsAppExcluded = name => _settings.IsProcessExcluded(name);
         _tray.AutoTranslateToggled += enabled => { if (_settings.AutoTranslate != enabled) { _settings.AutoTranslate = enabled; ApplySettings(_settings, notifySession: true); } };
         _tray.ExcludeAppToggled += (name, excluded) => { _settings.SetProcessExcluded(name, excluded); ApplySettings(_settings, notifySession: excluded); _log.Info("settings", $"{name}: {(excluded ? "excluded" : "included")}"); };
+        _tray.SnipRegionRequested += StartScreenSnipAndTranslate;
         _tray.TranslateClipboardRequested += TranslateClipboard;
         _tray.SettingsRequested += OpenSettings;
         _tray.DiagnosticsRequested += OpenDiagnostics;
@@ -250,6 +272,9 @@ internal sealed class AppHost : IDisposable
                     _timings.Record(TimingCategory.Detect, Stopwatch.GetElapsedTime(_triggerTimestamp).TotalMilliseconds);
                     _triggerTimestamp = 0;
                 }
+                _visionActive = false;
+                _lastVisionCapture = null;
+                CancelVisionRequest();
                 _popup.ShowLoading(s.Snapshot, Caption(s.Snapshot, null, false));
                 break;
 
@@ -534,12 +559,15 @@ internal sealed class AppHost : IDisposable
 
     private void OnInput(InputEvent e)
     {
+        if (ScreenSnipOverlay.IsActive) return;
+
         switch (e.Signal)
         {
             case InputSignal.MouseDown:
                 if (!_popup.HitTest(e.Point))
                 {
                     if (_popup.IsStudyVisible) _popup.HideStudy();
+                    if (_visionActive) { DismissVisionPopup(); break; }
                     if (_popup.IsVisible) Dispatch(new SessionEvent.OutsideClick());
                 }
                 break;
@@ -559,6 +587,7 @@ internal sealed class AppHost : IDisposable
 
             case InputSignal.Escape:
                 if (_popup.IsStudyVisible) _popup.HideStudy();
+                if (_visionActive) { DismissVisionPopup(); break; }
                 Dispatch(new SessionEvent.EscapePressed());
                 break;
 
@@ -568,6 +597,11 @@ internal sealed class AppHost : IDisposable
                 _lastPointerTick = Environment.TickCount64;
                 _triggerTimestamp = Stopwatch.GetTimestamp();
                 Dispatch(new SessionEvent.TriggerReceived(TriggerKind.Hotkey));
+                break;
+
+            case InputSignal.SnipHotkey:
+                if (!_settings.SnipHotkeyEnabled) return;
+                StartScreenSnipAndTranslate();
                 break;
         }
     }
@@ -592,14 +626,159 @@ internal sealed class AppHost : IDisposable
     private void TranslateClipboard()
     {
         var text = ClipboardFallback.ReadText();
-        if (string.IsNullOrWhiteSpace(text))
+        if (!string.IsNullOrWhiteSpace(text))
         {
-            _tray.ShowNotice("Bili Index Translate", "The clipboard has no text.");
+            _pendingClipboardText = text;
+            _triggerTimestamp = Stopwatch.GetTimestamp();
+            Dispatch(new SessionEvent.TriggerReceived(TriggerKind.Hotkey));
             return;
         }
-        _pendingClipboardText = text;
-        _triggerTimestamp = Stopwatch.GetTimestamp();
-        Dispatch(new SessionEvent.TriggerReceived(TriggerKind.Hotkey));
+
+        if (ScreenSnipOverlay.TryReadClipboardImageDataUrl(out var imgDataUrl))
+        {
+            NativeMethods.GetCursorPos(out var pt);
+            var anchorBox = new PxRect(pt.X - 24, pt.Y - 12, pt.X + 24, pt.Y + 12);
+            BeginVisionCapture(new ScreenSnipCapture(imgDataUrl, anchorBox));
+            return;
+        }
+
+        _tray.ShowNotice("Bili Index Translate", "The clipboard has neither text nor an image.");
+    }
+
+    // ---- Zero-OCR Vision Screen Snip --------------------------------------------------------------
+
+    private void StartScreenSnipAndTranslate()
+    {
+        if (ScreenSnipOverlay.IsActive) return;
+
+        if (_popup.IsVisible) Dispatch(new SessionEvent.UserClosed());
+        DismissVisionPopup();
+
+        var capture = ScreenSnipOverlay.CaptureInteractive();
+        if (capture is not { } cap || string.IsNullOrWhiteSpace(cap.DataUrl))
+            return;
+
+        BeginVisionCapture(cap);
+    }
+
+    private void BeginVisionCapture(ScreenSnipCapture capture)
+    {
+        CancelVisionRequest();
+        if (_popup.IsVisible && !_visionActive)
+            Dispatch(new SessionEvent.UserClosed());
+
+        _visionActive = true;
+        _lastVisionCapture = capture;
+
+        var anchor = new AnchorRect(capture.ScreenRect, capture.ScreenRect, 1, Math.Max(20, capture.ScreenRect.Height));
+        var snapshot = new SelectionSnapshot(
+            string.Empty,
+            anchor,
+            0,
+            Environment.ProcessId,
+            "ScreenSnip",
+            EditableKind.NotEditable,
+            SelectionOrigin.ScreenSnip,
+            0);
+
+        var target = _settings.ResolvedTargetLanguage;
+        var visionModel = VisionPromptBuilder.ResolveVisionModel(_settings.VisionModel);
+        _popup.ShowLoading(snapshot, $"{visionModel} · 识图直译中…");
+
+        var req = new ImageTranslationRequest(
+            capture.DataUrl,
+            target.Code,
+            target.PromptName,
+            visionModel,
+            _settings.BaseUrl,
+            _settings.UseRelay,
+            _settings.RelayPrefix,
+            _settings.ApiKey,
+            _settings.GlossaryText);
+
+        var seq = ++_visionSeq;
+        var cts = new CancellationTokenSource();
+        _visionCts = cts;
+        _ = RunVisionRequestAsync(seq, snapshot, req, cts);
+    }
+
+    private async Task RunVisionRequestAsync(
+        long seq,
+        SelectionSnapshot baseSnapshot,
+        ImageTranslationRequest req,
+        CancellationTokenSource cts)
+    {
+        ImageTranslationResult? ok = null;
+        TranslationError? error = null;
+
+        try
+        {
+            ok = await _visionService.TranslateImageAsync(
+                req,
+                cts.Token,
+                delta =>
+                {
+                    if (cts.IsCancellationRequested) return;
+                    Post(() =>
+                    {
+                        if (seq != _visionSeq || !_visionActive) return;
+                        var liveSnap = string.IsNullOrWhiteSpace(delta.ExtractedSourceText)
+                            ? baseSnapshot
+                            : baseSnapshot with { Text = delta.ExtractedSourceText };
+                        _popup.ShowVisionTranslation(liveSnap, delta.Translation, $"{delta.Model} · 识图流式中…");
+                    });
+                }).ConfigureAwait(false);
+        }
+        catch (TranslationException ex)
+        {
+            error = ex.Error;
+        }
+        catch (OperationCanceledException)
+        {
+            return;
+        }
+        catch (Exception ex)
+        {
+            error = new TranslationError(TranslationErrorKind.Network, $"Unexpected vision error ({ex.GetType().Name}).", RequestRoute.Direct);
+        }
+
+        if (cts.IsCancellationRequested) return;
+
+        Post(() =>
+        {
+            if (seq != _visionSeq || !_visionActive) return;
+
+            if (ok is not null)
+            {
+                _log.Info("vision", $"ok via {ok.Route} {ok.ElapsedMs:0} ms ({ok.Model}), srcChars={ok.ExtractedSourceText.Length}");
+                var finalSnap = baseSnapshot with { Text = ok.ExtractedSourceText };
+                var glossaryPart = ok.GlossaryHitCount > 0 ? $" · 术语×{ok.GlossaryHitCount}" : string.Empty;
+                var speedPart = ok.IsCached ? " · ⚡瞬时" : $" · {ok.Route.ToString().ToLowerInvariant()}";
+                _popup.ShowVisionTranslation(finalSnap, ok.Translation, $"{ok.Model} · 识图{glossaryPart}{speedPart}");
+            }
+            else if (error is not null && error.Kind != TranslationErrorKind.Cancelled)
+            {
+                _log.Warn("vision", $"fail {error}");
+                _popup.ShowError(baseSnapshot, error, error.Route == RequestRoute.Relay ? "relay" : null);
+            }
+        });
+    }
+
+    private void DismissVisionPopup()
+    {
+        CancelVisionRequest();
+        _visionSeq++;
+        _visionActive = false;
+        _lastVisionCapture = null;
+        _popup.Hide();
+    }
+
+    private void CancelVisionRequest()
+    {
+        if (_visionCts is null) return;
+        try { _visionCts.Cancel(); } catch (Exception) { }
+        _visionCts.Dispose();
+        _visionCts = null;
     }
 
     private string? CurrentAppName()
@@ -623,12 +802,19 @@ internal sealed class AppHost : IDisposable
         _popup.Configure(_settings.TextScale, _settings.ShowOriginalByDefault);
         _tray.SetAutoTranslate(_settings.AutoTranslate);
         if (previous.Hotkey != _settings.Hotkey || previous.HotkeyEnabled != _settings.HotkeyEnabled) ApplyHotkey();
+        if (previous.SnipHotkey != _settings.SnipHotkey || previous.SnipHotkeyEnabled != _settings.SnipHotkeyEnabled) ApplySnipHotkey();
         if (previous.UseUiaSelectionEvents != _settings.UseUiaSelectionEvents) _observer.SetSelectionEvents(_settings.UseUiaSelectionEvents);
         if (previous.DiagnosticsFileLogging != _settings.DiagnosticsFileLogging) ConfigureFileLogging(_settings.DiagnosticsFileLogging);
 
         var serviceChanged = previous.BaseUrl != _settings.BaseUrl || previous.UseRelay != _settings.UseRelay || previous.RelayPrefix != _settings.RelayPrefix
-                             || previous.Model != _settings.Model || previous.TargetLanguage != _settings.TargetLanguage || previous.ApiKey != _settings.ApiKey;
-        if (serviceChanged) _log.Info("settings", $"service: target={_settings.TargetLanguage} model={_settings.Model} relay={_settings.UseRelay} host={HostOf(_settings)}");
+                             || previous.Model != _settings.Model || previous.VisionModel != _settings.VisionModel || previous.GlossaryText != _settings.GlossaryText
+                             || previous.TargetLanguage != _settings.TargetLanguage || previous.ApiKey != _settings.ApiKey;
+        if (serviceChanged)
+        {
+            _studyService.ClearVolatileCache();
+            _visionService.ClearVolatileCache();
+            _log.Info("settings", $"service: target={_settings.TargetLanguage} model={_settings.Model} vision={_settings.VisionModel} relay={_settings.UseRelay} host={HostOf(_settings)}");
+        }
         if (notifySession) Dispatch(new SessionEvent.SettingsChanged());
     }
 
@@ -641,6 +827,12 @@ internal sealed class AppHost : IDisposable
         else _hooks.SetHotkey(null);
     }
 
+    private void ApplySnipHotkey()
+    {
+        if (_settings.SnipHotkeyEnabled && HotkeyParser.TryParse(_settings.SnipHotkey, out var spec)) _hooks.SetSnipHotkey(spec);
+        else _hooks.SetSnipHotkey(null);
+    }
+
     private void OnHotkeyStatus(string display, string? error)
     {
         _hotkeyError = error;
@@ -651,6 +843,18 @@ internal sealed class AppHost : IDisposable
             _tray.ShowNotice("Shortcut unavailable", error + " Automatic translation still works; change the shortcut in Settings.", warning: true);
         }
         _settingsWindow?.SetHotkeyStatus(error);
+    }
+
+    private void OnSnipHotkeyStatus(string display, string? error)
+    {
+        _snipHotkeyError = error;
+        if (error is null) _log.Info("hotkey", $"vision snip {display} registered");
+        else
+        {
+            _log.Warn("hotkey", error);
+            _tray.ShowNotice("Snip shortcut unavailable", error + " You can still snip from the tray menu or change it in Settings.", warning: true);
+        }
+        _settingsWindow?.SetSnipHotkeyStatus(error);
     }
 
     private void ScheduleSave()
@@ -697,6 +901,7 @@ internal sealed class AppHost : IDisposable
         }
         _settingsWindow = new SettingsWindow(_settings, _store.FilePath, TestConnectionAsync, s => ApplySettings(s, notifySession: true));
         _settingsWindow.SetHotkeyStatus(_hotkeyError);
+        _settingsWindow.SetSnipHotkeyStatus(_snipHotkeyError);
         _settingsWindow.Closed += (_, _) => _settingsWindow = null;
         _settingsWindow.Show();
         _settingsWindow.Activate();
@@ -779,6 +984,9 @@ internal sealed class AppHost : IDisposable
         _saveTimer.Stop();
         TrySave();
 
+        CancelVisionRequest();
+        _studyService.ClearVolatileCache();
+        _visionService.ClearVolatileCache();
         _activateWait?.Unregister(null);
         _activateEvent?.Dispose();
         SafeDispose(_hooks);

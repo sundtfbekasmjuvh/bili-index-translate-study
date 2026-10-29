@@ -38,6 +38,12 @@ public partial class SettingsWindow : Window
         HotkeyStatus.Foreground = error is null ? (Brush)FindResource("Ui.TextSecondary") : (Brush)FindResource("Ui.Error");
     }
 
+    public void SetSnipHotkeyStatus(string? error)
+    {
+        SnipHotkeyStatus.Text = error ?? "Captures the selected screen region strictly in RAM (zero temp files) and extracts source text for TTS & Study Card.";
+        SnipHotkeyStatus.Foreground = error is null ? (Brush)FindResource("Ui.TextSecondary") : (Brush)FindResource("Ui.Error");
+    }
+
     private void Populate(AppSettings s)
     {
         AutoTranslateBox.IsChecked = s.AutoTranslate;
@@ -54,6 +60,8 @@ public partial class SettingsWindow : Window
         ApiKeyBox.Password = s.ApiKey;
         foreach (var m in AppSettings.KnownModels) ModelBox.Items.Add(m);
         ModelBox.Text = s.Model;
+        foreach (var vm in AppSettings.KnownVisionModels) VisionModelBox.Items.Add(vm);
+        VisionModelBox.Text = s.VisionModel;
         RelayBox.IsChecked = s.UseRelay;
         RelayBox2.Text = s.RelayPrefix;
         RelayBox2.IsEnabled = s.UseRelay;
@@ -61,6 +69,8 @@ public partial class SettingsWindow : Window
 
         ExcludedList.ItemsSource = _excluded;
 
+        SnipHotkeyEnabledBox.IsChecked = s.SnipHotkeyEnabled;
+        SnipHotkeyBox.Text = s.SnipHotkey;
         HotkeyEnabledBox.IsChecked = s.HotkeyEnabled;
         HotkeyBox.Text = s.Hotkey;
 
@@ -86,11 +96,14 @@ public partial class SettingsWindow : Window
         s.BaseUrl = EndpointBox.Text.Trim();
         s.ApiKey = _keyRevealed ? ApiKeyPlainBox.Text : ApiKeyBox.Password;
         s.Model = ModelBox.Text.Trim();
+        s.VisionModel = VisionModelBox.Text.Trim();
         s.UseRelay = RelayBox.IsChecked == true;
         s.RelayPrefix = RelayBox2.Text.Trim();
         s.GlossaryText = GlossaryBox.Text;
         s.ExcludedProcesses = _excluded.ToList();
 
+        s.SnipHotkeyEnabled = SnipHotkeyEnabledBox.IsChecked == true;
+        s.SnipHotkey = SnipHotkeyBox.Text.Trim();
         s.HotkeyEnabled = HotkeyEnabledBox.IsChecked == true;
         s.Hotkey = HotkeyBox.Text.Trim();
         s.StabilizationDelayMs = (int)DelaySlider.Value;
@@ -103,6 +116,8 @@ public partial class SettingsWindow : Window
             return null;
         }
         if (string.IsNullOrWhiteSpace(s.Model)) { error = "Choose a model."; return null; }
+        if (string.IsNullOrWhiteSpace(s.VisionModel)) { error = "Choose a vision model."; return null; }
+        if (s.SnipHotkeyEnabled && !HotkeyParser.TryParse(s.SnipHotkey, out _)) { error = "Snip shortcut must be like Alt+Shift+S, Ctrl+Shift+X or Win+F9."; return null; }
         if (s.HotkeyEnabled && !HotkeyParser.TryParse(s.Hotkey, out _)) { error = "Shortcut must be like Alt+Q, Ctrl+Shift+T or Win+F8."; return null; }
         s.Normalize();
         return s;

@@ -28,7 +28,9 @@ internal sealed class TrayIcon : IDisposable
         _appItem = new ToolStripMenuItem("Don't translate in this app") { CheckOnClick = true, Enabled = false };
         _appItem.Click += (_, _) => { if (_appItem.Tag is string app) ExcludeAppToggled?.Invoke(app, _appItem.Checked); };
 
-        var clipboard = new ToolStripMenuItem("Translate clipboard text");
+        var snip = new ToolStripMenuItem("Snip & translate screen region (识图直译)");
+        snip.Click += (_, _) => SnipRegionRequested?.Invoke();
+        var clipboard = new ToolStripMenuItem("Translate clipboard (text or image)");
         clipboard.Click += (_, _) => TranslateClipboardRequested?.Invoke();
         var settings = new ToolStripMenuItem("Settings…");
         settings.Click += (_, _) => SettingsRequested?.Invoke();
@@ -42,7 +44,7 @@ internal sealed class TrayIcon : IDisposable
         _menu.Items.AddRange(new ToolStripItem[]
         {
             _autoItem, _appItem, new ToolStripSeparator(),
-            clipboard, new ToolStripSeparator(),
+            snip, clipboard, new ToolStripSeparator(),
             settings, diagnostics, welcome, new ToolStripSeparator(),
             exit,
         });
@@ -60,6 +62,7 @@ internal sealed class TrayIcon : IDisposable
 
     public event Action<bool>? AutoTranslateToggled;
     public event Action<string, bool>? ExcludeAppToggled;
+    public event Action? SnipRegionRequested;
     public event Action? TranslateClipboardRequested;
     public event Action? SettingsRequested;
     public event Action? DiagnosticsRequested;

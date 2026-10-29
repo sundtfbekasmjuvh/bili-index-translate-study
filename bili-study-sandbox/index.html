@@ -269,7 +269,8 @@
   <main>
     <section class="toolbar-strip">
       <div class="kbd-bar">
-        <span><strong>快捷键：</strong><span class="kbd">Alt+A</span> 沉浸式双语网页</span>
+        <span><strong>快捷键：</strong><span class="kbd">Alt+S</span> 识图框选直译</span>
+        <span><span class="kbd">Alt+A</span> 沉浸式双语网页</span>
         <span><span class="kbd">S</span> 词卡</span>
         <span><span class="kbd">Space</span> / <span class="kbd">Shift+Space</span> 1x / 0.7x 朗读</span>
         <span><span class="kbd">E</span> 朗读例句</span>
@@ -282,6 +283,7 @@
       </div>
       <div class="quick-row">
         <span class="quick-label">一键实测：</span>
+        <button class="quick-btn" id="btn-vision-snip-demo" type="button">Alt+S 框选识图直译 + 词卡</button>
         <button class="quick-btn" id="btn-immersive-demo" type="button">Alt+A 沉浸式双语对照全页</button>
         <button class="quick-btn" type="button" data-sample="s-ja-word" data-open-study="1">日语汉字词 · 木漏れ日</button>
         <button class="quick-btn" type="button" data-sample="s-en-sent" data-open-study="1">英文倒装长句 · 流式渐进拆解</button>
@@ -326,9 +328,15 @@
     </div>
 
     <section class="custom-area">
+      <h3>Zero-OCR 多模态识图测试画布（不可选中像素 · 按 <span class="kbd">Alt+S</span> 拖拽框选画布，译完按 <span class="kbd">S</span> 唤起生词卡）</h3>
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px; margin-bottom: 14px;">
+        <canvas id="vision-canvas-en" width="540" height="128" style="width: 100%; height: auto; border-radius: 9px; border: 1px solid var(--border); background: #ffffff;"></canvas>
+        <canvas id="vision-canvas-ja" width="540" height="128" style="width: 100%; height: auto; border-radius: 9px; border: 1px solid var(--border); background: #ffffff;"></canvas>
+      </div>
       <h3>自由划词测试区 &amp; instTrans 动态术语表（每行一条：源词 =&gt; 译词，单写词条为免译锁定）</h3>
       <textarea id="opt-glossary" style="min-height: 68px; margin-bottom: 10px; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12.5px;" placeholder="例如：expedition => 极地科考队">expedition => 极地科考队
-summit => 绝顶主峰</textarea>
+summit => 绝顶主峰
+Sovereign Scheduler => 主权调度器</textarea>
       <textarea placeholder="粘贴任意外语单词、台词或长句并选中测试…">Notwithstanding the turbulent weather, the expedition persevered toward the summit.</textarea>
     </section>
   </main>
@@ -412,6 +420,29 @@ summit => 绝顶主峰</textarea>
                       msgHandlers.forEach((fn) => fn(ev));
                     }
                   );
+                } else if (portName === "bili-image-stream" && msg.type === "START_IMAGE_STREAM") {
+                  streamEndpoint(
+                    "api/vision-stream",
+                    {
+                      dataUrl: msg.dataUrl,
+                      target: targetSel.value,
+                      visionModel: "Index-Translate-35B-A3B",
+                      glossary: glossaryEl ? glossaryEl.value : ""
+                    },
+                    abortCtrl,
+                    (ev) => {
+                      if (ev.type === "DELTA") {
+                        statusEl.textContent = "识图流式 · " + (ev.elapsedMs || 0) + " ms";
+                      } else if (ev.type === "DONE") {
+                        statusEl.textContent = ev.ok
+                          ? ev.cached
+                            ? "识图 · ⚡内存瞬时"
+                            : "识图完成 · " + (ev.elapsedMs || 0) + " ms · 35B-A3B"
+                          : "识图异常";
+                      }
+                      msgHandlers.forEach((fn) => fn(ev));
+                    }
+                  );
                 } else if (portName === "bili-immersive-stream" && msg.type === "START_IMMERSIVE_BATCH") {
                   streamEndpoint(
                     "api/immersive-stream",
@@ -470,7 +501,45 @@ summit => 绝顶主峰</textarea>
         }
       };
 
+      function drawDemoCanvas(id, badge, line1, line2) {
+        const c = document.getElementById(id);
+        if (!c) return;
+        const ctx = c.getContext("2d");
+        ctx.fillStyle = "#f8fafc";
+        ctx.fillRect(0, 0, c.width, c.height);
+        ctx.fillStyle = "#dbeafe";
+        ctx.fillRect(16, 14, 152, 22);
+        ctx.fillStyle = "#1d4ed8";
+        ctx.font = "bold 11px sans-serif";
+        ctx.fillText(badge, 24, 29);
+        ctx.fillStyle = "#0f172a";
+        ctx.font = "600 17px sans-serif";
+        ctx.fillText(line1, 16, 66);
+        ctx.fillStyle = "#334155";
+        ctx.font = "500 15px sans-serif";
+        ctx.fillText(line2, 16, 98);
+      }
+      drawDemoCanvas(
+        "vision-canvas-en",
+        "SYSTEM ARCHITECTURE",
+        "The Sovereign Scheduler isolates ephemeral",
+        "workloads across multi-tenant GPU clusters."
+      );
+      drawDemoCanvas(
+        "vision-canvas-ja",
+        "VIDEO SUBTITLE FRAME",
+        "雨上がりの石畳に、柔らかな木漏れ日が",
+        "静かに揺れていた。"
+      );
+
       document.querySelectorAll(".quick-btn").forEach((btn) => {
+        if (btn.id === "btn-vision-snip-demo") {
+          btn.addEventListener("click", (ev) => {
+            ev.stopPropagation();
+            document.dispatchEvent(new KeyboardEvent("keydown", { key: "s", code: "KeyS", altKey: true, bubbles: true }));
+          });
+          return;
+        }
         if (btn.id === "btn-immersive-demo") {
           btn.addEventListener("click", (ev) => {
             ev.stopPropagation();

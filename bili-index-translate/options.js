@@ -6,6 +6,7 @@ const DEFAULTS = {
   proxy: "",
   model: "Index-Translate-9B",
   immersiveModel: "Index-Translate-2B",
+  visionModel: "Index-Translate-35B-A3B",
   key: "bili",
   target: "中文"
 };
@@ -70,6 +71,7 @@ function fillForm(s, localCfg) {
   $("target").value = s.target;
   ensureSelectValue($("model"), s.model || DEFAULTS.model);
   ensureSelectValue($("immersiveModel"), s.immersiveModel || DEFAULTS.immersiveModel);
+  ensureSelectValue($("visionModel"), s.visionModel || DEFAULTS.visionModel);
   $("glossary").value = (localCfg && localCfg.glossary) || "";
   syncGlossaryBadge();
 }
@@ -81,6 +83,7 @@ function readForm() {
       proxy: stripSlashes($("proxy").value),
       model: $("model").value,
       immersiveModel: $("immersiveModel").value,
+      visionModel: $("visionModel").value,
       key: $("key").value.trim(),
       target: $("target").value.trim() || DEFAULTS.target
     },

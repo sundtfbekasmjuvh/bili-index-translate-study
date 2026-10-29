@@ -39,7 +39,9 @@ public sealed class AppSettings
     public const string DefaultRelayPrefix = "https://seep.eu.org/https://index-translate.bilibili.com/v1";
     public const string DefaultApiKey = "bili";
     public const string DefaultModel = "Index-Translate-9B";
+    public const string DefaultVisionModel = "Index-Translate-35B-A3B";
     public static readonly IReadOnlyList<string> KnownModels = ["Index-Translate-2B", "Index-Translate-9B", "Index-Translate-35B-A3B", "Index-Nailong-9B"];
+    public static readonly IReadOnlyList<string> KnownVisionModels = ["Index-Translate-35B-A3B", "Index-Translate-9B", "Index-Translate-2B"];
 
     public int SchemaVersion { get; set; } = CurrentSchemaVersion;
 
@@ -56,6 +58,7 @@ public sealed class AppSettings
     // Service
     public string BaseUrl { get; set; } = DefaultBaseUrl;
     public string Model { get; set; } = DefaultModel;
+    public string VisionModel { get; set; } = DefaultVisionModel;
     public bool UseRelay { get; set; }
     public string RelayPrefix { get; set; } = DefaultRelayPrefix;
     public string GlossaryText { get; set; } = string.Empty;
@@ -64,9 +67,11 @@ public sealed class AppSettings
     [JsonIgnore]
     public string ApiKey { get; set; } = DefaultApiKey;
 
-    // Fallback shortcut
+    // Fallback & Vision Snip shortcuts
     public bool HotkeyEnabled { get; set; } = true;
     public string Hotkey { get; set; } = "Alt+Q";
+    public bool SnipHotkeyEnabled { get; set; } = true;
+    public string SnipHotkey { get; set; } = "Alt+Shift+S";
 
     // Timing / capture
     public int StabilizationDelayMs { get; set; } = 250;
@@ -110,12 +115,14 @@ public sealed class AppSettings
 
         BaseUrl = string.IsNullOrWhiteSpace(BaseUrl) ? DefaultBaseUrl : BaseUrl.Trim();
         Model = string.IsNullOrWhiteSpace(Model) ? DefaultModel : Model.Trim();
+        VisionModel = string.IsNullOrWhiteSpace(VisionModel) ? DefaultVisionModel : VisionModel.Trim();
         RelayPrefix = string.IsNullOrWhiteSpace(RelayPrefix) ? DefaultRelayPrefix : RelayPrefix.Trim();
         GlossaryText = string.IsNullOrWhiteSpace(GlossaryText)
             ? string.Empty
             : (GlossaryText.Length > 64000 ? GlossaryText[..64000] : GlossaryText).Replace("\r\n", "\n").Trim();
         if (string.IsNullOrWhiteSpace(ApiKey)) ApiKey = DefaultApiKey;
         Hotkey = string.IsNullOrWhiteSpace(Hotkey) ? "Alt+Q" : Hotkey.Trim();
+        SnipHotkey = string.IsNullOrWhiteSpace(SnipHotkey) ? "Alt+Shift+S" : SnipHotkey.Trim();
 
         StabilizationDelayMs = Math.Clamp(StabilizationDelayMs, 120, 800);
         MinChars = Math.Clamp(MinChars, 1, 20);

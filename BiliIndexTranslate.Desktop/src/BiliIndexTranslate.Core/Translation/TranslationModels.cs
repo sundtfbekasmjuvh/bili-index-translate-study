@@ -51,6 +51,32 @@ public sealed record TranslationRequest(
 
 public sealed record TranslationResult(string Translation, RequestRoute Route, double ElapsedMs, string Model, int GlossaryHitCount = 0);
 
+public sealed record ImageTranslationRequest(
+    string ImageDataUrl,
+    string TargetLanguageCode,
+    string TargetLanguagePromptName,
+    string Model,
+    string BaseUrl,
+    bool UseRelay,
+    string RelayPrefix,
+    string ApiKey,
+    string GlossaryText = "");
+
+public sealed record ImageTranslationDelta(
+    string Translation,
+    string ExtractedSourceText,
+    string Model,
+    RequestRoute Route);
+
+public sealed record ImageTranslationResult(
+    string Translation,
+    string ExtractedSourceText,
+    RequestRoute Route,
+    double ElapsedMs,
+    string Model,
+    int GlossaryHitCount = 0,
+    bool IsCached = false);
+
 /// <summary>Raw transport reply; separated so the translator can be tested with a fake transport.</summary>
 public sealed record TransportResponse(int StatusCode, string Body, string? ContentType);
 

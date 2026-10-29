@@ -155,6 +155,14 @@ internal sealed class PopupPresenter : IDisposable
         _timings.Record(TimingCategory.Render, sw.Elapsed.TotalMilliseconds);
     }
 
+    public void ShowVisionTranslation(SelectionSnapshot snapshot, string translation, string? caption)
+    {
+        if (snapshot.Anchor is null) return;
+        var w = Window;
+        w.ShowTranslation(snapshot, translation, caption);
+        Present(snapshot.Anchor, firstShow: !_visible);
+    }
+
     public void ShowError(SelectionSnapshot snapshot, TranslationError error, string? caption)
     {
         if (snapshot.Anchor is null) return;

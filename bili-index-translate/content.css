@@ -995,3 +995,90 @@ html[data-bit-theme="dark"] #bili-index-imm-bar .bit-imm-btn {
   color: #dc2626;
 }
 
+/* ==========================================================================
+   Zero-OCR Multimodal Vision Region Snip Overlay (Alt+S) & Vision Source Row
+   ========================================================================== */
+
+#bili-index-translate-panel .bit-btn[data-disabled] {
+  opacity: 0.38;
+  pointer-events: none;
+}
+
+#bili-index-translate-panel .bit-vision-src {
+  margin-top: 8px;
+  padding-top: 7px;
+  border-top: 1px dashed rgba(15, 23, 42, 0.1);
+  font-size: 12px;
+  line-height: 1.45;
+  color: #64748b;
+  user-select: text;
+}
+
+@media (prefers-color-scheme: dark) {
+  #bili-index-translate-panel .bit-vision-src {
+    border-top-color: rgba(255, 255, 255, 0.1);
+    color: #94a3b8;
+  }
+}
+
+html[data-bit-theme="dark"] #bili-index-translate-panel .bit-vision-src {
+  border-top-color: rgba(255, 255, 255, 0.1);
+  color: #94a3b8;
+}
+
+#bili-index-translate-panel .bit-vision-src-tag {
+  display: inline-block;
+  margin-right: 6px;
+  padding: 0 5px;
+  border-radius: 4px;
+  font-size: 10.5px;
+  font-weight: 600;
+  color: #2563eb;
+  background: rgba(37, 99, 235, 0.1);
+}
+
+#bili-index-snip-mask {
+  all: initial;
+  position: fixed;
+  inset: 0;
+  z-index: 2147483647;
+  cursor: crosshair;
+  user-select: none;
+  background: rgba(15, 23, 42, 0.24);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+}
+
+#bili-index-snip-mask[data-dragging] {
+  background: transparent;
+}
+
+#bili-index-snip-mask .bit-snip-box {
+  position: fixed;
+  display: none;
+  box-sizing: border-box;
+  border: 1.5px solid #3b82f6;
+  border-radius: 6px;
+  box-shadow: 0 0 0 9999px rgba(15, 23, 42, 0.34), 0 0 0 1px rgba(255, 255, 255, 0.45) inset;
+  pointer-events: none;
+}
+
+#bili-index-snip-mask .bit-snip-hint {
+  position: fixed;
+  top: 18px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 6px 14px;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.84);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  color: #f8fafc;
+  font-size: 12.5px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.24);
+  pointer-events: none;
+}
+
+

@@ -8,10 +8,12 @@
   const PANEL_ID = "bili-index-translate-panel";
   const STUDY_PANEL_ID = "bili-index-study-panel";
   const IMM_BAR_ID = "bili-index-imm-bar";
+  const SNIP_MASK_ID = "bili-index-snip-mask";
   const MIN_LEN = 2;
   const MAX_LEN = 3000;
   const VIEWPORT_GAP = 12;
   const COMPANION_GAP = 10;
+  const MAX_SNIP_EDGE_PX = 1440;
 
   let panel = null;
   let bodyEl = null;
@@ -48,6 +50,9 @@
   let currentAnchor = null;
   let studyState = null;
   let footFlashTimer = null;
+  let snipMask = null;
+  let lastContextTarget = null;
+  let lastContextPoint = null;
 
   function makeIcon(kind) {
     const NS = "http://www.w3.org/2000/svg";
@@ -715,14 +720,27 @@
     studyPanel.style.top = Math.round(top) + "px";
   }
 
-  function showLoading(anchor) {
+  function syncSourceButtons() {
+    const hasSrc = Boolean(currentSourceText && currentSourceText.trim());
+    if (mainSpeakBtn) {
+      if (hasSrc) mainSpeakBtn.removeAttribute("data-disabled");
+      else mainSpeakBtn.setAttribute("data-disabled", "");
+    }
+    if (studyTriggerBtn) {
+      if (hasSrc) studyTriggerBtn.removeAttribute("data-disabled");
+      else studyTriggerBtn.setAttribute("data-disabled", "");
+    }
+  }
+
+  function showLoading(anchor, isVision) {
     ensurePanel();
     dragged = false;
     currentTranslatedText = "";
+    syncSourceButtons();
     bodyEl.innerHTML = "";
     const loading = document.createElement("div");
     loading.className = "bit-loading";
-    loading.textContent = "Translating\u2026";
+    loading.textContent = isVision ? "\u8bc6\u56fe\u76f4\u8bd1\u4e2d\u2026" : "Translating\u2026";
     bodyEl.appendChild(loading);
     footEl.textContent = "";
     panel.setAttribute("data-open", "");
@@ -741,30 +759,60 @@
 
   function renderMainStreamingDelta(deltaRes, anchor) {
     currentTranslatedText = deltaRes.text || "";
+    if (deltaRes.sourceText && !currentSourceText) {
+      currentSourceText = deltaRes.sourceText;
+      syncSourceButtons();
+    }
     bodyEl.textContent = currentTranslatedText;
-    footEl.textContent = (deltaRes.model || "") + " \u00b7 \u6d41\u5f0f\u8f93\u51fa\u4e2d\u2026";
+    const streamLabel = deltaRes.vision ? " \u00b7 \u8bc6\u56fe\u6d41\u5f0f\u4e2d\u2026" : " \u00b7 \u6d41\u5f0f\u8f93\u51fa\u4e2d\u2026";
+    footEl.textContent = (deltaRes.model || "") + streamLabel;
     if (!dragged) placePanel(anchor);
   }
 
   function showResult(res, anchor) {
     if (res && res.ok) {
       currentTranslatedText = res.text || "";
-      bodyEl.textContent = currentTranslatedText;
+      if (res.sourceText) {
+        currentSourceText = res.sourceText;
+      }
+      syncSourceButtons();
+
+      bodyEl.innerHTML = "";
+      const mainTxt = document.createElement("div");
+      mainTxt.textContent = currentTranslatedText;
+      bodyEl.appendChild(mainTxt);
+
+      if (res.vision && currentSourceText) {
+        const srcRow = document.createElement("div");
+        srcRow.className = "bit-vision-src";
+        const tag = document.createElement("span");
+        tag.className = "bit-vision-src-tag";
+        tag.textContent = "\u539f\u6587";
+        const span = document.createElement("span");
+        span.textContent = currentSourceText;
+        srcRow.appendChild(tag);
+        srcRow.appendChild(span);
+        bodyEl.appendChild(srcRow);
+      }
+
+      const visionTag = res.vision ? " \u00b7 \u8bc6\u56fe" : "";
       const glossaryTag =
         res.glossaryHits && res.glossaryHits > 0 ? " \u00b7 \u672f\u8bed\u00d7" + res.glossaryHits : "";
       const left =
         (res.model || "") +
+        visionTag +
         glossaryTag +
         (res.cached ? " \u00b7 \u26a1\u77ac\u65f6" : res.via ? " \u00b7 " + res.via : "");
       footEl.textContent = "";
       const lSpan = document.createElement("span");
       lSpan.textContent = left;
       const rSpan = document.createElement("span");
-      rSpan.textContent = "S \u8bcd\u5361";
+      rSpan.textContent = currentSourceText ? "S \u8bcd\u5361" : "";
       footEl.appendChild(lSpan);
       footEl.appendChild(rSpan);
     } else {
       currentTranslatedText = "";
+      syncSourceButtons();
       bodyEl.innerHTML = "";
       const err = document.createElement("div");
       err.className = "bit-error";
@@ -1397,6 +1445,262 @@
   }
 
   // ==========================================================================================
+  // Zero-OCR Multimodal Vision Snip (Alt+S) & Right-Click Image Translation
+  // ==========================================================================================
+
+  function downscaleCanvasDims(w, h) {
+    const maxEdge = Math.max(w, h);
+    if (maxEdge <= MAX_SNIP_EDGE_PX) return { width: Math.max(1, Math.round(w)), height: Math.max(1, Math.round(h)) };
+    const ratio = MAX_SNIP_EDGE_PX / maxEdge;
+    return {
+      width: Math.max(1, Math.round(w * ratio)),
+      height: Math.max(1, Math.round(h * ratio))
+    };
+  }
+
+  function cropDataUrlToRect(fullDataUrl, cssRect) {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => {
+        try {
+          const scaleX = img.naturalWidth / Math.max(1, window.innerWidth);
+          const scaleY = img.naturalHeight / Math.max(1, window.innerHeight);
+          const sx = Math.max(0, Math.round(cssRect.left * scaleX));
+          const sy = Math.max(0, Math.round(cssRect.top * scaleY));
+          const sw = Math.min(img.naturalWidth - sx, Math.max(1, Math.round(cssRect.width * scaleX)));
+          const sh = Math.min(img.naturalHeight - sy, Math.max(1, Math.round(cssRect.height * scaleY)));
+          const outDims = downscaleCanvasDims(sw, sh);
+
+          const canvas = document.createElement("canvas");
+          canvas.width = outDims.width;
+          canvas.height = outDims.height;
+          const ctx = canvas.getContext("2d");
+          ctx.drawImage(img, sx, sy, sw, sh, 0, 0, outDims.width, outDims.height);
+          resolve(canvas.toDataURL("image/png"));
+        } catch (err) {
+          reject(err);
+        }
+      };
+      img.onerror = () => reject(new Error("Failed to decode captured viewport image."));
+      img.src = fullDataUrl;
+    });
+  }
+
+  // Fallback for sandbox / environments without chrome.tabs.captureVisibleTab:
+  // crops overlapping <canvas> or <img> elements directly in RAM.
+  function cropDomVisualFallback(cssRect) {
+    const candidates = document.querySelectorAll("canvas, img");
+    for (let i = 0; i < candidates.length; i++) {
+      const el = candidates[i];
+      const r = el.getBoundingClientRect();
+      if (r.width < 12 || r.height < 12) continue;
+      const ix0 = Math.max(cssRect.left, r.left);
+      const iy0 = Math.max(cssRect.top, r.top);
+      const ix1 = Math.min(cssRect.left + cssRect.width, r.right);
+      const iy1 = Math.min(cssRect.top + cssRect.height, r.bottom);
+      if (ix1 - ix0 < 12 || iy1 - iy0 < 12) continue;
+
+      try {
+        const srcW = el.tagName === "CANVAS" ? el.width : el.naturalWidth;
+        const srcH = el.tagName === "CANVAS" ? el.height : el.naturalHeight;
+        if (!srcW || !srcH) continue;
+        const scaleX = srcW / r.width;
+        const scaleY = srcH / r.height;
+        const sx = Math.max(0, Math.round((ix0 - r.left) * scaleX));
+        const sy = Math.max(0, Math.round((iy0 - r.top) * scaleY));
+        const sw = Math.max(1, Math.round((ix1 - ix0) * scaleX));
+        const sh = Math.max(1, Math.round((iy1 - iy0) * scaleY));
+        const outDims = downscaleCanvasDims(sw, sh);
+        const canvas = document.createElement("canvas");
+        canvas.width = outDims.width;
+        canvas.height = outDims.height;
+        const ctx = canvas.getContext("2d");
+        ctx.drawImage(el, sx, sy, sw, sh, 0, 0, outDims.width, outDims.height);
+        return canvas.toDataURL("image/png");
+      } catch (_) {}
+    }
+    return "";
+  }
+
+  function triggerImageTranslate(dataUrl, anchor) {
+    if (!dataUrl || !dataUrl.startsWith("data:image/")) return;
+
+    const seq = ++reqSeq;
+    disconnectTranslateStream();
+    if (isStudyOpen()) {
+      hideStudyCard();
+    }
+
+    currentSourceText = "";
+    currentAnchor = anchor;
+    showLoading(anchor, true);
+
+    if (chrome && chrome.runtime && typeof chrome.runtime.connect === "function") {
+      try {
+        const port = chrome.runtime.connect({ name: "bili-image-stream" });
+        translatePort = port;
+        port.onMessage.addListener((msg) => {
+          if (seq !== reqSeq || !msg) return;
+          if (msg.type === "DELTA") {
+            renderMainStreamingDelta(msg, anchor);
+          } else if (msg.type === "DONE") {
+            disconnectTranslateStream();
+            showResult(msg, anchor);
+          }
+        });
+        port.postMessage({ type: "START_IMAGE_STREAM", dataUrl: dataUrl });
+        return;
+      } catch (_) {
+        disconnectTranslateStream();
+      }
+    }
+
+    showResult({ ok: false, status: 0, body: "Vision streaming port unavailable." }, anchor);
+  }
+
+  function cancelRegionSnip() {
+    if (snipMask) {
+      snipMask.remove();
+      snipMask = null;
+    }
+  }
+
+  function startRegionSnip() {
+    if (window !== window.top) return;
+    if (snipMask) {
+      cancelRegionSnip();
+      return;
+    }
+    hideAll();
+
+    const mask = document.createElement("div");
+    mask.id = SNIP_MASK_ID;
+
+    const hint = document.createElement("div");
+    hint.className = "bit-snip-hint";
+    hint.textContent = "\u62d6\u62fd\u6846\u9009\u56fe\u7247 / \u6f2b\u753b / \u89c6\u9891\u5b57\u5e55\u533a\u57df\u76f4\u8bd1 \u00b7 Esc \u53d6\u6d88";
+
+    const box = document.createElement("div");
+    box.className = "bit-snip-box";
+
+    mask.appendChild(box);
+    mask.appendChild(hint);
+    document.documentElement.appendChild(mask);
+    snipMask = mask;
+
+    let startX = 0;
+    let startY = 0;
+    let dragging = false;
+
+    const cleanupListeners = () => {
+      window.removeEventListener("keydown", onEsc, true);
+    };
+
+    const onEsc = (ev) => {
+      if (ev.key === "Escape") {
+        ev.preventDefault();
+        ev.stopPropagation();
+        cleanupListeners();
+        cancelRegionSnip();
+      }
+    };
+    window.addEventListener("keydown", onEsc, true);
+
+    mask.addEventListener("contextmenu", (ev) => {
+      ev.preventDefault();
+      cleanupListeners();
+      cancelRegionSnip();
+    });
+
+    mask.addEventListener("mousedown", (ev) => {
+      if (ev.button !== 0) {
+        cleanupListeners();
+        cancelRegionSnip();
+        return;
+      }
+      ev.preventDefault();
+      ev.stopPropagation();
+      dragging = true;
+      startX = ev.clientX;
+      startY = ev.clientY;
+      mask.setAttribute("data-dragging", "1");
+      box.style.display = "block";
+      box.style.left = startX + "px";
+      box.style.top = startY + "px";
+      box.style.width = "0px";
+      box.style.height = "0px";
+    });
+
+    mask.addEventListener("mousemove", (ev) => {
+      if (!dragging) return;
+      const x0 = Math.min(startX, ev.clientX);
+      const y0 = Math.min(startY, ev.clientY);
+      const w = Math.abs(ev.clientX - startX);
+      const h = Math.abs(ev.clientY - startY);
+      box.style.left = x0 + "px";
+      box.style.top = y0 + "px";
+      box.style.width = w + "px";
+      box.style.height = h + "px";
+    });
+
+    mask.addEventListener("mouseup", (ev) => {
+      if (!dragging) return;
+      dragging = false;
+      cleanupListeners();
+
+      const left = Math.min(startX, ev.clientX);
+      const top = Math.min(startY, ev.clientY);
+      const width = Math.abs(ev.clientX - startX);
+      const height = Math.abs(ev.clientY - startY);
+
+      cancelRegionSnip();
+      if (width < 14 || height < 14) return;
+
+      const cssRect = { left: left, top: top, width: width, height: height };
+      const anchor = {
+        left: left,
+        top: top,
+        bottom: top + height
+      };
+
+      // Wait two animation frames so the snip overlay disappears completely from compositor before capture
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          try {
+            chrome.runtime.sendMessage({ type: "BILI_CAPTURE_TAB" }, (res) => {
+              void (chrome.runtime && chrome.runtime.lastError);
+              if (res && res.ok && res.dataUrl) {
+                cropDataUrlToRect(res.dataUrl, cssRect)
+                  .then((croppedUrl) => triggerImageTranslate(croppedUrl, anchor))
+                  .catch((err) =>
+                    showResult({ ok: false, status: 0, body: String((err && err.message) || err) }, anchor)
+                  );
+                return;
+              }
+              const fallbackUrl = cropDomVisualFallback(cssRect);
+              if (fallbackUrl) {
+                triggerImageTranslate(fallbackUrl, anchor);
+              } else {
+                showResult(
+                  { ok: false, status: 0, body: (res && res.body) || "Unable to capture tab region." },
+                  anchor
+                );
+              }
+            });
+          } catch (err) {
+            const fallbackUrl = cropDomVisualFallback(cssRect);
+            if (fallbackUrl) {
+              triggerImageTranslate(fallbackUrl, anchor);
+            } else {
+              showResult({ ok: false, status: 0, body: String((err && err.message) || err) }, anchor);
+            }
+          }
+        });
+      });
+    });
+  }
+
+  // ==========================================================================================
   // Viewport-First Streaming Immersive Bilingual Webpage Engine (Alt+A)
   // ==========================================================================================
 
@@ -1407,7 +1711,9 @@
     ", #" +
     STUDY_PANEL_ID +
     ", #" +
-    IMM_BAR_ID;
+    IMM_BAR_ID +
+    ", #" +
+    SNIP_MASK_ID;
   const IMM_MAX_CONCURRENCY = 2;
   const IMM_MAX_BATCH_ITEMS = 4;
   const IMM_MAX_BATCH_CHARS = 960;
@@ -1929,8 +2235,17 @@
     }
   });
 
+  document.addEventListener(
+    "contextmenu",
+    (e) => {
+      lastContextTarget = e.target;
+      lastContextPoint = { x: e.clientX, y: e.clientY };
+    },
+    true
+  );
+
   // ---- Keyboard Shortcuts ------------------------------------------------------------------
-  // Alt+A = toggle Immersive Bilingual Webpage
+  // Alt+A = toggle Immersive Bilingual Webpage | Alt+S = Zero-OCR Region Snip Image Translate
   // S = toggle Study Card | Space / Shift+Space = speak word (1x / 0.7x)
   // E / Shift+E = speak example (1x / 0.7x) | F = flip self-test | D = compact/detailed
   // M = 9B/35B model toggle | C = copy card/translation | 1-4 or ←/→ = switch cards | Esc = close
@@ -1938,6 +2253,14 @@
     if (e.altKey && !e.ctrlKey && !e.metaKey && (e.code === "KeyA" || e.key === "a" || e.key === "A")) {
       e.preventDefault();
       toggleImmersivePage();
+      return;
+    }
+
+    if (e.altKey && !e.ctrlKey && !e.metaKey && (e.code === "KeyS" || e.key === "s" || e.key === "S")) {
+      if (window === window.top) {
+        e.preventDefault();
+        startRegionSnip();
+      }
       return;
     }
 
@@ -2018,16 +2341,50 @@
   });
 
   window.addEventListener("pagehide", () => {
+    cancelRegionSnip();
     hideAll();
     if (immActive) stopImmersivePage();
     try { chrome.runtime.sendMessage({ type: "BILI_PURGE_VOLATILE" }); } catch (_) {}
   });
+
+  function resolveContextImageAnchor() {
+    if (lastContextTarget && lastContextTarget.getBoundingClientRect) {
+      const r = lastContextTarget.getBoundingClientRect();
+      if (r.width > 0 && r.height > 0) {
+        return {
+          left: Math.max(VIEWPORT_GAP, Math.round(r.left)),
+          top: Math.max(VIEWPORT_GAP, Math.round(r.top)),
+          bottom: Math.min(window.innerHeight - VIEWPORT_GAP, Math.round(r.bottom))
+        };
+      }
+    }
+    if (lastContextPoint) {
+      return { left: lastContextPoint.x, top: lastContextPoint.y, bottom: lastContextPoint.y + 8 };
+    }
+    return {
+      left: Math.max(VIEWPORT_GAP, Math.round((window.innerWidth - 360) / 2)),
+      top: 80,
+      bottom: 80
+    };
+  }
 
   if (chrome && chrome.runtime && chrome.runtime.onMessage) {
     chrome.runtime.onMessage.addListener((msg) => {
       if (!msg) return;
       if (msg.type === "BILI_TOGGLE_IMMERSIVE") {
         toggleImmersivePage();
+        return;
+      }
+      if (msg.type === "BILI_START_SNIP") {
+        startRegionSnip();
+        return;
+      }
+      if (msg.type === "BILI_CONTEXT_IMAGE_DATA" && msg.dataUrl) {
+        triggerImageTranslate(msg.dataUrl, resolveContextImageAnchor());
+        return;
+      }
+      if (msg.type === "BILI_CONTEXT_IMAGE_ERROR") {
+        showResult({ ok: false, status: 0, body: msg.body || "Failed to load image." }, resolveContextImageAnchor());
         return;
       }
       if (msg.type !== "BILI_CONTEXT_TRANSLATE" && msg.type !== "BILI_CONTEXT_STUDY") return;

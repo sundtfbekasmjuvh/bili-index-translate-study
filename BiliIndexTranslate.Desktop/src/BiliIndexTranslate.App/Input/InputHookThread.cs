@@ -4,7 +4,7 @@ using BiliIndexTranslate.Core.Geometry;
 
 namespace BiliIndexTranslate.App.Input;
 
-internal enum InputSignal { MouseDown, MouseUp, KeyUpSelection, Escape, Hotkey }
+internal enum InputSignal { MouseDown, MouseUp, KeyUpSelection, Escape, Hotkey, SnipHotkey }
 
 internal readonly record struct InputEvent(InputSignal Signal, PxPoint Point, bool CtrlDown);
 
@@ -17,6 +17,7 @@ internal readonly record struct InputEvent(InputSignal Signal, PxPoint Point, bo
 internal sealed class InputHookThread : IDisposable
 {
     private const int HotkeyId = 0x4251; // "BQ"
+    private const int SnipHotkeyId = 0x4252; // "BR"
 
     private readonly Action<Action> _post;
     private readonly Thread _thread;
@@ -30,6 +31,8 @@ internal sealed class InputHookThread : IDisposable
     private volatile bool _shiftUsedForSelection;
     private HotkeySpec? _pendingHotkey;
     private HotkeySpec? _registeredHotkey;
+    private HotkeySpec? _pendingSnipHotkey;
+    private HotkeySpec? _registeredSnipHotkey;
     private volatile bool _stop;
 
     public InputHookThread(Action<Action> post)
@@ -46,6 +49,9 @@ internal sealed class InputHookThread : IDisposable
 
     /// <summary>Raised when hotkey registration succeeds or fails; (display, error message or null).</summary>
     public event Action<string, string?>? HotkeyStatusChanged;
+
+    /// <summary>Raised when vision snip hotkey registration succeeds or fails; (display, error message or null).</summary>
+    public event Action<string, string?>? SnipHotkeyStatusChanged;
 
     private PxRect[] _popupRegions = Array.Empty<PxRect>();
 
@@ -72,6 +78,12 @@ internal sealed class InputHookThread : IDisposable
         if (_threadId != 0) NativeMethods.PostThreadMessageW(_threadId, NativeMethods.WM_USER + 1, IntPtr.Zero, IntPtr.Zero);
     }
 
+    public void SetSnipHotkey(HotkeySpec? spec)
+    {
+        _pendingSnipHotkey = spec;
+        if (_threadId != 0) NativeMethods.PostThreadMessageW(_threadId, NativeMethods.WM_USER + 2, IntPtr.Zero, IntPtr.Zero);
+    }
+
     private void Run()
     {
         _threadId = NativeMethods.GetCurrentThreadId();
@@ -85,21 +97,29 @@ internal sealed class InputHookThread : IDisposable
         _ready.Set();
 
         ApplyHotkey();
+        ApplySnipHotkey();
 
         while (!_stop && NativeMethods.GetMessageW(out var msg, IntPtr.Zero, 0, 0) > 0)
         {
-            if (msg.message == NativeMethods.WM_HOTKEY && msg.wParam.ToInt32() == HotkeyId)
+            if (msg.message == NativeMethods.WM_HOTKEY)
             {
-                NativeMethods.GetCursorPos(out var pt);
-                Emit(new InputEvent(InputSignal.Hotkey, new PxPoint(pt.X, pt.Y), false));
-                continue;
+                var id = msg.wParam.ToInt32();
+                if (id == HotkeyId || id == SnipHotkeyId)
+                {
+                    NativeMethods.GetCursorPos(out var pt);
+                    var signal = id == SnipHotkeyId ? InputSignal.SnipHotkey : InputSignal.Hotkey;
+                    Emit(new InputEvent(signal, new PxPoint(pt.X, pt.Y), false));
+                    continue;
+                }
             }
             if (msg.message == NativeMethods.WM_USER + 1) { ApplyHotkey(); continue; }
+            if (msg.message == NativeMethods.WM_USER + 2) { ApplySnipHotkey(); continue; }
             NativeMethods.TranslateMessage(ref msg);
             NativeMethods.DispatchMessageW(ref msg);
         }
 
         if (_registeredHotkey is not null) NativeMethods.UnregisterHotKey(IntPtr.Zero, HotkeyId);
+        if (_registeredSnipHotkey is not null) NativeMethods.UnregisterHotKey(IntPtr.Zero, SnipHotkeyId);
         if (_mouseHook != IntPtr.Zero) NativeMethods.UnhookWindowsHookEx(_mouseHook);
         if (_keyboardHook != IntPtr.Zero) NativeMethods.UnhookWindowsHookEx(_keyboardHook);
         _mouseHook = _keyboardHook = IntPtr.Zero;
@@ -126,6 +146,30 @@ internal sealed class InputHookThread : IDisposable
                 ? $"{spec.Display} is already used by another application."
                 : $"Could not register {spec.Display} (error {err}).";
             _post(() => HotkeyStatusChanged?.Invoke(spec.Display, msg));
+        }
+    }
+
+    private void ApplySnipHotkey()
+    {
+        var wanted = _pendingSnipHotkey;
+        if (_registeredSnipHotkey is not null)
+        {
+            NativeMethods.UnregisterHotKey(IntPtr.Zero, SnipHotkeyId);
+            _registeredSnipHotkey = null;
+        }
+        if (wanted is not { } spec) return;
+        if (NativeMethods.RegisterHotKey(IntPtr.Zero, SnipHotkeyId, spec.Modifiers | NativeMethods.MOD_NOREPEAT, spec.VirtualKey))
+        {
+            _registeredSnipHotkey = spec;
+            _post(() => SnipHotkeyStatusChanged?.Invoke(spec.Display, null));
+        }
+        else
+        {
+            var err = Marshal.GetLastWin32Error();
+            var msg = err == NativeMethods.ERROR_HOTKEY_ALREADY_REGISTERED
+                ? $"{spec.Display} is already used by another application."
+                : $"Could not register {spec.Display} (error {err}).";
+            _post(() => SnipHotkeyStatusChanged?.Invoke(spec.Display, msg));
         }
     }
 

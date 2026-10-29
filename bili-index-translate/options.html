@@ -126,7 +126,7 @@
   <div class="shell">
     <div class="card">
       <h1>Bili Index Translate</h1>
-      <p class="lead">Direct MV3 connection · <code>instTrans</code> Glossary · <code>Alt+A</code> Streaming Bilingual · Zero history stored.</p>
+      <p class="lead">Direct MV3 connection · <code>instTrans</code> Glossary · <code>Alt+A</code> Bilingual · <code>Alt+S</code> Zero-OCR Vision Snip · Zero history stored.</p>
 
       <form id="form" autocomplete="off">
         <label for="base"><span>Base URL</span></label>
@@ -157,6 +157,17 @@
           </div>
         </div>
 
+        <label for="visionModel">
+          <span>Zero-OCR Vision Model (Alt+S Snip &amp; Right-Click Image)</span>
+          <span class="badge">Multimodal</span>
+        </label>
+        <select id="visionModel">
+          <option value="Index-Translate-35B-A3B">Index-Translate-35B-A3B (~1.5s Fastest MoE · Recommended)</option>
+          <option value="Index-Translate-9B">Index-Translate-9B (Vision 9B)</option>
+          <option value="Index-Translate-2B">Index-Translate-2B (Vision 2B)</option>
+        </select>
+        <small>Extracts foreign text &amp; translates in one pass so TTS &amp; Study Card (<kbd>S</kbd>) work on images, manga, and paused video frames.</small>
+
         <div class="grid-2">
           <div>
             <label for="key"><span>API Key</span></label>
@@ -186,6 +197,10 @@
     </div>
 
     <div class="shortcuts">
+      <div>
+        <strong>Zero-OCR Vision Snip &amp; Image:</strong>
+        <kbd>Alt+S</kbd> Drag-select any image, manga speech bubble, canvas chart, or paused video frame (or right-click an image) · Streams translation + unlocks <kbd>S</kbd> Study Card &amp; TTS!
+      </div>
       <div>
         <strong>Immersive Bilingual Page:</strong>
         <kbd>Alt+A</kbd> Toggle viewport-streaming bilingual webpage (or right-click page) · Floating capsule switches <code>双语/仅译</code>, <code>2B/9B</code> &amp; 1-click clean restore.

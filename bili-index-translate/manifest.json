@@ -1,14 +1,14 @@
 {
   "manifest_version": 3,
   "name": "Bili Index Translate",
-  "version": "1.3.0",
-  "description": "Minimalist inline translation, Alt+A streaming bilingual page reading, instTrans glossary & companion Language Study Card.",
+  "version": "1.4.0",
+  "description": "Inline translation, Alt+A streaming bilingual page, Alt+S zero-OCR vision snip, instTrans glossary & Language Study Card.",
   "permissions": ["storage", "contextMenus", "activeTab", "scripting", "declarativeNetRequest"],
   "host_permissions": [
+    "<all_urls>",
     "https://index-translate.bilibili.com/*",
     "https://seep.eu.org/*"
   ],
-  "optional_host_permissions": ["http://*/*", "https://*/*"],
   "declarative_net_request": {
     "rule_resources": [
       {
@@ -17,6 +17,20 @@
         "path": "dnr_rules.json"
       }
     ]
+  },
+  "commands": {
+    "toggle-immersive": {
+      "suggested_key": {
+        "default": "Alt+A"
+      },
+      "description": "Toggle streaming bilingual webpage translation"
+    },
+    "snip-image-translate": {
+      "suggested_key": {
+        "default": "Alt+S"
+      },
+      "description": "Snip webpage/video region for zero-OCR image translation & Study Card"
+    }
   },
   "background": {
     "service_worker": "background.js"

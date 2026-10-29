@@ -408,3 +408,135 @@ public class TranslationCoordinatorTests
         }
     }
 }
+
+internal sealed class FakeVisionSseTransport : ISseTranslationTransport
+{
+    public string[] Chunks { get; set; } = [];
+    public int Calls { get; private set; }
+    public string LastBody { get; private set; } = string.Empty;
+
+    public Task<TransportResponse> PostJsonAsync(Uri url, string apiKey, string jsonBody, TimeSpan timeout, CancellationToken ct)
+    {
+        Calls++;
+        LastBody = jsonBody;
+        return Task.FromResult(new TransportResponse(
+            200,
+            """{"choices":[{"message":{"content":"〖译文〗主权调度器在集群间运行。\n〖原文〗The Sovereign Scheduler runs across clusters."}}]}""",
+            "application/json"));
+    }
+
+    public Task<TransportResponse> PostSseAsync(
+        Uri url,
+        string apiKey,
+        string jsonBody,
+        TimeSpan timeout,
+        Action<string> onDataLine,
+        CancellationToken ct)
+    {
+        Calls++;
+        LastBody = jsonBody;
+        foreach (var chunk in Chunks)
+            onDataLine(chunk);
+        return Task.FromResult(new TransportResponse(200, string.Empty, "text/event-stream"));
+    }
+}
+
+public class VisionTranslationTests
+{
+    [Fact]
+    public void ResolveVisionModel_UpgradesTextOnlyModels_AndDefaultsTo35BMoE()
+    {
+        Assert.Equal("Index-Translate-35B-A3B", VisionPromptBuilder.ResolveVisionModel(null));
+        Assert.Equal("Index-Translate-35B-A3B", VisionPromptBuilder.ResolveVisionModel(""));
+        Assert.Equal("Index-Translate-35B-A3B", VisionPromptBuilder.ResolveVisionModel("Index-Nailong-9B"));
+        Assert.Equal("Index-Translate-35B-A3B", VisionPromptBuilder.ResolveVisionModel("Index-Homura-9B"));
+        Assert.Equal("Index-Translate-9B", VisionPromptBuilder.ResolveVisionModel("Index-Translate-9B"));
+    }
+
+    [Fact]
+    public void BuildRequestJson_EmitsOpenAiImageUrl_Glossary_AndNoThinking()
+    {
+        var json = VisionPromptBuilder.BuildRequestJson(
+            "Index-Translate-35B-A3B",
+            "data:image/png;base64,iVBORw0KGgo=",
+            "Simplified Chinese",
+            stream: true,
+            baseUrl: "https://index-translate.bilibili.com/v1",
+            glossaryText: "Sovereign Scheduler => 主权调度器\nPyTorch");
+
+        using var doc = JsonDocument.Parse(json);
+        var root = doc.RootElement;
+        Assert.Equal("Index-Translate-35B-A3B", root.GetProperty("model").GetString());
+        Assert.True(root.GetProperty("stream").GetBoolean());
+        Assert.False(root.GetProperty("chat_template_kwargs").GetProperty("enable_thinking").GetBoolean());
+
+        var content = root.GetProperty("messages")[0].GetProperty("content");
+        Assert.Equal(2, content.GetArrayLength());
+        Assert.Equal("text", content[0].GetProperty("type").GetString());
+        Assert.Contains("〖译文〗", content[0].GetProperty("text").GetString());
+        Assert.Contains("〖原文〗", content[0].GetProperty("text").GetString());
+        Assert.Contains("【术语对照】Sovereign Scheduler→主权调度器、PyTorch→PyTorch", content[0].GetProperty("text").GetString());
+        Assert.Equal("image_url", content[1].GetProperty("type").GetString());
+        Assert.Equal("data:image/png;base64,iVBORw0KGgo=", content[1].GetProperty("image_url").GetProperty("url").GetString());
+    }
+
+    [Fact]
+    public void ParseDualOutput_HandlesPartialStreaming_DanglingMarker_AndCompleteOutput()
+    {
+        var partial = VisionPromptBuilder.ParseDualOutput("〖译文〗主权调度器隔离瞬态负载〖原");
+        Assert.Equal("主权调度器隔离瞬态负载", partial.Translation);
+        Assert.Equal(string.Empty, partial.SourceText);
+
+        var complete = VisionPromptBuilder.ParseDualOutput("<think>hidden</think>〖译文〗主权调度器隔离瞬态负载。\n〖原文〗The Sovereign Scheduler isolates ephemeral workloads.");
+        Assert.Equal("主权调度器隔离瞬态负载。", complete.Translation);
+        Assert.Equal("The Sovereign Scheduler isolates ephemeral workloads.", complete.SourceText);
+    }
+
+    [Fact]
+    public async Task VisionTranslationService_StreamsTranslationFirst_ExtractsSource_AndCachesInRam()
+    {
+        var transport = new FakeVisionSseTransport
+        {
+            Chunks =
+            [
+                """{"choices":[{"delta":{"content":"〖译文〗主权调度器"}}]}""",
+                """{"choices":[{"delta":{"content":"隔离负载〖原"}}]}""",
+                """{"choices":[{"delta":{"content":"文〗The Sovereign Scheduler isolates workloads."}}]}""",
+            ],
+        };
+
+        var service = new VisionTranslationService(transport);
+        var deltas = new List<ImageTranslationDelta>();
+        var req = new ImageTranslationRequest(
+            "data:image/png;base64,AAAA",
+            "zh-Hans",
+            "Simplified Chinese",
+            "Index-Translate-35B-A3B",
+            "https://index-translate.bilibili.com/v1",
+            false,
+            "",
+            "bili",
+            "Sovereign Scheduler => 主权调度器");
+
+        var res = await service.TranslateImageAsync(req, CancellationToken.None, d => deltas.Add(d));
+        Assert.True(deltas.Count >= 2);
+        Assert.Equal("主权调度器", deltas[0].Translation);
+        Assert.Equal("主权调度器隔离负载", deltas[1].Translation);
+        Assert.Equal("主权调度器隔离负载", res.Translation);
+        Assert.Equal("The Sovereign Scheduler isolates workloads.", res.ExtractedSourceText);
+        Assert.Equal(1, res.GlossaryHitCount);
+        Assert.False(res.IsCached);
+        Assert.Equal(1, transport.Calls);
+
+        // Second identical image request hits volatile RAM cache with 0 network calls
+        var cached = await service.TranslateImageAsync(req, CancellationToken.None);
+        Assert.True(cached.IsCached);
+        Assert.Equal("The Sovereign Scheduler isolates workloads.", cached.ExtractedSourceText);
+        Assert.Equal(1, transport.Calls);
+
+        service.ClearVolatileCache();
+        var afterPurge = await service.TranslateImageAsync(req, CancellationToken.None);
+        Assert.False(afterPurge.IsCached);
+        Assert.Equal(2, transport.Calls);
+    }
+}

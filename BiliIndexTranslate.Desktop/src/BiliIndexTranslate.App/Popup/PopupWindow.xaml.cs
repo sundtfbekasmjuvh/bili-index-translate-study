@@ -117,21 +117,24 @@ public partial class PopupWindow : Window, IPopupSurface
     public void ShowTranslation(SelectionSnapshot snapshot, string translation, string? caption)
     {
         StopLoadingPulse();
-        CurrentSource = snapshot.Text;
+        var hasSource = !string.IsNullOrWhiteSpace(snapshot.Text);
+        CurrentSource = hasSource ? snapshot.Text : null;
         CurrentTranslation = translation;
-        _layout = ReadingLayoutClassifier.Classify(snapshot.Text, translation);
+        _layout = ReadingLayoutClassifier.Classify(hasSource ? snapshot.Text : translation, translation);
         TranslationText.Text = translation;
-        OriginalText.Text = snapshot.Text.Trim();
+        OriginalText.Text = hasSource ? snapshot.Text.Trim() : string.Empty;
         LoadingPanel.Visibility = Visibility.Collapsed;
         ErrorPanel.Visibility = Visibility.Collapsed;
         BodyScroll.Visibility = Visibility.Visible;
         BodyScroll.ScrollToTop();
         Footer.Visibility = Visibility.Visible;
-        StudyButton.Visibility = Visibility.Visible;
+        StudyButton.Visibility = hasSource ? Visibility.Visible : Visibility.Collapsed;
         Caption.Text = caption ?? string.Empty;
         CopyButton.IsEnabled = true;
         PinButton.IsEnabled = !IsPinned;
-        OriginalPanel.Visibility = _showOriginal ? Visibility.Visible : Visibility.Collapsed;
+        OriginalPanel.Visibility = (_showOriginal || snapshot.Origin == SelectionOrigin.ScreenSnip) && hasSource
+            ? Visibility.Visible
+            : Visibility.Collapsed;
         ApplyTypography();
     }
 
