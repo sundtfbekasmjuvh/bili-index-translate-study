@@ -137,13 +137,6 @@ internal sealed class AppHost : IDisposable
                 if (!string.IsNullOrWhiteSpace(modelOverride))
                     req = req with { Model = modelOverride };
                 return _studyService.GenerateAsync(req, ct, onPartial);
-            },
-            (text, modelOverride) =>
-            {
-                var req = BuildRequest(text, _settings);
-                if (!string.IsNullOrWhiteSpace(modelOverride))
-                    req = req with { Model = modelOverride };
-                _ = _studyService.PrewarmAsync(req, CancellationToken.None);
             });
         _popup.Configure(_settings.TextScale, _settings.ShowOriginalByDefault);
         _popup.PinRequested += () => Dispatch(new SessionEvent.UserPinned());

@@ -110,14 +110,15 @@
         <small>OpenAI-compatible root. <code>/chat/completions</code> is appended automatically.</small>
 
         <label for="proxy">Relay prefix (optional)</label>
-        <input id="proxy" type="text" placeholder="https://seep.eu.org/https://index-translate.bilibili.com/v1">
-        <small>Empty = direct first, auto-fallback to <code>https://seep.eu.org/&lt;Base URL&gt;</code> on HTTP 412.</small>
+        <input id="proxy" type="text" placeholder="Leave empty for direct Bilibili connection (MV3 DNR enabled)">
+        <small>Empty = direct connection to <code>index-translate.bilibili.com</code> (MV3 header rule removes extension Origin automatically).</small>
 
         <label for="model">Default Model</label>
         <select id="model">
-          <option value="Index-Translate-2B">Index-Translate-2B (Fastest)</option>
+          <option value="Index-Translate-2B">Index-Translate-2B (Fastest inline translation · Study Card auto-uses 9B)</option>
           <option value="Index-Translate-9B">Index-Translate-9B (Recommended Balance)</option>
-          <option value="Index-Translate-35B-A3B">Index-Translate-35B-A3B (Largest MoE)</option>
+          <option value="Index-Translate-35B-A3B">Index-Translate-35B-A3B (Official Flagship MoE)</option>
+          <option value="Index-Nailong-9B">Index-Nailong-9B (229K Long-Context)</option>
         </select>
 
         <label for="key">API Key</label>
@@ -143,7 +144,7 @@
       <kbd>E</kbd> Speak example ·
       <kbd>F</kbd> Self-test flip ·
       <kbd>D</kbd> Compact/Detailed ·
-      <kbd>M</kbd> 9B/2B speed ·
+      <kbd>M</kbd> 9B/35B model ·
       <kbd>C</kbd> Copy ·
       <kbd>1-4</kbd> / <kbd>←</kbd><kbd>→</kbd> Switch word ·
       <kbd>Ctrl+Wheel</kbd> Text size ·

@@ -1,0 +1,17 @@
+[
+  {
+    "id": 1,
+    "priority": 1,
+    "action": {
+      "type": "modifyHeaders",
+      "requestHeaders": [
+        { "header": "origin", "operation": "remove" },
+        { "header": "User-Agent", "operation": "set", "value": "Index-Translate-Client/1.0" }
+      ]
+    },
+    "condition": {
+      "urlFilter": "||index-translate.bilibili.com/v1/",
+      "excludedResourceTypes": ["main_frame"]
+    }
+  }
+]

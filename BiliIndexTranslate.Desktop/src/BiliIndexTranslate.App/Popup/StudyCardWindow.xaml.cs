@@ -59,7 +59,7 @@ public partial class StudyCardWindow : Window, IPopupSurface
     public IntPtr Hwnd { get; private set; }
     public string? CurrentSource { get; private set; }
     public bool HasBeenDragged { get; private set; }
-    public bool PreferFastModel { get; private set; }
+    public bool PreferFlagshipModel { get; private set; }
 
     public void EnsureHandle()
     {
@@ -120,7 +120,7 @@ public partial class StudyCardWindow : Window, IPopupSurface
         LoadingPanel.Visibility = Visibility.Visible;
         ErrorPanel.Visibility = Visibility.Collapsed;
         DeckPanel.Visibility = Visibility.Collapsed;
-        Caption.Text = PreferFastModel ? "⚡ 2B 极速拆解中…" : "流式拆解中…";
+        Caption.Text = PreferFlagshipModel ? "35B 旗舰拆解中…" : "9B 流式拆解中…";
         _captionBeforeFlash = null;
         StartLoadingPulse();
     }
@@ -216,9 +216,9 @@ public partial class StudyCardWindow : Window, IPopupSurface
         CompactButton.Foreground = _compactMode ? accent : secondary;
         CompactButton.BorderBrush = _compactMode ? accent : border;
 
-        SpeedButton.Content = PreferFastModel ? "⚡2B" : "9B";
-        SpeedButton.Foreground = PreferFastModel ? accent : secondary;
-        SpeedButton.BorderBrush = PreferFastModel ? accent : border;
+        SpeedButton.Content = PreferFlagshipModel ? "35B" : "9B";
+        SpeedButton.Foreground = PreferFlagshipModel ? accent : secondary;
+        SpeedButton.BorderBrush = PreferFlagshipModel ? accent : border;
     }
 
     private void RenderNavigationChips()
@@ -616,7 +616,7 @@ public partial class StudyCardWindow : Window, IPopupSurface
 
     private void OnSpeedClick(object sender, RoutedEventArgs e)
     {
-        PreferFastModel = !PreferFastModel;
+        PreferFlagshipModel = !PreferFlagshipModel;
         SyncHeaderPills();
         SpeedToggleRequested?.Invoke();
     }

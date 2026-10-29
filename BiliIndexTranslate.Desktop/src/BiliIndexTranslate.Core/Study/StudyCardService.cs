@@ -8,7 +8,7 @@ using BiliIndexTranslate.Core.Translation;
 namespace BiliIndexTranslate.Core.Study;
 
 /// <summary>
-/// Ephemeral, on-demand study card client with progressive SSE streaming, hover pre-warming,
+/// Ephemeral, on-demand study card client with progressive SSE streaming
 /// and a strictly volatile in-RAM LRU micro-cache (never persisted to disk or settings).
 /// </summary>
 public sealed class StudyCardService
@@ -36,25 +36,6 @@ public sealed class StudyCardService
         }
     }
 
-    public Task PrewarmAsync(TranslationRequest request, CancellationToken ct)
-    {
-        if (string.IsNullOrWhiteSpace(request.Text)) return Task.CompletedTask;
-        var cacheKey = BuildCacheKey(request);
-        if (TryGetCached(cacheKey, out _)) return Task.CompletedTask;
-
-        return Task.Run(async () =>
-        {
-            try
-            {
-                await GenerateAsync(request, ct).ConfigureAwait(false);
-            }
-            catch
-            {
-                // Pre-warm is strictly opportunistic; swallow errors until user explicitly clicks.
-            }
-        }, ct);
-    }
-
     public async Task<StudyDeckResult> GenerateAsync(
         TranslationRequest request,
         CancellationToken ct,
@@ -67,18 +48,22 @@ public sealed class StudyCardService
         if (string.IsNullOrWhiteSpace(request.Model))
             throw new TranslationException(new TranslationError(TranslationErrorKind.Configuration, "No model selected.", route));
 
-        var cacheKey = BuildCacheKey(request);
+        var effectiveModel = StudyPromptBuilder.ResolveStudyModel(request.Model);
+        var effectiveReq = request with { Model = effectiveModel };
+
+        var cacheKey = BuildCacheKey(effectiveReq);
         if (TryGetCached(cacheKey, out var cached) && cached is not null)
             return cached with { ElapsedMs = 0, IsCached = true };
 
         var canStream = onPartial is not null && _transport is ISseTranslationTransport;
         var body = StudyPromptBuilder.BuildRequestJson(
-            request.Model,
-            request.Text,
-            request.TargetLanguagePromptName,
-            request.SourceLanguage,
-            request.TargetLanguageCode,
-            stream: canStream);
+            effectiveModel,
+            effectiveReq.Text,
+            effectiveReq.TargetLanguagePromptName,
+            effectiveReq.SourceLanguage,
+            effectiveReq.TargetLanguageCode,
+            stream: canStream,
+            baseUrl: effectiveReq.BaseUrl);
 
         var sw = Stopwatch.StartNew();
         TransportResponse response;
@@ -91,7 +76,7 @@ public sealed class StudyCardService
             {
                 response = await sse.PostSseAsync(
                     endpoint.ChatCompletionsUrl,
-                    request.ApiKey,
+                    effectiveReq.ApiKey,
                     body,
                     _timeout,
                     dataJson =>
@@ -99,18 +84,18 @@ public sealed class StudyCardService
                         var delta = ExtractDeltaContent(dataJson);
                         if (string.IsNullOrEmpty(delta)) return;
                         streamedContent.Append(delta);
-                        var partial = StudyCardParser.ExtractPartialDeck(streamedContent.ToString(), request.Text);
+                        var partial = StudyCardParser.ExtractPartialDeck(streamedContent.ToString(), effectiveReq.Text);
                         if (partial is null) return;
                         var key = $"{partial.GrammarNote.Length}:{partial.Cards.Count}";
                         if (key == lastEmitKey) return;
                         lastEmitKey = key;
-                        onPartial!(new StudyDeckResult(partial, route, sw.Elapsed.TotalMilliseconds, request.Model));
+                        onPartial!(new StudyDeckResult(partial, route, sw.Elapsed.TotalMilliseconds, effectiveModel));
                     },
                     ct).ConfigureAwait(false);
             }
             else
             {
-                response = await _transport.PostJsonAsync(endpoint.ChatCompletionsUrl, request.ApiKey, body, _timeout, ct).ConfigureAwait(false);
+                response = await _transport.PostJsonAsync(endpoint.ChatCompletionsUrl, effectiveReq.ApiKey, body, _timeout, ct).ConfigureAwait(false);
             }
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -157,15 +142,15 @@ public sealed class StudyCardService
 
         if (canStream && string.Equals(response.ContentType, "text/event-stream", StringComparison.OrdinalIgnoreCase))
         {
-            var finalDeck = StudyCardParser.ParseContent(streamedContent.ToString(), request.Text);
+            var finalDeck = StudyCardParser.ParseContent(streamedContent.ToString(), effectiveReq.Text);
             if (finalDeck is null)
                 throw new TranslationException(new TranslationError(TranslationErrorKind.EmptyResult, "The service returned an empty study card.", route, response.StatusCode));
-            var sseRes = new StudyDeckResult(finalDeck, route, sw.Elapsed.TotalMilliseconds, request.Model);
+            var sseRes = new StudyDeckResult(finalDeck, route, sw.Elapsed.TotalMilliseconds, effectiveModel);
             PutCached(cacheKey, sseRes);
             return sseRes;
         }
 
-        if (!StudyCardParser.TryParseCompletion(response.Body, request.Text, out var deck, out var parseError) || deck is null)
+        if (!StudyCardParser.TryParseCompletion(response.Body, effectiveReq.Text, out var deck, out var parseError) || deck is null)
         {
             var kind = parseError is not null && parseError.Contains("empty", StringComparison.OrdinalIgnoreCase)
                 ? TranslationErrorKind.EmptyResult
@@ -173,7 +158,7 @@ public sealed class StudyCardService
             throw new TranslationException(new TranslationError(kind, parseError ?? "Unreadable response.", route, response.StatusCode));
         }
 
-        var result = new StudyDeckResult(deck, route, sw.Elapsed.TotalMilliseconds, request.Model);
+        var result = new StudyDeckResult(deck, route, sw.Elapsed.TotalMilliseconds, effectiveModel);
         PutCached(cacheKey, result);
         return result;
     }

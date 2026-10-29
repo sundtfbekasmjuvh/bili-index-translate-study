@@ -252,4 +252,38 @@ public class StudyCardParserAndServiceTests
         Assert.Equal(TranslationErrorKind.Http, ex.Error.Kind);
         Assert.Equal(412, ex.Error.StatusCode);
     }
+
+    [Theory]
+    [InlineData("Index-Translate-2B", null, "Index-Translate-9B")]
+    [InlineData("Index-Nailong-2B", null, "Index-Translate-9B")]
+    [InlineData("Index-Translate-9B", null, "Index-Translate-9B")]
+    [InlineData("Index-Translate-9B", "Index-Translate-35B-A3B", "Index-Translate-35B-A3B")]
+    [InlineData("gpt-4o-mini", null, "gpt-4o-mini")]
+    public void ResolveStudyModel_AutoUpgrades2BCheckpoints_AndRespectsOverrides(string configured, string? modelOverride, string expected)
+    {
+        Assert.Equal(expected, StudyPromptBuilder.ResolveStudyModel(configured, modelOverride));
+    }
+
+    [Fact]
+    public void RequestJson_AttachesDisableThinkingForIndexModels_AndStripsThinkBlocks()
+    {
+        var indexJson = StudyPromptBuilder.BuildRequestJson("Index-Translate-2B", "木漏れ日", "Simplified Chinese", "auto", "zh-Hans", stream: true);
+        using (var doc = JsonDocument.Parse(indexJson))
+        {
+            var root = doc.RootElement;
+            Assert.Equal("Index-Translate-9B", root.GetProperty("model").GetString());
+            Assert.False(root.GetProperty("chat_template_kwargs").GetProperty("enable_thinking").GetBoolean());
+        }
+
+        var customJson = StudyPromptBuilder.BuildRequestJson("gpt-4o-mini", "木漏れ日", "Simplified Chinese", "auto", "zh-Hans", stream: false, baseUrl: "https://api.openai.com/v1");
+        using (var doc2 = JsonDocument.Parse(customJson))
+        {
+            Assert.False(doc2.RootElement.TryGetProperty("chat_template_kwargs", out _));
+        }
+
+        var withThink = "<think>\nInternal reasoning...\n</think>\n{\"mode\":\"word\",\"sourceLang\":\"ja-JP\",\"grammarNote\":\"\",\"cards\":[{\"term\":\"木漏れ日\",\"meaning\":\"林间斑驳阳光\"}]}";
+        var deck = StudyCardParser.ParseContent(withThink, "木漏れ日");
+        Assert.NotNull(deck);
+        Assert.Equal("林间斑驳阳光", deck!.Cards[0].Meaning);
+    }
 }

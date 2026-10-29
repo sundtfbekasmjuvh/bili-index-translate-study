@@ -1,14 +1,23 @@
 {
   "manifest_version": 3,
   "name": "Bili Index Translate",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "Lightweight inline translation + companion Language Study Card powered by Bilibili Index-Translate.",
-  "permissions": ["storage", "contextMenus", "activeTab", "scripting"],
+  "permissions": ["storage", "contextMenus", "activeTab", "scripting", "declarativeNetRequest"],
   "host_permissions": [
     "https://index-translate.bilibili.com/*",
     "https://seep.eu.org/*"
   ],
   "optional_host_permissions": ["http://*/*", "https://*/*"],
+  "declarative_net_request": {
+    "rule_resources": [
+      {
+        "id": "bili_direct_headers",
+        "enabled": true,
+        "path": "dnr_rules.json"
+      }
+    ]
+  },
   "background": {
     "service_worker": "background.js"
   },

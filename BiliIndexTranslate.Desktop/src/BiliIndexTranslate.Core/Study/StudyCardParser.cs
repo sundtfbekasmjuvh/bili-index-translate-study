@@ -53,7 +53,7 @@ public static partial class StudyCardParser
 
     public static StudyDeck? ParseContent(string? rawContent, string sourceText)
     {
-        var text = (rawContent ?? string.Empty).Trim();
+        var text = ChatCompletionParser.StripThink(rawContent);
         if (text.Length == 0) return null;
 
         var stripped = StripCodeFence(text);
@@ -87,7 +87,7 @@ public static partial class StudyCardParser
     /// </summary>
     public static StudyDeck? ExtractPartialDeck(string? partialRaw, string sourceText)
     {
-        var s = partialRaw ?? string.Empty;
+        var s = ChatCompletionParser.StripThink(partialRaw);
         if (s.Length == 0) return null;
 
         var fallbackLang = InferSourceLanguage(sourceText);

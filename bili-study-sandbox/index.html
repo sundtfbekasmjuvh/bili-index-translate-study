@@ -256,11 +256,12 @@
           默认模型
           <select id="opt-model">
             <option value="Index-Translate-9B" selected>Index-Translate-9B</option>
-            <option value="Index-Translate-2B">Index-Translate-2B</option>
+            <option value="Index-Translate-35B-A3B">Index-Translate-35B-A3B</option>
+            <option value="Index-Translate-2B">Index-Translate-2B (主译极速)</option>
           </select>
         </label>
         <button class="theme-btn" id="theme-toggle" type="button">深色主题</button>
-        <span class="status-pill" id="api-status">就绪 · 双流式 SSE + 内存瞬时预热</span>
+        <span class="status-pill" id="api-status">就绪 · 双流式 SSE + 会话零落盘</span>
       </div>
     </div>
   </header>
@@ -273,7 +274,7 @@
         <span><span class="kbd">E</span> 朗读例句</span>
         <span><span class="kbd">D</span> 精简/详尽</span>
         <span><span class="kbd">F</span> 自测翻转</span>
-        <span><span class="kbd">M</span> 9B/2B</span>
+        <span><span class="kbd">M</span> 9B/35B</span>
         <span><span class="kbd">C</span> 复制笔记</span>
         <span><span class="kbd">1-4</span> / <span class="kbd">←→</span> 切词</span>
         <span><span class="kbd">Ctrl+滚轮</span> 字号</span>
@@ -323,7 +324,7 @@
     </div>
 
     <section class="custom-area">
-      <h3>自由划词测试区（支持任意多语种文本选中翻译 + 悬停预热学习卡片）</h3>
+      <h3>自由划词测试区（支持任意多语种文本选中翻译 + 伴随语言学习卡片）</h3>
       <textarea placeholder="粘贴任意外语单词、台词或长句并选中测试…">Notwithstanding the turbulent weather, the expedition persevered toward the summit.</textarea>
     </section>
   </main>

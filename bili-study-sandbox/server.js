@@ -1,4 +1,4 @@
-// /home/user/bili-index-translate-demo/server.js
+// bili-study-sandbox/server.js
 "use strict";
 
 const http = require("http");
@@ -39,27 +39,17 @@ function loadBg() {
   return require(p);
 }
 
-function stripSlashes(url) {
-  return String(url || "").trim().replace(/\/+$/, "");
-}
-
-function translateSystemPrompt(target) {
-  return (
-    "You are a translation engine. Translate the user text into " +
-    target +
-    ". Output ONLY the translation \u2014 no explanation, no quotes, no original text."
-  );
-}
-
 async function openUpstreamStream(body, signal) {
   let via = "direct";
+  const headers = {
+    "Content-Type": "application/json",
+    "User-Agent": "Index-Translate-Client/1.0",
+    Accept: "text/event-stream, application/json",
+    Authorization: "Bearer " + DEFAULT_KEY
+  };
   let res = await fetch(DEFAULT_BASE + "/chat/completions", {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Accept: "text/event-stream, application/json",
-      Authorization: "Bearer " + DEFAULT_KEY
-    },
+    headers,
     body: JSON.stringify(body),
     signal
   });
@@ -67,11 +57,7 @@ async function openUpstreamStream(body, signal) {
     via = "relay";
     res = await fetch(DEFAULT_RELAY + DEFAULT_BASE + "/chat/completions", {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "text/event-stream, application/json",
-        Authorization: "Bearer " + DEFAULT_KEY
-      },
+      headers,
       body: JSON.stringify(body),
       signal
     });
@@ -128,6 +114,7 @@ const server = http.createServer(async (req, res) => {
       const text = String(msg.text || "").trim();
       const target = String(msg.target || "中文").trim();
       const model = String(msg.model || "Index-Translate-9B").trim();
+      const bg = loadBg();
 
       res.writeHead(200, {
         "Content-Type": "text/event-stream; charset=utf-8",
@@ -153,20 +140,20 @@ const server = http.createServer(async (req, res) => {
       req.on("close", () => abortCtrl.abort());
       const timer = setTimeout(() => abortCtrl.abort(), TIMEOUT_MS);
       const t0 = Date.now();
+      const isIndex = bg.isIndexModelOrHost(model, DEFAULT_BASE);
 
       try {
-        const { res: upRes, via } = await openUpstreamStream(
+        const reqBody = bg.attachIndexTemplateKwargs(
           {
             model,
             stream: true,
-            temperature: 0.2,
-            messages: [
-              { role: "system", content: translateSystemPrompt(target) },
-              { role: "user", content: text }
-            ]
+            temperature: isIndex ? 0.0 : 0.2,
+            messages: bg.buildTranslateMessages(text, target, model, DEFAULT_BASE)
           },
-          abortCtrl.signal
+          model,
+          DEFAULT_BASE
         );
+        const { res: upRes, via } = await openUpstreamStream(reqBody, abortCtrl.signal);
 
         if (!upRes.ok) {
           const errRaw = await upRes.text();
@@ -197,19 +184,22 @@ const server = http.createServer(async (req, res) => {
               const delta = j?.choices?.[0]?.delta?.content || "";
               if (delta) {
                 full += delta;
-                writeSse(res, {
-                  type: "DELTA",
-                  text: full.trimStart(),
-                  model,
-                  via,
-                  elapsedMs: Date.now() - t0
-                });
+                const visible = bg.stripThink(full);
+                if (visible) {
+                  writeSse(res, {
+                    type: "DELTA",
+                    text: visible,
+                    model,
+                    via,
+                    elapsedMs: Date.now() - t0
+                  });
+                }
               }
             } catch (_) {}
           }
         }
 
-        const clean = full.trim();
+        const clean = bg.stripThink(full);
         if (!clean) {
           writeSse(res, { type: "DONE", ok: false, status: 200, body: "Empty translation.", via });
         } else {
@@ -234,8 +224,8 @@ const server = http.createServer(async (req, res) => {
       const msg = await readJsonBody(req);
       const text = String(msg.text || "").trim();
       const target = String(msg.target || "中文").trim();
-      const model = String(msg.modelOverride || msg.model || "Index-Translate-9B").trim();
       const bg = loadBg();
+      const model = bg.resolveStudyModel(msg.model || "Index-Translate-9B", msg.modelOverride);
 
       res.writeHead(200, {
         "Content-Type": "text/event-stream; charset=utf-8",
@@ -263,7 +253,7 @@ const server = http.createServer(async (req, res) => {
       const t0 = Date.now();
 
       try {
-        const { res: upRes, via } = await openUpstreamStream(
+        const reqBody = bg.attachIndexTemplateKwargs(
           {
             model,
             stream: true,
@@ -271,8 +261,10 @@ const server = http.createServer(async (req, res) => {
             max_tokens: 1100,
             messages: bg.buildStudyMessages(text, target)
           },
-          abortCtrl.signal
+          model,
+          DEFAULT_BASE
         );
+        const { res: upRes, via } = await openUpstreamStream(reqBody, abortCtrl.signal);
 
         if (!upRes.ok) {
           const errRaw = await upRes.text();

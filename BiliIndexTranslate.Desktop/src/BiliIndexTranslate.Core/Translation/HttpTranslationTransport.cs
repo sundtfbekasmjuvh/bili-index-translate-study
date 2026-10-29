@@ -13,7 +13,7 @@ public sealed class HttpTranslationTransport : ISseTranslationTransport, IDispos
     private const int MaxBodyBytes = 2 * 1024 * 1024;
     private readonly HttpClient _client;
 
-    public HttpTranslationTransport(string userAgent = "BiliIndexTranslate-Desktop/2.0")
+    public HttpTranslationTransport(string userAgent = "Index-Translate-Client/1.0")
     {
         var handler = new SocketsHttpHandler
         {

@@ -9,9 +9,6 @@ const DEFAULTS = {
   target: "中文"
 };
 
-// Prepended to the base URL when the direct call answers HTTP 412 and no relay prefix is
-// configured. With the default base this is exactly
-// https://seep.eu.org/https://index-translate.bilibili.com/v1
 const DEFAULT_RELAY_HOST = "https://seep.eu.org/";
 
 const MENU_ID = "bili-translate-selection";
@@ -50,9 +47,52 @@ function getSettings() {
   return chrome.storage.sync.get(DEFAULTS);
 }
 
+function isIndexModelOrHost(model, baseUrl) {
+  const m = String(model || "").trim();
+  const b = String(baseUrl || "").trim();
+  return /^index-/i.test(m) || /index-translate\.bilibili\.com/i.test(b);
+}
+
+// 2B translation checkpoints echo JSON schema placeholders on structured lexical cards;
+// automatically upgrade any *-2B model to Index-Translate-9B for Study Cards, and support 35B flagship override.
+function resolveStudyModel(configuredModel, modelOverride) {
+  const ov = String(modelOverride || "").trim();
+  if (ov) return ov;
+  const baseModel = String(configuredModel || DEFAULTS.model).trim();
+  if (/^index-.*-2b$/i.test(baseModel)) {
+    return "Index-Translate-9B";
+  }
+  return baseModel || "Index-Translate-9B";
+}
+
+// Strip CoT <think>...</think> blocks if present (official Qwen3.5 / Index-Translate safeguard).
+function stripThink(raw) {
+  let s = String(raw || "");
+  if (s.includes("</think>")) {
+    s = s.split("</think>").pop();
+  } else if (s.trimStart().startsWith("<think>")) {
+    return "";
+  }
+  return s.replace(/^<think>\s*/i, "").trim();
+}
+
 function isSimplifiedChineseTarget(target) {
   const t = String(target || "中文").trim();
   return t === "中文" || t === "简体中文" || /^zh([-_]?cn|[-_]?hans)?$/i.test(t) || /simplified chinese/i.test(t);
+}
+
+function normalizeChineseTargetName(target) {
+  const t = String(target || "中文").trim();
+  if (isSimplifiedChineseTarget(t)) return "中文";
+  if (/traditional|繁體|繁体|^zh[-_]?(tw|hk|hant)/i.test(t)) return "繁体中文";
+  if (/^en|english|英语|英文/i.test(t)) return "英语";
+  if (/^ja|japanese|日本語|日语|日文/i.test(t)) return "日语";
+  if (/^ko|korean|한국어|韩语|韩文/i.test(t)) return "韩语";
+  if (/^fr|french|français|法语/i.test(t)) return "法语";
+  if (/^de|german|deutsch|德语/i.test(t)) return "德语";
+  if (/^es|spanish|español|西班牙语/i.test(t)) return "西班牙语";
+  if (/^ru|russian|русский|俄语/i.test(t)) return "俄语";
+  return t;
 }
 
 function normalizeTargetPrompt(target) {
@@ -63,11 +103,29 @@ function normalizeTargetPrompt(target) {
   return t;
 }
 
-function systemPrompt(target) {
-  return (
-    "You are a translation engine. Translate the user text into " + target + ". " +
-    "Output ONLY the translation \u2014 no explanation, no quotes, no original text."
-  );
+// Aligns with official bilibili/Index-Translate call_api.py::build_prompt for Index-* models,
+// with standard system+user fallback for generic OpenAI-compatible endpoints.
+function buildTranslateMessages(text, target, model, baseUrl) {
+  const clean = String(text || "").trim();
+  if (isIndexModelOrHost(model, baseUrl)) {
+    const tgtName = normalizeChineseTargetName(target);
+    return [
+      {
+        role: "user",
+        content: "请将以下文本翻译为" + tgtName + "，直接输出翻译结果，不要进行任何解释。\n\n" + clean
+      }
+    ];
+  }
+  return [
+    {
+      role: "system",
+      content:
+        "You are a translation engine. Translate the user text into " +
+        target +
+        ". Output ONLY the translation \u2014 no explanation, no quotes, no original text."
+    },
+    { role: "user", content: clean }
+  ];
 }
 
 function studySystemPrompt(target) {
@@ -110,6 +168,13 @@ function buildStudyMessages(text, target) {
   ];
 }
 
+function attachIndexTemplateKwargs(body, model, baseUrl) {
+  if (isIndexModelOrHost(model, baseUrl)) {
+    body.chat_template_kwargs = { enable_thinking: false };
+  }
+  return body;
+}
+
 // ---- Tolerant & Streaming Study Card JSON Parser ----------------------------------------
 
 function inferSourceLang(text) {
@@ -137,7 +202,7 @@ function isLikelyArrayBoundary(s, afterCommaIdx) {
 }
 
 function repairStudyJson(raw) {
-  let s = String(raw || "").trim();
+  let s = stripThink(raw);
   s = s.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
 
   const start = s.indexOf("{");
@@ -146,15 +211,12 @@ function repairStudyJson(raw) {
     s = s.slice(start, end + 1);
   }
 
-  // 1. Wrap unquoted /.../ phonetic literals in value position (e.g. "reading": /ɪˈfem/,).
   s = s.replace(/(:\s*)\/([^/\r\n]+)\/(\s*[,}\]])/g, (_, pre, ipa, post) => {
     return pre + JSON.stringify("/" + ipa + "/") + post;
   });
 
-  // 2. Merge parenthesized gloss accidentally placed outside closing quote: "phrase"（释义）, -> "phrase （释义）",
   s = s.replace(/"([^"\r\n]+)"\s*([（(][^)）\r\n]+[）)])(\s*[,\]}])/g, '"$1 $2"$3');
 
-  // 3. Stateful character-level JSON quote/delimiter repairer for 9B translation models.
   const stack = [];
   let out = "";
   let inString = false;
@@ -330,7 +392,7 @@ function normalizeStudyDeck(obj, sourceText) {
   }
   if (cards.length === 0) return null;
 
-  if (!cards[0].example && obj && obj.example && typeof obj.example && typeof obj.example === "object") {
+  if (!cards[0].example && obj && obj.example && typeof obj.example === "object") {
     const exSrc = cleanStr(obj.example.source);
     const exTgt = cleanStr(obj.example.target);
     if (exSrc || exTgt) cards[0].example = { source: exSrc, target: exTgt };
@@ -353,7 +415,7 @@ function normalizeStudyDeck(obj, sourceText) {
 }
 
 function parseStudyCardJson(rawContent, sourceText) {
-  const text = String(rawContent || "").trim();
+  const text = stripThink(rawContent);
   if (!text) return null;
 
   const stripped = text.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
@@ -403,7 +465,7 @@ function parseStudyCardJson(rawContent, sourceText) {
 }
 
 function extractPartialStudyDeck(partialRaw, sourceText) {
-  const s = String(partialRaw || "");
+  const s = stripThink(partialRaw);
   if (!s) return null;
 
   const fallbackLang = inferSourceLang(sourceText);
@@ -524,18 +586,23 @@ async function openChatStream(prefix, key, body, signal) {
   });
 }
 
-async function callChatCompletion(messages, s, temperature = 0.2, modelOverride = "", maxTokens = undefined) {
-  const activeModel = String(modelOverride || s.model || DEFAULTS.model).trim();
-  const body = {
-    model: activeModel,
-    stream: false,
-    temperature: temperature,
-    messages: messages
-  };
-  if (maxTokens) body.max_tokens = maxTokens;
-
+async function callChatCompletion(messages, s, temperature = 0.0, activeModel = "", maxTokens = undefined) {
+  const model = String(activeModel || s.model || DEFAULTS.model).trim();
   const base = stripSlashes(s.base);
   const relay = stripSlashes(s.proxy);
+
+  const body = attachIndexTemplateKwargs(
+    {
+      model: model,
+      stream: false,
+      temperature: temperature,
+      messages: messages
+    },
+    model,
+    base
+  );
+  if (maxTokens) body.max_tokens = maxTokens;
+
   let via;
   let r;
 
@@ -578,7 +645,7 @@ async function callChatCompletion(messages, s, temperature = 0.2, modelOverride 
     };
   }
 
-  return { ok: true, content: content.trim(), model: activeModel, via: via };
+  return { ok: true, content: stripThink(content), model: model, via: via };
 }
 
 async function streamTranslation(text, onDelta, externalSignal) {
@@ -588,21 +655,24 @@ async function streamTranslation(text, onDelta, externalSignal) {
 
   const s = await getSettings();
   const activeModel = String(s.model || DEFAULTS.model).trim();
-  const cacheKey = activeModel + "|" + s.target + "|" + s.base + "|" + text;
+  const base = stripSlashes(s.base);
+  const cacheKey = activeModel + "|" + s.target + "|" + base + "|" + text;
   const hit = lruGet(volatileTranslateCache, cacheKey);
   if (hit) {
     return { ok: true, text: hit.text, model: hit.model, via: hit.via, cached: true };
   }
 
-  const body = {
-    model: activeModel,
-    stream: true,
-    temperature: 0.2,
-    messages: [
-      { role: "system", content: systemPrompt(s.target) },
-      { role: "user", content: text }
-    ]
-  };
+  const isIndex = isIndexModelOrHost(activeModel, base);
+  const body = attachIndexTemplateKwargs(
+    {
+      model: activeModel,
+      stream: true,
+      temperature: isIndex ? 0.0 : 0.2,
+      messages: buildTranslateMessages(text, s.target, activeModel, base)
+    },
+    activeModel,
+    base
+  );
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
@@ -613,7 +683,6 @@ async function streamTranslation(text, onDelta, externalSignal) {
   }
 
   try {
-    const base = stripSlashes(s.base);
     const relay = stripSlashes(s.proxy);
     let via = relay ? "relay" : "direct";
     let res = await openChatStream(relay || base, s.key, body, controller.signal);
@@ -631,7 +700,7 @@ async function streamTranslation(text, onDelta, externalSignal) {
     if (!ctype.includes("event-stream") || !res.body) {
       const raw = await res.text();
       const j = JSON.parse(raw);
-      const content = String((j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content) || "").trim();
+      const content = stripThink((j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content) || "");
       if (!content) return { ok: false, status: 200, body: "Empty translation.", via: via };
       const out = { text: content, model: activeModel, via: via };
       lruSet(volatileTranslateCache, cacheKey, out);
@@ -660,15 +729,16 @@ async function streamTranslation(text, onDelta, externalSignal) {
           const delta = (chunkObj.choices && chunkObj.choices[0] && chunkObj.choices[0].delta && chunkObj.choices[0].delta.content) || "";
           if (delta) {
             full += delta;
-            if (typeof onDelta === "function") {
-              onDelta({ text: full.trimStart(), model: activeModel, via: via });
+            const visible = stripThink(full);
+            if (visible && typeof onDelta === "function") {
+              onDelta({ text: visible, model: activeModel, via: via });
             }
           }
         } catch (_) {}
       }
     }
 
-    const clean = full.trim();
+    const clean = stripThink(full);
     if (!clean) return { ok: false, status: 200, body: "Empty translation.", via: via };
     const out = { text: clean, model: activeModel, via: via };
     lruSet(volatileTranslateCache, cacheKey, out);
@@ -690,21 +760,25 @@ async function streamStudyCard(text, modelOverride, onPartial, externalSignal) {
   if (text.length > MAX_LEN) return { ok: false, status: 0, body: "Selection is longer than " + MAX_LEN + " characters." };
 
   const s = await getSettings();
-  const activeModel = String(modelOverride || s.model || DEFAULTS.model).trim();
-  const cacheKey = activeModel + "|" + s.target + "|" + s.base + "|" + text;
+  const base = stripSlashes(s.base);
+  const activeModel = resolveStudyModel(s.model, modelOverride);
+  const cacheKey = activeModel + "|" + s.target + "|" + base + "|" + text;
   const hit = lruGet(volatileStudyCache, cacheKey);
   if (hit) {
     return { ok: true, deck: hit.deck, model: hit.model, via: hit.via, cached: true };
   }
 
-  const messages = buildStudyMessages(text, s.target);
-  const body = {
-    model: activeModel,
-    stream: true,
-    temperature: 0.2,
-    max_tokens: 1100,
-    messages: messages
-  };
+  const body = attachIndexTemplateKwargs(
+    {
+      model: activeModel,
+      stream: true,
+      temperature: 0.2,
+      max_tokens: 1100,
+      messages: buildStudyMessages(text, s.target)
+    },
+    activeModel,
+    base
+  );
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
@@ -715,7 +789,6 @@ async function streamStudyCard(text, modelOverride, onPartial, externalSignal) {
   }
 
   try {
-    const base = stripSlashes(s.base);
     const relay = stripSlashes(s.proxy);
     let via = relay ? "relay" : "direct";
     let res = await openChatStream(relay || base, s.key, body, controller.signal);
@@ -818,17 +891,17 @@ async function translate(text) {
 
   const s = await getSettings();
   const activeModel = String(s.model || DEFAULTS.model).trim();
-  const cacheKey = activeModel + "|" + s.target + "|" + s.base + "|" + text;
+  const base = stripSlashes(s.base);
+  const cacheKey = activeModel + "|" + s.target + "|" + base + "|" + text;
   const hit = lruGet(volatileTranslateCache, cacheKey);
   if (hit) return { ok: true, ...hit, cached: true };
 
+  const isIndex = isIndexModelOrHost(activeModel, base);
   const res = await callChatCompletion(
-    [
-      { role: "system", content: systemPrompt(s.target) },
-      { role: "user", content: text }
-    ],
+    buildTranslateMessages(text, s.target, activeModel, base),
     s,
-    0.2
+    isIndex ? 0.0 : 0.2,
+    activeModel
   );
   if (!res.ok) return res;
   const out = { text: res.content, model: res.model, via: res.via };
@@ -842,12 +915,13 @@ async function generateStudyCard(text, modelOverride) {
   if (text.length > MAX_LEN) return { ok: false, status: 0, body: "Selection is longer than " + MAX_LEN + " characters." };
 
   const s = await getSettings();
-  const activeModel = String(modelOverride || s.model || DEFAULTS.model).trim();
-  const cacheKey = activeModel + "|" + s.target + "|" + s.base + "|" + text;
+  const base = stripSlashes(s.base);
+  const activeModel = resolveStudyModel(s.model, modelOverride);
+  const cacheKey = activeModel + "|" + s.target + "|" + base + "|" + text;
   const hit = lruGet(volatileStudyCache, cacheKey);
   if (hit) return { ok: true, ...hit, cached: true };
 
-  const res = await callChatCompletion(buildStudyMessages(text, s.target), s, 0.2, modelOverride, 1100);
+  const res = await callChatCompletion(buildStudyMessages(text, s.target), s, 0.2, activeModel, 1100);
   if (!res.ok) return res;
 
   const deck = parseStudyCardJson(res.content, text);
@@ -1009,9 +1083,14 @@ if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.onMessage)
 
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
+    isIndexModelOrHost,
+    resolveStudyModel,
+    stripThink,
+    buildTranslateMessages,
     studySystemPrompt,
     buildStudyUserPrompt,
     buildStudyMessages,
+    attachIndexTemplateKwargs,
     repairStudyJson,
     parseStudyCardJson,
     extractPartialStudyDeck,

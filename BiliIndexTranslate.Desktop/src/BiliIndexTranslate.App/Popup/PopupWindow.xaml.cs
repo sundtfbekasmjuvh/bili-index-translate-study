@@ -42,15 +42,6 @@ public partial class PopupWindow : Window, IPopupSurface
         Card.MouseLeftButtonDown += OnCardMouseDown;
         Card.MouseMove += OnCardMouseMove;
         Card.MouseLeftButtonUp += OnCardMouseUp;
-
-        var hoverTimer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(120) };
-        hoverTimer.Tick += (_, _) =>
-        {
-            hoverTimer.Stop();
-            StudyPrewarmRequested?.Invoke();
-        };
-        StudyButton.MouseEnter += (_, _) => hoverTimer.Start();
-        StudyButton.MouseLeave += (_, _) => hoverTimer.Stop();
     }
 
     public event Action? CopyRequested;
@@ -59,7 +50,6 @@ public partial class PopupWindow : Window, IPopupSurface
     public event Action? RetryRequested;
     public event Action? SettingsRequested;
     public event Action? StudyRequested;
-    public event Action? StudyPrewarmRequested;
     public event Action<bool>? OriginalToggled;
     /// <summary>Raised after a pinned card has been dragged to a new place.</summary>
     public event Action? Moved;

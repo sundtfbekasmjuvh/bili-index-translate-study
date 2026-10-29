@@ -50,11 +50,33 @@ public static class ChatCompletionParser
                 content = textEl.GetString();
 
             if (content is null) { error = "Response has no message content."; return false; }
-            if (content.Trim().Length == 0) { error = "The service returned an empty translation."; return false; }
+            var cleaned = StripThink(content);
+            if (cleaned.Length == 0) { error = "The service returned an empty translation."; return false; }
 
-            translation = content.Trim();
+            translation = cleaned;
             return true;
         }
+    }
+
+    /// <summary>Strips CoT <c>&lt;think&gt;...&lt;/think&gt;</c> reasoning blocks emitted by Qwen3.5 / R1 models.</summary>
+    public static string StripThink(string? raw)
+    {
+        if (string.IsNullOrEmpty(raw)) return string.Empty;
+        var s = raw;
+        var closeIdx = s.LastIndexOf("</think>", StringComparison.OrdinalIgnoreCase);
+        if (closeIdx >= 0)
+        {
+            s = s[(closeIdx + "</think>".Length)..];
+        }
+        else if (s.TrimStart().StartsWith("<think>", StringComparison.OrdinalIgnoreCase))
+        {
+            return string.Empty;
+        }
+
+        s = s.Trim();
+        if (s.StartsWith("<think>", StringComparison.OrdinalIgnoreCase))
+            s = s["<think>".Length..].Trim();
+        return s;
     }
 
     private static string? ReadContent(JsonElement message)

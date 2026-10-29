@@ -28,7 +28,7 @@ public sealed class OpenAiCompatibleTranslator
         if (string.IsNullOrWhiteSpace(request.Model))
             throw new TranslationException(new TranslationError(TranslationErrorKind.Configuration, "No model selected.", route));
 
-        var body = PromptBuilder.BuildRequestJson(request.Model, request.Text, request.TargetLanguagePromptName, request.SourceLanguage);
+        var body = PromptBuilder.BuildRequestJson(request.Model, request.Text, request.TargetLanguagePromptName, request.SourceLanguage, stream: false, baseUrl: request.BaseUrl);
         var sw = Stopwatch.StartNew();
         TransportResponse response;
         try

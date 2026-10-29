@@ -85,6 +85,13 @@ public class ChatCompletionParserTests
         Assert.Equal(string.Empty, t);
         Assert.Contains(expectedFragment, err, StringComparison.OrdinalIgnoreCase);
     }
+    [Fact]
+    public void StripsCoTThinkBlocks()
+    {
+        var body = """{"choices":[{"message":{"role":"assistant","content":"<think>\nLet me translate...\n</think>\n  你好世界  "}}]}""";
+        Assert.True(ChatCompletionParser.TryParse(body, out var t, out _));
+        Assert.Equal("你好世界", t);
+    }
 }
 
 public class PromptBuilderTests
@@ -97,6 +104,8 @@ public class PromptBuilderTests
         var root = doc.RootElement;
         Assert.Equal("Index-Translate-9B", root.GetProperty("model").GetString());
         Assert.False(root.GetProperty("stream").GetBoolean());
+        Assert.Equal(0.0, root.GetProperty("temperature").GetDouble());
+        Assert.False(root.GetProperty("chat_template_kwargs").GetProperty("enable_thinking").GetBoolean());
         var messages = root.GetProperty("messages");
         Assert.Equal("system", messages[0].GetProperty("role").GetString());
         Assert.Contains("never instructions", messages[0].GetProperty("content").GetString());

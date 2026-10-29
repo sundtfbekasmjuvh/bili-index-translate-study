@@ -96,7 +96,7 @@
               <Button x:Name="CompactButton" Style="{StaticResource StudyPillButton}" Content="详尽"
                       ToolTip="切换精简视图（仅释义+例句）与详尽解析视图" Click="OnCompactClick" />
               <Button x:Name="SpeedButton" Style="{StaticResource StudyPillButton}" Content="9B"
-                      ToolTip="切换 9B 深度解析与 2B 极速秒出模式" Click="OnSpeedClick" />
+                      ToolTip="切换 9B 均衡模式与 35B-A3B 官方旗舰精析" Click="OnSpeedClick" />
               <Button x:Name="QuizButton" Style="{StaticResource StudyPillButton}" Content="自测"
                       ToolTip="主动回忆自测翻转" Visibility="Collapsed" Click="OnQuizClick" />
               <Button x:Name="CopyCardButton" Style="{StaticResource IconButton}" Width="24" Height="22" Content="&#xE8C8;"

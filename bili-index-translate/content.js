@@ -1,4 +1,4 @@
-// content.js — Editorial Minimalist Dual-Popup Companion (SSE Streaming + Hover Prewarm + Zero Trace)
+// content.js — Editorial Minimalist Dual-Popup Companion (SSE Streaming + Zero Trace)
 (function () {
   "use strict";
 
@@ -11,7 +11,6 @@
   const MAX_LEN = 3000;
   const VIEWPORT_GAP = 12;
   const COMPANION_GAP = 10;
-  const PREWARM_DWELL_MS = 110;
 
   let panel = null;
   let bodyEl = null;
@@ -39,7 +38,7 @@
   let textScale = 1;
 
   // Session-only UI preferences (volatile RAM only, never written to storage)
-  let preferFastStudyModel = false;
+  let preferFlagshipStudyModel = false;
   let compactStudyMode = false;
 
   // Ephemeral active selection & study state — wiped on close
@@ -48,10 +47,6 @@
   let currentAnchor = null;
   let studyState = null;
   let footFlashTimer = null;
-
-  // Hover pre-warm slot for instant Study Card open (strictly volatile, aborted on close)
-  let prewarmSlot = null;
-  let prewarmHoverTimer = null;
 
   function makeIcon(kind) {
     const NS = "http://www.w3.org/2000/svg";
@@ -286,23 +281,13 @@
     studyTriggerBtn = document.createElement("button");
     studyTriggerBtn.className = "bit-study-trigger";
     studyTriggerBtn.type = "button";
-    studyTriggerBtn.title = "展开/收起伴随语言学习卡片（快捷键 S，悬停预热加速）";
+    studyTriggerBtn.title = "展开/收起伴随语言学习卡片（快捷键 S）";
     studyTriggerBtn.setAttribute("aria-label", "打开语言学习卡片");
     studyTriggerBtn.appendChild(makeIcon("book"));
     const studyLabel = document.createElement("span");
     studyLabel.textContent = "\u5b66\u4e60\u5361\u7247";
     studyTriggerBtn.appendChild(studyLabel);
 
-    studyTriggerBtn.addEventListener("pointerenter", () => {
-      clearTimeout(prewarmHoverTimer);
-      if (!currentSourceText || isStudyOpen()) return;
-      prewarmHoverTimer = setTimeout(() => {
-        startPrewarmStudy(currentSourceText);
-      }, PREWARM_DWELL_MS);
-    });
-    studyTriggerBtn.addEventListener("pointerleave", () => {
-      clearTimeout(prewarmHoverTimer);
-    });
     studyTriggerBtn.addEventListener("click", (e) => {
       e.stopPropagation();
       toggleStudyCard();
@@ -390,7 +375,7 @@
     syncSpeedBtn();
     studySpeedBtn.addEventListener("click", (e) => {
       e.stopPropagation();
-      toggleFastModel();
+      toggleStudyModel();
     });
 
     studyQuizBtn = document.createElement("button");
@@ -485,19 +470,19 @@
 
   function syncSpeedBtn() {
     if (!studySpeedBtn) return;
-    if (preferFastStudyModel) {
+    if (preferFlagshipStudyModel) {
       studySpeedBtn.setAttribute("data-active", "");
-      studySpeedBtn.textContent = "\u26a12B";
-      studySpeedBtn.title = "当前 2B 极速模式（点击或按 M 切回 9B 深度解析）";
+      studySpeedBtn.textContent = "35B";
+      studySpeedBtn.title = "当前 35B-A3B 旗舰模式（点击或按 M 切回 9B 均衡模式）";
     } else {
       studySpeedBtn.removeAttribute("data-active");
       studySpeedBtn.textContent = "9B";
-      studySpeedBtn.title = "当前 9B 深度模式（点击或按 M 切换 2B 极速秒出）";
+      studySpeedBtn.title = "当前 9B 均衡模式（点击或按 M 切换 35B-A3B 旗舰精析）";
     }
   }
 
-  function toggleFastModel() {
-    preferFastStudyModel = !preferFastStudyModel;
+  function toggleStudyModel() {
+    preferFlagshipStudyModel = !preferFlagshipStudyModel;
     syncSpeedBtn();
     if (studyState && studyState.sourceText) {
       openStudyCard(studyState.sourceText, studyState.anchor, studyDragged);
@@ -628,14 +613,6 @@
     }
   }
 
-  function cancelPrewarm() {
-    clearTimeout(prewarmHoverTimer);
-    if (prewarmSlot && prewarmSlot.port) {
-      try { prewarmSlot.port.disconnect(); } catch (_) {}
-    }
-    prewarmSlot = null;
-  }
-
   function hideStudyCard() {
     studyReqSeq++;
     disconnectStudyStream();
@@ -657,7 +634,6 @@
   function hideAll() {
     reqSeq++;
     disconnectTranslateStream();
-    cancelPrewarm();
     hideStudyCard();
     currentSourceText = "";
     currentTranslatedText = "";
@@ -795,42 +771,6 @@
     if (!dragged) placePanel(anchor);
   }
 
-  // ---- Hover Pre-Warm for Instant Study Card -----------------------------------------------
-
-  function startPrewarmStudy(text) {
-    const modelOverride = preferFastStudyModel ? "Index-Translate-2B" : "";
-    const key = modelOverride + "|" + text;
-    if (prewarmSlot && prewarmSlot.key === key) return;
-    cancelPrewarm();
-
-    if (!(chrome && chrome.runtime && typeof chrome.runtime.connect === "function")) return;
-    try {
-      const port = chrome.runtime.connect({ name: "bili-study-stream" });
-      const slot = {
-        key: key,
-        port: port,
-        partialMsg: null,
-        doneMsg: null,
-        listeners: []
-      };
-      prewarmSlot = slot;
-
-      port.onMessage.addListener((msg) => {
-        if (!msg) return;
-        if (msg.type === "PARTIAL") slot.partialMsg = msg;
-        else if (msg.type === "DONE") {
-          slot.doneMsg = msg;
-          try { port.disconnect(); } catch (_) {}
-          slot.port = null;
-        }
-        slot.listeners.forEach((fn) => fn(msg));
-      });
-      port.postMessage({ type: "START_STUDY_STREAM", text: text, modelOverride: modelOverride });
-    } catch (_) {
-      prewarmSlot = null;
-    }
-  }
-
   // ---- Study Card Rendering & Surgical Streaming Updates -----------------------------------
 
   function toggleStudyCard() {
@@ -867,7 +807,7 @@
     studyBodyEl.appendChild(buildSkeletonLoader());
 
     setStudyFoot(
-      preferFastStudyModel ? "\u26a1 2B \u6781\u901f\u62c6\u89e3\u4e2d\u2026" : "\u6d41\u5f0f\u62c6\u89e3\u4e2d\u2026",
+      preferFlagshipStudyModel ? "35B \u65d7\u8230\u62c6\u89e3\u4e2d\u2026" : "9B \u6d41\u5f0f\u62c6\u89e3\u4e2d\u2026",
       "\u96f6\u7559\u75d5"
     );
     studyPanel.setAttribute("data-open", "");
@@ -1300,31 +1240,9 @@
     };
     showStudyLoading();
 
-    const modelOverride = preferFastStudyModel ? "Index-Translate-2B" : "";
-    const prewarmKey = modelOverride + "|" + text;
+    const modelOverride = preferFlagshipStudyModel ? "Index-Translate-35B-A3B" : "";
 
-    // 1. Adopt active or completed hover pre-warm stream if matching!
-    if (prewarmSlot && prewarmSlot.key === prewarmKey) {
-      const slot = prewarmSlot;
-      prewarmSlot = null;
-      if (slot.doneMsg) {
-        applyStudyMessage(slot.doneMsg, text, anchor);
-        return;
-      }
-      if (slot.partialMsg) {
-        applyStudyMessage(slot.partialMsg, text, anchor);
-      }
-      if (slot.port) {
-        studyPort = slot.port;
-        slot.listeners.push((msg) => {
-          if (seq !== studyReqSeq) return;
-          applyStudyMessage(msg, text, anchor);
-        });
-        return;
-      }
-    }
-
-    // 2. Progressive SSE port
+    // 1. Progressive SSE port
     if (chrome && chrome.runtime && typeof chrome.runtime.connect === "function") {
       try {
         const port = chrome.runtime.connect({ name: "bili-study-stream" });
@@ -1340,7 +1258,7 @@
       }
     }
 
-    // 3. Fallback single-shot message
+    // 2. Fallback single-shot message
     try {
       chrome.runtime.sendMessage(
         { type: "BILI_STUDY_CARD", text: text, modelOverride: modelOverride },
@@ -1418,7 +1336,6 @@
 
     const seq = ++reqSeq;
     disconnectTranslateStream();
-    cancelPrewarm();
     if (isStudyOpen() && (!studyState || studyState.sourceText !== text)) {
       hideStudyCard();
     }
@@ -1489,7 +1406,7 @@
   // ---- Keyboard Shortcuts ------------------------------------------------------------------
   // S = toggle Study Card | Space / Shift+Space = speak word (1x / 0.7x)
   // E / Shift+E = speak example (1x / 0.7x) | F = flip self-test | D = compact/detailed
-  // M = 9B/2B speed toggle | C = copy card/translation | 1-4 or ←/→ = switch cards | Esc = close
+  // M = 9B/35B model toggle | C = copy card/translation | 1-4 or ←/→ = switch cards | Esc = close
   document.addEventListener("keydown", (e) => {
     if (!isOpen() && !isStudyOpen()) return;
 
@@ -1547,7 +1464,7 @@
       toggleCompactMode();
     } else if (k === "m" || k === "M") {
       e.preventDefault();
-      toggleFastModel();
+      toggleStudyModel();
     } else if (k === "ArrowLeft") {
       if (cards.length > 1) {
         e.preventDefault();

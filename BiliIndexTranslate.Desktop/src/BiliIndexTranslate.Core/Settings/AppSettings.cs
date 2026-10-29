@@ -39,7 +39,7 @@ public sealed class AppSettings
     public const string DefaultRelayPrefix = "https://seep.eu.org/https://index-translate.bilibili.com/v1";
     public const string DefaultApiKey = "bili";
     public const string DefaultModel = "Index-Translate-9B";
-    public static readonly IReadOnlyList<string> KnownModels = ["Index-Translate-2B", "Index-Translate-9B", "Index-Translate-35B-A3B"];
+    public static readonly IReadOnlyList<string> KnownModels = ["Index-Translate-2B", "Index-Translate-9B", "Index-Translate-35B-A3B", "Index-Nailong-9B"];
 
     public int SchemaVersion { get; set; } = CurrentSchemaVersion;
 

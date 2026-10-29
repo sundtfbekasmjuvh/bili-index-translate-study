@@ -24,7 +24,6 @@ internal sealed class PopupPresenter : IDisposable
     private readonly DiagnosticsLog _log;
     private readonly TimingStats _timings;
     private readonly Func<string, string?, Action<StudyDeckResult>, CancellationToken, Task<StudyDeckResult>>? _studyProvider;
-    private readonly Action<string, string?>? _studyPrewarm;
     private readonly Dispatcher _dispatcher;
     private readonly List<PopupWindow> _pinned = new();
 
@@ -48,14 +47,12 @@ internal sealed class PopupPresenter : IDisposable
         IMonitorLocator monitors,
         DiagnosticsLog log,
         TimingStats timings,
-        Func<string, string?, Action<StudyDeckResult>, CancellationToken, Task<StudyDeckResult>>? studyProvider = null,
-        Action<string, string?>? studyPrewarm = null)
+        Func<string, string?, Action<StudyDeckResult>, CancellationToken, Task<StudyDeckResult>>? studyProvider = null)
     {
         _monitors = monitors;
         _log = log;
         _timings = timings;
         _studyProvider = studyProvider;
-        _studyPrewarm = studyPrewarm;
         _dispatcher = Application.Current?.Dispatcher ?? Dispatcher.CurrentDispatcher;
     }
 
@@ -123,13 +120,6 @@ internal sealed class PopupPresenter : IDisposable
         w.RetryRequested += () => RetryRequested?.Invoke();
         w.SettingsRequested += () => SettingsRequested?.Invoke();
         w.StudyRequested += () => ToggleStudy(w);
-        w.StudyPrewarmRequested += () =>
-        {
-            if (_studyVisible && ReferenceEquals(_studyOwner, w)) return;
-            var src = w.CurrentSource?.Trim();
-            if (!string.IsNullOrEmpty(src))
-                _studyPrewarm?.Invoke(src, _studyWindow?.PreferFastModel == true ? "Index-Translate-2B" : null);
-        };
         w.OriginalToggled += show => { _showOriginal = show; ShowOriginalChanged?.Invoke(show); Replace(); };
         w.SizeChanged += (_, _) =>
         {
@@ -268,7 +258,7 @@ internal sealed class PopupPresenter : IDisposable
         PlaceStudy(animate: firstShow);
 
         var seq = ++_studySeq;
-        var modelOverride = sw.PreferFastModel ? "Index-Translate-2B" : null;
+        var modelOverride = sw.PreferFlagshipModel ? "Index-Translate-35B-A3B" : null;
         var cts = new CancellationTokenSource();
         _studyCts = cts;
         _ = RunStudyRequestAsync(seq, owner, sourceText, modelOverride, cts);

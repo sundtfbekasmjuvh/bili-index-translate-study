@@ -1,12 +1,33 @@
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using BiliIndexTranslate.Core.Translation;
 
 namespace BiliIndexTranslate.Core.Study;
 
 /// <summary>Builds compact, language-enforced chat-completion requests for ephemeral study cards.</summary>
 public static class StudyPromptBuilder
 {
+    /// <summary>
+    /// 2B translation checkpoints copy JSON schema placeholders verbatim on structured lexical cards.
+    /// Automatically upgrades any <c>Index-*-2B</c> model to <c>Index-Translate-9B</c> for Study Cards,
+    /// while respecting explicit overrides (e.g. <c>Index-Translate-35B-A3B</c>) and custom models.
+    /// </summary>
+    public static string ResolveStudyModel(string? configuredModel, string? modelOverride = null)
+    {
+        var ov = (modelOverride ?? string.Empty).Trim();
+        if (ov.Length > 0) return ov;
+
+        var m = (configuredModel ?? string.Empty).Trim();
+        if (m.Length == 0) return "Index-Translate-9B";
+        if (m.StartsWith("Index-", StringComparison.OrdinalIgnoreCase)
+            && m.EndsWith("-2B", StringComparison.OrdinalIgnoreCase))
+        {
+            return "Index-Translate-9B";
+        }
+        return m;
+    }
+
     public static bool IsSimplifiedChinese(string? targetCode, string? targetPromptName)
     {
         var code = (targetCode ?? string.Empty).Trim();
@@ -60,11 +81,13 @@ public static class StudyPromptBuilder
         string targetLanguagePromptName,
         string sourceLanguage,
         string? targetLanguageCode = null,
-        bool stream = false)
+        bool stream = false,
+        string? baseUrl = null)
     {
+        var effectiveModel = ResolveStudyModel(model);
         var body = new JsonObject
         {
-            ["model"] = model,
+            ["model"] = effectiveModel,
             ["messages"] = new JsonArray
             {
                 new JsonObject { ["role"] = "system", ["content"] = SystemPrompt(targetLanguagePromptName, sourceLanguage, targetLanguageCode) },
@@ -74,6 +97,10 @@ public static class StudyPromptBuilder
             ["max_tokens"] = 1100,
             ["stream"] = stream,
         };
+        if (PromptBuilder.IsIndexModelOrHost(effectiveModel, baseUrl))
+        {
+            body["chat_template_kwargs"] = new JsonObject { ["enable_thinking"] = false };
+        }
         return body.ToJsonString(new JsonSerializerOptions { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping });
     }
 }
