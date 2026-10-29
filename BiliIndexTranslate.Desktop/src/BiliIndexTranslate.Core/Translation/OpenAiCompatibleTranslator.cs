@@ -28,7 +28,15 @@ public sealed class OpenAiCompatibleTranslator
         if (string.IsNullOrWhiteSpace(request.Model))
             throw new TranslationException(new TranslationError(TranslationErrorKind.Configuration, "No model selected.", route));
 
-        var body = PromptBuilder.BuildRequestJson(request.Model, request.Text, request.TargetLanguagePromptName, request.SourceLanguage, stream: false, baseUrl: request.BaseUrl);
+        var hits = GlossaryEngine.MatchHits(request.GlossaryText, request.Text);
+        var body = PromptBuilder.BuildRequestJson(
+            request.Model,
+            request.Text,
+            request.TargetLanguagePromptName,
+            request.SourceLanguage,
+            stream: false,
+            baseUrl: request.BaseUrl,
+            glossaryText: request.GlossaryText);
         var sw = Stopwatch.StartNew();
         TransportResponse response;
         try
@@ -86,7 +94,7 @@ public sealed class OpenAiCompatibleTranslator
             throw new TranslationException(new TranslationError(kind, parseError ?? "Unreadable response.", route, response.StatusCode));
         }
 
-        return new TranslationResult(translation, route, sw.Elapsed.TotalMilliseconds, request.Model);
+        return new TranslationResult(translation, route, sw.Elapsed.TotalMilliseconds, request.Model, hits.Count);
     }
 
     private static string? ExtractErrorDetail(TransportResponse response)

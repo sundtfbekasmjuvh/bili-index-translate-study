@@ -803,3 +803,195 @@ html[data-bit-theme="dark"] {
   opacity: 0.85;
   font-variant-numeric: tabular-nums;
 }
+
+/* ============================================================================
+   Immersive Bilingual Webpage Translation (Alt+A) — Editorial Minimalist Style
+   ============================================================================ */
+
+.bit-imm-block {
+  display: block;
+  margin-top: 6px;
+  margin-bottom: 2px;
+  padding: 2px 0 2px 10px;
+  border-left: 2px solid rgba(37, 99, 235, 0.42);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Inter", Roboto,
+    "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  font-size: 0.95em;
+  font-weight: 400;
+  font-style: normal;
+  line-height: 1.64;
+  letter-spacing: 0.005em;
+  color: color-mix(in srgb, currentColor 84%, #2563eb 16%);
+  text-align: start;
+  word-break: break-word;
+  opacity: 0.96;
+  transition: opacity 0.16s ease, border-color 0.16s ease;
+}
+
+@media (prefers-color-scheme: dark) {
+  .bit-imm-block {
+    border-left-color: rgba(96, 165, 250, 0.48);
+    color: color-mix(in srgb, currentColor 86%, #93c5fd 14%);
+  }
+}
+
+html[data-bit-theme="dark"] .bit-imm-block {
+  border-left-color: rgba(96, 165, 250, 0.48);
+  color: color-mix(in srgb, currentColor 86%, #93c5fd 14%);
+}
+
+.bit-imm-block[data-streaming="1"] {
+  border-left-color: rgba(37, 99, 235, 0.75);
+}
+
+.bit-imm-block[data-loading="1"] {
+  color: rgba(100, 116, 139, 0.72);
+  font-size: 12px;
+  animation: bit-pulse 1.15s ease-in-out infinite;
+}
+
+/* Target-only view mode (zero DOM node movement — preserves React/Vue hydration) */
+html[data-bit-imm-mode="target-only"] [data-bit-imm-host][data-bit-imm-ready="1"] {
+  font-size: 0 !important;
+  line-height: 0 !important;
+}
+
+html[data-bit-imm-mode="target-only"] [data-bit-imm-host][data-bit-imm-ready="1"] > :not(.bit-imm-block) {
+  font-size: 0 !important;
+  line-height: 0 !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: 0 !important;
+}
+
+html[data-bit-imm-mode="target-only"] [data-bit-imm-host][data-bit-imm-ready="1"] > .bit-imm-block {
+  margin-top: 0;
+  margin-bottom: 0;
+  padding-left: 0;
+  border-left: none;
+  font-size: var(--bit-host-fs, 15px) !important;
+  font-weight: var(--bit-host-fw, 400) !important;
+  color: var(--bit-host-color, inherit) !important;
+  line-height: 1.65 !important;
+  opacity: 1;
+}
+
+/* Floating Immersive Control Capsule */
+#bili-index-imm-bar {
+  all: initial;
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: 2147483645;
+  display: none;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 8px 5px 11px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.92);
+  backdrop-filter: blur(16px) saturate(180%);
+  -webkit-backdrop-filter: blur(16px) saturate(180%);
+  border: 1px solid rgba(15, 23, 42, 0.1);
+  box-shadow: 0 8px 28px rgba(15, 23, 42, 0.12), 0 2px 6px rgba(15, 23, 42, 0.05);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Inter", Roboto,
+    "PingFang SC", "Microsoft YaHei", sans-serif;
+  font-size: 12px;
+  color: #0f172a;
+  user-select: none;
+}
+
+@media (prefers-color-scheme: dark) {
+  #bili-index-imm-bar {
+    background: rgba(22, 26, 35, 0.92);
+    border-color: rgba(255, 255, 255, 0.12);
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.48);
+    color: #f1f5f9;
+  }
+}
+
+html[data-bit-theme="dark"] #bili-index-imm-bar {
+  background: rgba(22, 26, 35, 0.92);
+  border-color: rgba(255, 255, 255, 0.12);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.48);
+  color: #f1f5f9;
+}
+
+#bili-index-imm-bar[data-open] {
+  display: inline-flex;
+  animation: bit-fade-in 0.15s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+#bili-index-imm-bar .bit-imm-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #2563eb;
+  flex-shrink: 0;
+}
+
+#bili-index-imm-bar[data-busy="1"] .bit-imm-dot {
+  animation: bit-pulse 1s ease-in-out infinite;
+}
+
+#bili-index-imm-bar .bit-imm-status {
+  font-size: 11.5px;
+  font-weight: 600;
+  margin-right: 3px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+#bili-index-imm-bar .bit-imm-btn {
+  all: unset;
+  box-sizing: border-box;
+  padding: 2px 7px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #475569;
+  background: rgba(15, 23, 42, 0.05);
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+@media (prefers-color-scheme: dark) {
+  #bili-index-imm-bar .bit-imm-btn {
+    color: #cbd5e1;
+    background: rgba(255, 255, 255, 0.08);
+  }
+}
+
+html[data-bit-theme="dark"] #bili-index-imm-bar .bit-imm-btn {
+  color: #cbd5e1;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+#bili-index-imm-bar .bit-imm-btn:hover {
+  background: rgba(37, 99, 235, 0.12);
+  color: #2563eb;
+}
+
+#bili-index-imm-bar .bit-imm-btn[data-active] {
+  background: rgba(37, 99, 235, 0.14);
+  color: #2563eb;
+}
+
+#bili-index-imm-bar .bit-imm-close {
+  all: unset;
+  box-sizing: border-box;
+  width: 20px;
+  height: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  font-size: 14px;
+  color: #64748b;
+  cursor: pointer;
+}
+
+#bili-index-imm-bar .bit-imm-close:hover {
+  background: rgba(220, 38, 38, 0.12);
+  color: #dc2626;
+}
+

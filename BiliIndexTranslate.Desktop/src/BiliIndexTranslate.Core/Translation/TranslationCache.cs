@@ -1,14 +1,22 @@
 namespace BiliIndexTranslate.Core.Translation;
 
 /// <summary>Everything that changes the meaning of a cached entry is part of the key.</summary>
-public readonly record struct CacheKey(string Text, string TargetLanguage, string Model, string EffectiveEndpoint, string PromptVersion, string SourceLanguage)
+public readonly record struct CacheKey(
+    string Text,
+    string TargetLanguage,
+    string Model,
+    string EffectiveEndpoint,
+    string PromptVersion,
+    string SourceLanguage,
+    string GlossarySignature = "")
 {
     public static CacheKey For(TranslationRequest r)
     {
         var endpoint = EndpointResolver.TryResolve(r.BaseUrl, r.UseRelay, r.RelayPrefix, out var ep, out _)
             ? ep!.NormalizedBase
             : (r.BaseUrl ?? string.Empty);
-        return new CacheKey(r.Text, r.TargetLanguageCode, r.Model, endpoint, PromptBuilder.PromptVersion, r.SourceLanguage);
+        var gSig = GlossaryEngine.Signature(GlossaryEngine.MatchHits(r.GlossaryText, r.Text));
+        return new CacheKey(r.Text, r.TargetLanguageCode, r.Model, endpoint, PromptBuilder.PromptVersion, r.SourceLanguage, gSig);
     }
 }
 

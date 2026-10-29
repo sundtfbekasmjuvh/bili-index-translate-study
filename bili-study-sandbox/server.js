@@ -15,7 +15,7 @@ const DEFAULT_KEY = "bili";
 const TIMEOUT_MS = 30000;
 
 // Strictly volatile in-RAM session LRU micro-cache (wiped on server restart or purge)
-const MEM_LIMIT = 24;
+const MEM_LIMIT = 64;
 const translateMemCache = new Map();
 const studyMemCache = new Map();
 
@@ -81,7 +81,7 @@ async function readJsonBody(req) {
   let raw = "";
   for await (const chunk of req) {
     raw += chunk;
-    if (raw.length > 64000) throw new Error("Payload too large");
+    if (raw.length > 96000) throw new Error("Payload too large");
   }
   return JSON.parse(raw || "{}");
 }
@@ -108,12 +108,13 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    // 1. Primary Translation SSE Stream + Volatile LRU Hit
+    // 1. Primary Translation SSE Stream + Dynamic Glossary + Volatile LRU Hit
     if (req.method === "POST" && url.pathname === "/api/translate-stream") {
       const msg = await readJsonBody(req);
       const text = String(msg.text || "").trim();
       const target = String(msg.target || "中文").trim();
       const model = String(msg.model || "Index-Translate-9B").trim();
+      const glossary = String(msg.glossary || "");
       const bg = loadBg();
 
       res.writeHead(200, {
@@ -128,10 +129,12 @@ const server = http.createServer(async (req, res) => {
         return;
       }
 
-      const cacheKey = `${model}|${target}|${text}`;
+      const hits = bg.matchGlossaryHits(glossary, text);
+      const gSig = hits.map((h) => h.source + "->" + h.target).join(";");
+      const cacheKey = `${model}|${target}|${gSig}|${text}`;
       const hit = lruGet(translateMemCache, cacheKey);
       if (hit) {
-        writeSse(res, { type: "DONE", ok: true, ...hit, cached: true, elapsedMs: 0 });
+        writeSse(res, { type: "DONE", ok: true, ...hit, glossaryHits: hits.length, cached: true, elapsedMs: 0 });
         res.end();
         return;
       }
@@ -148,7 +151,7 @@ const server = http.createServer(async (req, res) => {
             model,
             stream: true,
             temperature: isIndex ? 0.0 : 0.2,
-            messages: bg.buildTranslateMessages(text, target, model, DEFAULT_BASE)
+            messages: bg.buildTranslateMessages(text, target, model, DEFAULT_BASE, hits)
           },
           model,
           DEFAULT_BASE
@@ -191,6 +194,7 @@ const server = http.createServer(async (req, res) => {
                     text: visible,
                     model,
                     via,
+                    glossaryHits: hits.length,
                     elapsedMs: Date.now() - t0
                   });
                 }
@@ -203,7 +207,7 @@ const server = http.createServer(async (req, res) => {
         if (!clean) {
           writeSse(res, { type: "DONE", ok: false, status: 200, body: "Empty translation.", via });
         } else {
-          const entry = { text: clean, model, via };
+          const entry = { text: clean, model, via, glossaryHits: hits.length };
           lruSet(translateMemCache, cacheKey, entry);
           writeSse(res, { type: "DONE", ok: true, ...entry, elapsedMs: Date.now() - t0 });
         }
@@ -219,11 +223,134 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    // 2. Companion Study Card SSE Stream + Volatile LRU Hit
+    // 2. Immersive Bilingual Multi-Paragraph SSE Batch Stream (Alt+A)
+    if (req.method === "POST" && url.pathname === "/api/immersive-stream") {
+      const msg = await readJsonBody(req);
+      const items = Array.isArray(msg.items) ? msg.items.map((x) => String(x || "").trim()) : [];
+      const target = String(msg.target || "中文").trim();
+      const model = String(msg.modelOverride || msg.model || "Index-Translate-2B").trim();
+      const glossary = String(msg.glossary || "");
+      const bg = loadBg();
+
+      res.writeHead(200, {
+        "Content-Type": "text/event-stream; charset=utf-8",
+        "Cache-Control": "no-cache, no-transform",
+        Connection: "keep-alive"
+      });
+
+      if (items.length === 0) {
+        writeSse(res, { type: "BATCH_DONE", ok: false, status: 0, body: "Empty batch." });
+        res.end();
+        return;
+      }
+
+      const entries = bg.parseGlossary(glossary);
+      const combined = items.join("\n");
+      const batchHits = bg.matchGlossaryHits(entries, combined);
+      const abortCtrl = new AbortController();
+      req.on("close", () => abortCtrl.abort());
+      const timer = setTimeout(() => abortCtrl.abort(), TIMEOUT_MS);
+      const t0 = Date.now();
+      const isIndex = bg.isIndexModelOrHost(model, DEFAULT_BASE);
+
+      try {
+        const messages =
+          items.length === 1
+            ? bg.buildTranslateMessages(items[0], target, model, DEFAULT_BASE, batchHits)
+            : bg.buildImmersiveBatchMessages(items, target, model, DEFAULT_BASE, batchHits);
+
+        const reqBody = bg.attachIndexTemplateKwargs(
+          {
+            model,
+            stream: true,
+            temperature: isIndex ? 0.0 : 0.2,
+            messages
+          },
+          model,
+          DEFAULT_BASE
+        );
+        const { res: upRes, via } = await openUpstreamStream(reqBody, abortCtrl.signal);
+
+        if (!upRes.ok) {
+          const errRaw = await upRes.text();
+          writeSse(res, { type: "BATCH_DONE", ok: false, status: upRes.status, body: errRaw.slice(0, 1000), via });
+          res.end();
+          return;
+        }
+
+        const reader = upRes.body.getReader();
+        const decoder = new TextDecoder();
+        let sseBuf = "";
+        let full = "";
+
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          sseBuf += decoder.decode(value, { stream: true });
+          const lines = sseBuf.split(/\r?\n/);
+          sseBuf = lines.pop() || "";
+
+          for (const line of lines) {
+            const trimmed = line.trim();
+            if (!trimmed.startsWith("data:")) continue;
+            const payload = trimmed.slice(5).trim();
+            if (!payload || payload === "[DONE]") continue;
+            try {
+              const j = JSON.parse(payload);
+              const delta = j?.choices?.[0]?.delta?.content || "";
+              if (delta) {
+                full += delta;
+                const visible = bg.stripThink(full);
+                if (!visible) continue;
+                const segments =
+                  items.length === 1
+                    ? { 0: visible.replace(/^\u3016P0\u3017\s*/, "").trim() }
+                    : bg.parseAnchoredSegments(visible, items.length);
+                writeSse(res, {
+                  type: "BATCH_DELTA",
+                  segments,
+                  model,
+                  via,
+                  glossaryHits: batchHits.length,
+                  elapsedMs: Date.now() - t0
+                });
+              }
+            } catch (_) {}
+          }
+        }
+
+        const clean = bg.stripThink(full);
+        const segments =
+          items.length === 1
+            ? { 0: clean.replace(/^\u3016P0\u3017\s*/, "").trim() }
+            : bg.parseAnchoredSegments(clean, items.length);
+        writeSse(res, {
+          type: "BATCH_DONE",
+          ok: true,
+          segments,
+          model,
+          via,
+          glossaryHits: batchHits.length,
+          elapsedMs: Date.now() - t0
+        });
+        res.end();
+      } catch (err) {
+        if (!res.writableEnded) {
+          writeSse(res, { type: "BATCH_DONE", ok: false, status: 0, body: String((err && err.message) || err) });
+          res.end();
+        }
+      } finally {
+        clearTimeout(timer);
+      }
+      return;
+    }
+
+    // 3. Companion Study Card SSE Stream + Dynamic Glossary + Volatile LRU Hit
     if (req.method === "POST" && url.pathname === "/api/study-stream") {
       const msg = await readJsonBody(req);
       const text = String(msg.text || "").trim();
       const target = String(msg.target || "中文").trim();
+      const glossary = String(msg.glossary || "");
       const bg = loadBg();
       const model = bg.resolveStudyModel(msg.model || "Index-Translate-9B", msg.modelOverride);
 
@@ -239,7 +366,9 @@ const server = http.createServer(async (req, res) => {
         return;
       }
 
-      const cacheKey = `${model}|${target}|${text}`;
+      const hits = bg.matchGlossaryHits(glossary, text);
+      const gSig = hits.map((h) => h.source + "->" + h.target).join(";");
+      const cacheKey = `${model}|${target}|${gSig}|${text}`;
       const hit = lruGet(studyMemCache, cacheKey);
       if (hit) {
         writeSse(res, { type: "DONE", ok: true, ...hit, cached: true, elapsedMs: 0 });
@@ -259,7 +388,7 @@ const server = http.createServer(async (req, res) => {
             stream: true,
             temperature: 0.2,
             max_tokens: 1100,
-            messages: bg.buildStudyMessages(text, target)
+            messages: bg.buildStudyMessages(text, target, hits)
           },
           model,
           DEFAULT_BASE
@@ -365,6 +494,10 @@ const server = http.createServer(async (req, res) => {
         translateMemCache.clear();
         studyMemCache.clear();
         sendJson(res, 200, { ok: true });
+        return;
+      }
+      if (msg.type === "BILI_GET_IMMERSIVE_PREFS") {
+        sendJson(res, 200, { ok: true, immersiveModel: "Index-Translate-2B", target: "中文" });
         return;
       }
       sendJson(res, 400, { ok: false, status: 400, body: "Use streaming endpoints" });

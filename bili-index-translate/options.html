@@ -13,6 +13,7 @@
       --ink: #0f172a;
       --muted: #64748b;
       --accent: #2563eb;
+      --accent-soft: rgba(37, 99, 235, 0.08);
     }
     @media (prefers-color-scheme: dark) {
       :root {
@@ -22,6 +23,7 @@
         --ink: #f1f5f9;
         --muted: #94a3b8;
         --accent: #3b82f6;
+        --accent-soft: rgba(59, 130, 246, 0.14);
       }
     }
     * { box-sizing: border-box; }
@@ -31,10 +33,10 @@
       color: var(--ink);
       font: 14px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", "Inter", Roboto,
         "PingFang SC", "Microsoft YaHei", sans-serif;
-      padding: 40px 16px;
+      padding: 36px 16px 48px;
     }
     .shell {
-      max-width: 620px;
+      max-width: 650px;
       margin: 0 auto;
     }
     .card {
@@ -46,8 +48,24 @@
     }
     h1 { font-size: 20px; font-weight: 700; margin: 0 0 4px; letter-spacing: -0.01em; }
     p.lead { margin: 0 0 20px; color: var(--muted); font-size: 13px; }
-    label { display: block; font-weight: 600; font-size: 13px; margin: 16px 0 5px; }
-    input, select {
+    .grid-2 {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+    }
+    @media (max-width: 560px) {
+      .grid-2 { grid-template-columns: 1fr; }
+    }
+    label { display: flex; align-items: center; justify-content: space-between; font-weight: 600; font-size: 13px; margin: 16px 0 5px; }
+    .badge {
+      font-size: 11px;
+      font-weight: 600;
+      padding: 1px 7px;
+      border-radius: 999px;
+      background: var(--accent-soft);
+      color: var(--accent);
+    }
+    input, select, textarea {
       width: 100%;
       padding: 8px 11px;
       font: inherit;
@@ -57,7 +75,12 @@
       color: inherit;
       outline: none;
     }
-    input:focus, select:focus {
+    textarea {
+      font: 12.5px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      resize: vertical;
+      min-height: 116px;
+    }
+    input:focus, select:focus, textarea:focus {
       border-color: var(--accent);
       box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.14);
     }
@@ -86,6 +109,7 @@
       background: var(--card);
       font-size: 12.5px;
       color: var(--muted);
+      line-height: 1.75;
     }
     .shortcuts strong { color: var(--ink); }
     kbd {
@@ -102,31 +126,55 @@
   <div class="shell">
     <div class="card">
       <h1>Bili Index Translate</h1>
-      <p class="lead">Synced in <code>chrome.storage.sync</code>. Zero translation history or vocabulary telemetry is stored.</p>
+      <p class="lead">Direct MV3 connection · <code>instTrans</code> Glossary · <code>Alt+A</code> Streaming Bilingual · Zero history stored.</p>
 
       <form id="form" autocomplete="off">
-        <label for="base">Base URL</label>
+        <label for="base"><span>Base URL</span></label>
         <input id="base" type="url" placeholder="https://index-translate.bilibili.com/v1" required>
         <small>OpenAI-compatible root. <code>/chat/completions</code> is appended automatically.</small>
 
-        <label for="proxy">Relay prefix (optional)</label>
+        <label for="proxy"><span>Relay prefix (optional)</span></label>
         <input id="proxy" type="text" placeholder="Leave empty for direct Bilibili connection (MV3 DNR enabled)">
-        <small>Empty = direct connection to <code>index-translate.bilibili.com</code> (MV3 header rule removes extension Origin automatically).</small>
+        <small>Empty = direct connection to <code>index-translate.bilibili.com</code> (no Python proxy or third-party relay needed).</small>
 
-        <label for="model">Default Model</label>
-        <select id="model">
-          <option value="Index-Translate-2B">Index-Translate-2B (Fastest inline translation · Study Card auto-uses 9B)</option>
-          <option value="Index-Translate-9B">Index-Translate-9B (Recommended Balance)</option>
-          <option value="Index-Translate-35B-A3B">Index-Translate-35B-A3B (Official Flagship MoE)</option>
-          <option value="Index-Nailong-9B">Index-Nailong-9B (229K Long-Context)</option>
-        </select>
+        <div class="grid-2">
+          <div>
+            <label for="model"><span>Selection Model</span></label>
+            <select id="model">
+              <option value="Index-Translate-2B">Index-Translate-2B (Fastest · Study auto 9B)</option>
+              <option value="Index-Translate-9B">Index-Translate-9B (Recommended Balance)</option>
+              <option value="Index-Translate-35B-A3B">Index-Translate-35B-A3B (Flagship MoE)</option>
+              <option value="Index-Nailong-9B">Index-Nailong-9B (229K Long-Context)</option>
+            </select>
+          </div>
+          <div>
+            <label for="immersiveModel"><span>Bilingual Page Model (Alt+A)</span></label>
+            <select id="immersiveModel">
+              <option value="Index-Translate-2B">Index-Translate-2B (~680ms/batch · Fast)</option>
+              <option value="Index-Translate-9B">Index-Translate-9B (High Precision)</option>
+              <option value="Index-Translate-35B-A3B">Index-Translate-35B-A3B (Flagship MoE)</option>
+            </select>
+          </div>
+        </div>
 
-        <label for="key">API Key</label>
-        <input id="key" type="text" placeholder="bili">
+        <div class="grid-2">
+          <div>
+            <label for="key"><span>API Key</span></label>
+            <input id="key" type="text" placeholder="bili">
+          </div>
+          <div>
+            <label for="target"><span>Target language</span></label>
+            <input id="target" type="text" placeholder="中文">
+          </div>
+        </div>
+        <small>Target examples: <code>中文</code>, <code>繁體中文</code>, <code>English</code>, <code>日本語</code>, <code>한국어</code>.</small>
 
-        <label for="target">Target language</label>
-        <input id="target" type="text" placeholder="中文">
-        <small>Examples: <code>中文</code>, <code>繁體中文</code>, <code>English</code>, <code>日本語</code>, <code>한국어</code>.</small>
+        <label for="glossary">
+          <span>Custom Glossary &amp; No-Translate Lock (instTrans 术语表)</span>
+          <span class="badge" id="glossaryCount">0 rules</span>
+        </label>
+        <textarea id="glossary" spellcheck="false" placeholder="# One rule per line (only matched terms are dynamically injected per request):&#10;Sovereign Scheduler => 主权调度器&#10;Context Engineering -> 上下文工程&#10;Flash-Attention&#10;PyTorch"></textarea>
+        <small>Format: <code>Source =&gt; Target</code> (or <code>-&gt;</code> / <code>=</code>) forces terminology; writing a single term like <code>Flash-Attention</code> locks it unchanged (免译锁定). Inline <code>`code`</code> is protected automatically.</small>
 
         <div class="row">
           <button type="submit" id="save" class="primary">Save</button>
@@ -138,17 +186,23 @@
     </div>
 
     <div class="shortcuts">
-      <strong>Study Card Shortcuts:</strong>
-      <kbd>S</kbd> Toggle card ·
-      <kbd>Space</kbd> / <kbd>Shift+Space</kbd> Speak 1x / 0.7x ·
-      <kbd>E</kbd> Speak example ·
-      <kbd>F</kbd> Self-test flip ·
-      <kbd>D</kbd> Compact/Detailed ·
-      <kbd>M</kbd> 9B/35B model ·
-      <kbd>C</kbd> Copy ·
-      <kbd>1-4</kbd> / <kbd>←</kbd><kbd>→</kbd> Switch word ·
-      <kbd>Ctrl+Wheel</kbd> Text size ·
-      <kbd>Esc</kbd> Dismiss
+      <div>
+        <strong>Immersive Bilingual Page:</strong>
+        <kbd>Alt+A</kbd> Toggle viewport-streaming bilingual webpage (or right-click page) · Floating capsule switches <code>双语/仅译</code>, <code>2B/9B</code> &amp; 1-click clean restore.
+      </div>
+      <div>
+        <strong>Selection &amp; Study Card:</strong>
+        <kbd>S</kbd> Study Card ·
+        <kbd>Space</kbd> / <kbd>Shift+Space</kbd> Speak 1x / 0.7x ·
+        <kbd>E</kbd> Speak example ·
+        <kbd>F</kbd> Self-test flip ·
+        <kbd>D</kbd> Compact/Detailed ·
+        <kbd>M</kbd> 9B/35B model ·
+        <kbd>C</kbd> Copy ·
+        <kbd>1-4</kbd> / <kbd>←</kbd><kbd>→</kbd> Switch word ·
+        <kbd>Ctrl+Wheel</kbd> Text size ·
+        <kbd>Esc</kbd> Dismiss
+      </div>
     </div>
   </div>
 

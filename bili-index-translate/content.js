@@ -7,6 +7,7 @@
 
   const PANEL_ID = "bili-index-translate-panel";
   const STUDY_PANEL_ID = "bili-index-study-panel";
+  const IMM_BAR_ID = "bili-index-imm-bar";
   const MIN_LEN = 2;
   const MAX_LEN = 3000;
   const VIEWPORT_GAP = 12;
@@ -749,8 +750,11 @@
     if (res && res.ok) {
       currentTranslatedText = res.text || "";
       bodyEl.textContent = currentTranslatedText;
+      const glossaryTag =
+        res.glossaryHits && res.glossaryHits > 0 ? " \u00b7 \u672f\u8bed\u00d7" + res.glossaryHits : "";
       const left =
         (res.model || "") +
+        glossaryTag +
         (res.cached ? " \u00b7 \u26a1\u77ac\u65f6" : res.via ? " \u00b7 " + res.via : "");
       footEl.textContent = "";
       const lSpan = document.createElement("span");
@@ -1314,10 +1318,19 @@
 
     const sel = window.getSelection();
     if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return null;
-    const text = sel.toString().trim();
-    if (!text) return null;
 
     const range = sel.getRangeAt(0);
+    // Strip injected immersive bilingual spans if the user triple-clicked a bilingual paragraph
+    let text = "";
+    try {
+      const frag = range.cloneContents();
+      frag.querySelectorAll("[data-bit-imm]").forEach((el) => el.remove());
+      text = (frag.textContent || "").trim();
+    } catch (_) {
+      text = sel.toString().trim();
+    }
+    if (!text) return null;
+
     let rect = range.getBoundingClientRect();
     if (!rect || (rect.width === 0 && rect.height === 0)) {
       const list = range.getClientRects();
@@ -1383,9 +1396,522 @@
     }
   }
 
+  // ==========================================================================================
+  // Viewport-First Streaming Immersive Bilingual Webpage Engine (Alt+A)
+  // ==========================================================================================
+
+  const IMM_BLOCK_SELECTOR = "p, li, h1, h2, h3, h4, h5, h6, blockquote, figcaption, dd, td";
+  const IMM_SKIP_ANCESTOR =
+    "pre, code, script, style, noscript, svg, math, canvas, textarea, input, select, button, nav, footer, [contenteditable='true'], [translate='no'], .notranslate, #" +
+    PANEL_ID +
+    ", #" +
+    STUDY_PANEL_ID +
+    ", #" +
+    IMM_BAR_ID;
+  const IMM_MAX_CONCURRENCY = 2;
+  const IMM_MAX_BATCH_ITEMS = 4;
+  const IMM_MAX_BATCH_CHARS = 960;
+
+  let immActive = false;
+  let immViewMode = "bilingual"; // "bilingual" | "target-only"
+  let immModelOverride = ""; // "" uses options immersiveModel (default 2B); toggles 2B <-> 9B
+  let immResolvedModel = "Index-Translate-2B";
+  let immTargetLang = "中文";
+  let immBar = null;
+  let immStatusEl = null;
+  let immModeBtn = null;
+  let immModelBtn = null;
+
+  let immIntersectionObs = null;
+  let immMutationObs = null;
+  let immMutationTimer = null;
+  let immTotalCount = 0;
+  let immDoneCount = 0;
+  let immInFlight = 0;
+  const immQueue = [];
+  const immActivePorts = new Set();
+  const immRecords = new Map(); // hostEl -> { source, span, state: "observed"|"queued"|"running"|"done" }
+
+  function ensureImmBar() {
+    if (immBar && document.documentElement.contains(immBar)) return immBar;
+
+    immBar = document.createElement("div");
+    immBar.id = IMM_BAR_ID;
+    immBar.setAttribute("data-bit-imm", "1");
+
+    const dot = document.createElement("span");
+    dot.className = "bit-imm-dot";
+
+    immStatusEl = document.createElement("span");
+    immStatusEl.className = "bit-imm-status";
+    immStatusEl.textContent = "\u53cc\u8bed\u5bf9\u7167";
+
+    immModeBtn = document.createElement("button");
+    immModeBtn.className = "bit-imm-btn";
+    immModeBtn.type = "button";
+    immModeBtn.title = "切换「双语对照」与「仅显译文」排版";
+    immModeBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      immViewMode = immViewMode === "bilingual" ? "target-only" : "bilingual";
+      syncImmModeUi();
+    });
+
+    immModelBtn = document.createElement("button");
+    immModelBtn.className = "bit-imm-btn";
+    immModelBtn.type = "button";
+    immModelBtn.title = "切换网页双语流式模型（2B 极速 / 9B 精译）";
+    immModelBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const curIs9B = /9b/i.test(immModelOverride || immResolvedModel);
+      immModelOverride = curIs9B ? "Index-Translate-2B" : "Index-Translate-9B";
+      immResolvedModel = immModelOverride;
+      syncImmBar();
+      // Re-translate current immersive blocks cleanly with the newly chosen model
+      if (immActive) {
+        restartImmersiveWithNewModel();
+      }
+    });
+
+    const closeBtn = document.createElement("button");
+    closeBtn.className = "bit-imm-close";
+    closeBtn.type = "button";
+    closeBtn.title = "退出双语并无损还原原网页（快捷键 Alt+A）";
+    closeBtn.textContent = "\u00d7";
+    closeBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      stopImmersivePage();
+    });
+
+    ["mousedown", "mouseup", "click", "dblclick"].forEach((ev) => {
+      immBar.addEventListener(ev, (e) => e.stopPropagation());
+    });
+
+    immBar.appendChild(dot);
+    immBar.appendChild(immStatusEl);
+    immBar.appendChild(immModeBtn);
+    immBar.appendChild(immModelBtn);
+    immBar.appendChild(closeBtn);
+    document.documentElement.appendChild(immBar);
+    syncImmModeUi();
+    syncImmBar();
+    return immBar;
+  }
+
+  function syncImmModeUi() {
+    if (immViewMode === "target-only") {
+      document.documentElement.setAttribute("data-bit-imm-mode", "target-only");
+      if (immModeBtn) {
+        immModeBtn.setAttribute("data-active", "");
+        immModeBtn.textContent = "\u4ec5\u8bd1";
+      }
+    } else {
+      document.documentElement.removeAttribute("data-bit-imm-mode");
+      if (immModeBtn) {
+        immModeBtn.removeAttribute("data-active");
+        immModeBtn.textContent = "\u53cc\u8bed";
+      }
+    }
+  }
+
+  function syncImmBar() {
+    if (!immBar) return;
+    const busy = immInFlight > 0 || immQueue.length > 0;
+    immBar.setAttribute("data-busy", busy ? "1" : "0");
+    if (immStatusEl) {
+      if (immTotalCount === 0) {
+        immStatusEl.textContent = "\u672a\u68c0\u6d4b\u5230\u5916\u6587\u6bb5\u843d";
+      } else if (busy) {
+        immStatusEl.textContent = "\u6d41\u5f0f\u8bd1\u914d " + immDoneCount + "/" + immTotalCount;
+      } else {
+        immStatusEl.textContent = "\u53cc\u8bed\u5c31\u7eea " + immDoneCount + "/" + immTotalCount;
+      }
+    }
+    if (immModelBtn) {
+      const m = immModelOverride || immResolvedModel || "Index-Translate-2B";
+      const shortLabel = m.replace(/^Index-Translate-/i, "").replace(/-A3B$/i, "");
+      immModelBtn.textContent = shortLabel;
+      if (/9b|35b/i.test(shortLabel)) immModelBtn.setAttribute("data-active", "");
+      else immModelBtn.removeAttribute("data-active");
+    }
+  }
+
+  // Extract clean text while wrapping inline <code>foo</code> in backticks so instTrans preserves identifiers
+  function extractBlockSourceText(el) {
+    let out = "";
+    const walk = (node) => {
+      if (!node) return;
+      if (node.nodeType === 3) {
+        out += node.nodeValue || "";
+        return;
+      }
+      if (node.nodeType !== 1) return;
+      if (node.hasAttribute("data-bit-imm")) return;
+      const tag = node.tagName.toLowerCase();
+      if (tag === "script" || tag === "style" || tag === "noscript" || tag === "svg" || tag === "math" || tag === "button") {
+        return;
+      }
+      if (tag === "br") {
+        out += "\n";
+        return;
+      }
+      if (tag === "code" && !node.querySelector("pre")) {
+        const codeTxt = (node.textContent || "").trim();
+        if (codeTxt && !codeTxt.includes("`") && codeTxt.length <= 100) {
+          out += " `" + codeTxt + "` ";
+          return;
+        }
+      }
+      for (let c = node.firstChild; c; c = c.nextSibling) {
+        walk(c);
+      }
+    };
+    walk(el);
+    return out.replace(/[ \t\f\v]+/g, " ").replace(/\n{3,}/g, "\n\n").trim();
+  }
+
+  function isAlreadyTargetLanguage(text) {
+    // Only skip Chinese-dominant paragraphs when target is Chinese AND there is zero Japanese Kana
+    const t = String(immTargetLang || "中文");
+    const tgtIsZh = t === "中文" || t === "简体中文" || /^zh/i.test(t) || /chinese/i.test(t);
+    if (!tgtIsZh) return false;
+    if (/[\u3040-\u30ff]/.test(text)) return false; // Japanese Kana present -> definitely translate!
+    const letters = text.match(/[\p{L}\p{N}]/gu) || [];
+    if (letters.length === 0) return true;
+    const han = text.match(/[\u4e00-\u9fff]/g) || [];
+    return han.length / letters.length > 0.65;
+  }
+
+  function isEligibleBlock(el) {
+    if (!el || el.nodeType !== 1) return false;
+    if (immRecords.has(el) || el.hasAttribute("data-bit-imm")) return false;
+    if (el.closest(IMM_SKIP_ANCESTOR)) return false;
+
+    // Skip container blocks that hold nested block candidates (only translate leaf blocks)
+    const nested = el.querySelector(IMM_BLOCK_SELECTOR);
+    if (nested) return false;
+
+    const rects = el.getClientRects();
+    if (!rects || rects.length === 0) return false;
+
+    const text = extractBlockSourceText(el);
+    if (text.length < 4 || text.length > MAX_LEN) return false;
+    // Skip pure numbers, punctuation, or raw URLs
+    if (!/\p{L}/u.test(text)) return false;
+    if (/^https?:\/\/\S+$/i.test(text)) return false;
+    if (isAlreadyTargetLanguage(text)) return false;
+
+    return text;
+  }
+
+  function scanAndObserveBlocks(root) {
+    if (!immActive || !immIntersectionObs) return;
+    const scope = root && root.querySelectorAll ? root : document.body;
+    if (!scope) return;
+
+    const candidates = scope.matches && scope.matches(IMM_BLOCK_SELECTOR)
+      ? [scope, ...scope.querySelectorAll(IMM_BLOCK_SELECTOR)]
+      : Array.from(scope.querySelectorAll(IMM_BLOCK_SELECTOR));
+
+    const vh = window.innerHeight || 800;
+    const immediate = [];
+
+    for (let i = 0; i < candidates.length; i++) {
+      const el = candidates[i];
+      const source = isEligibleBlock(el);
+      if (!source) continue;
+
+      const rec = { source: source, el: el, span: null, state: "observed" };
+      immRecords.set(el, rec);
+      immTotalCount++;
+
+      const r = el.getBoundingClientRect();
+      if (r.bottom >= -120 && r.top <= vh + 260) {
+        immediate.push(rec);
+      } else {
+        immIntersectionObs.observe(el);
+      }
+    }
+
+    // Enqueue immediately visible viewport blocks in reading order
+    for (const rec of immediate) {
+      enqueueImmRecord(rec);
+    }
+    syncImmBar();
+    pumpImmQueue();
+  }
+
+  function ensureImmSpan(rec) {
+    if (rec.span && rec.el.contains(rec.span)) return rec.span;
+    const cs = window.getComputedStyle(rec.el);
+    const span = document.createElement("span");
+    span.className = "bit-imm-block";
+    span.setAttribute("data-bit-imm", "1");
+    span.setAttribute("data-loading", "1");
+    span.style.setProperty("--bit-host-fs", cs.fontSize || "15px");
+    span.style.setProperty("--bit-host-fw", cs.fontWeight || "400");
+    span.style.setProperty("--bit-host-color", cs.color || "inherit");
+    span.textContent = "\u00b7\u00b7\u00b7";
+    rec.el.setAttribute("data-bit-imm-host", "1");
+    rec.el.appendChild(span);
+    rec.span = span;
+    return span;
+  }
+
+  function enqueueImmRecord(rec) {
+    if (!immActive || !rec || rec.state !== "observed") return;
+    rec.state = "queued";
+    if (immIntersectionObs) {
+      try { immIntersectionObs.unobserve(rec.el); } catch (_) {}
+    }
+    immQueue.push(rec);
+  }
+
+  function pumpImmQueue() {
+    if (!immActive) return;
+
+    while (immInFlight < IMM_MAX_CONCURRENCY && immQueue.length > 0) {
+      const batch = [];
+      let charSum = 0;
+
+      while (immQueue.length > 0 && batch.length < IMM_MAX_BATCH_ITEMS) {
+        const next = immQueue[0];
+        if (!document.documentElement.contains(next.el)) {
+          immQueue.shift();
+          immTotalCount = Math.max(0, immTotalCount - 1);
+          continue;
+        }
+        if (batch.length > 0 && charSum + next.source.length > IMM_MAX_BATCH_CHARS) {
+          break;
+        }
+        immQueue.shift();
+        next.state = "running";
+        ensureImmSpan(next);
+        batch.push(next);
+        charSum += next.source.length;
+      }
+
+      if (batch.length > 0) {
+        runImmBatch(batch);
+      }
+    }
+    syncImmBar();
+  }
+
+  function applyImmSegmentText(rec, text, isFinal) {
+    if (!rec || !rec.el || !document.documentElement.contains(rec.el)) return;
+    const span = ensureImmSpan(rec);
+    span.removeAttribute("data-loading");
+    if (isFinal) {
+      span.removeAttribute("data-streaming");
+      rec.el.setAttribute("data-bit-imm-ready", "1");
+    } else {
+      span.setAttribute("data-streaming", "1");
+    }
+    span.textContent = text;
+  }
+
+  function runImmBatch(batch) {
+    immInFlight++;
+    syncImmBar();
+
+    const items = batch.map((r) => r.source);
+    let finished = false;
+
+    const finalizeBatch = (res) => {
+      if (finished) return;
+      finished = true;
+      immInFlight = Math.max(0, immInFlight - 1);
+
+      if (!immActive) return;
+      const segs = (res && res.segments) || {};
+      if (res && res.model) immResolvedModel = res.model;
+
+      for (let i = 0; i < batch.length; i++) {
+        const rec = batch[i];
+        const txt = segs[i];
+        if (res && res.ok && txt) {
+          applyImmSegmentText(rec, txt, true);
+          if (rec.state !== "done") {
+            rec.state = "done";
+            immDoneCount++;
+          }
+        } else if (rec.span) {
+          rec.span.removeAttribute("data-loading");
+          rec.span.removeAttribute("data-streaming");
+          rec.span.textContent = res && res.status ? "[HTTP " + res.status + "]" : "[\u8bd1\u914d\u5931\u8d25]";
+          rec.state = "done";
+          immDoneCount++;
+        }
+      }
+      syncImmBar();
+      pumpImmQueue();
+    };
+
+    if (chrome && chrome.runtime && typeof chrome.runtime.connect === "function") {
+      try {
+        const port = chrome.runtime.connect({ name: "bili-immersive-stream" });
+        immActivePorts.add(port);
+        port.onMessage.addListener((msg) => {
+          if (!immActive || !msg) return;
+          if (msg.type === "BATCH_DELTA" && msg.segments) {
+            if (msg.model) immResolvedModel = msg.model;
+            for (let i = 0; i < batch.length; i++) {
+              if (msg.segments[i]) applyImmSegmentText(batch[i], msg.segments[i], false);
+            }
+          } else if (msg.type === "BATCH_DONE") {
+            immActivePorts.delete(port);
+            try { port.disconnect(); } catch (_) {}
+            finalizeBatch(msg);
+          }
+        });
+        port.onDisconnect.addListener(() => {
+          immActivePorts.delete(port);
+          if (!finished && immActive) {
+            finalizeBatch({ ok: false, status: 0 });
+          }
+        });
+        port.postMessage({
+          type: "START_IMMERSIVE_BATCH",
+          items: items,
+          modelOverride: immModelOverride
+        });
+        return;
+      } catch (_) {}
+    }
+
+    finalizeBatch({ ok: false, status: 0 });
+  }
+
+  function clearImmersiveDomOnly() {
+    for (const port of immActivePorts) {
+      try { port.disconnect(); } catch (_) {}
+    }
+    immActivePorts.clear();
+    if (immIntersectionObs) {
+      try { immIntersectionObs.disconnect(); } catch (_) {}
+      immIntersectionObs = null;
+    }
+    if (immMutationObs) {
+      try { immMutationObs.disconnect(); } catch (_) {}
+      immMutationObs = null;
+    }
+    clearTimeout(immMutationTimer);
+    immQueue.length = 0;
+    immInFlight = 0;
+    immTotalCount = 0;
+    immDoneCount = 0;
+    immRecords.clear();
+
+    document.querySelectorAll(".bit-imm-block[data-bit-imm]").forEach((el) => el.remove());
+    document.querySelectorAll("[data-bit-imm-host]").forEach((el) => {
+      el.removeAttribute("data-bit-imm-host");
+      el.removeAttribute("data-bit-imm-ready");
+    });
+  }
+
+  function startImmersiveObservers() {
+    immIntersectionObs = new IntersectionObserver(
+      (entries) => {
+        if (!immActive) return;
+        let added = false;
+        for (const entry of entries) {
+          if (!entry.isIntersecting) continue;
+          const rec = immRecords.get(entry.target);
+          if (rec && rec.state === "observed") {
+            enqueueImmRecord(rec);
+            added = true;
+          }
+        }
+        if (added) pumpImmQueue();
+      },
+      { rootMargin: "320px 0px 560px 0px", threshold: 0.01 }
+    );
+
+    scanAndObserveBlocks(document.body);
+
+    immMutationObs = new MutationObserver((mutations) => {
+      if (!immActive) return;
+      let hasCandidate = false;
+      for (const m of mutations) {
+        for (let i = 0; i < m.addedNodes.length; i++) {
+          const n = m.addedNodes[i];
+          if (n.nodeType === 1 && !n.hasAttribute("data-bit-imm") && !n.closest("#" + IMM_BAR_ID)) {
+            hasCandidate = true;
+            break;
+          }
+        }
+        if (hasCandidate) break;
+      }
+      if (!hasCandidate) return;
+      clearTimeout(immMutationTimer);
+      immMutationTimer = setTimeout(() => {
+        if (immActive) scanAndObserveBlocks(document.body);
+      }, 260);
+    });
+
+    if (document.body) {
+      immMutationObs.observe(document.body, { childList: true, subtree: true });
+    }
+  }
+
+  function startImmersivePage() {
+    if (immActive) return;
+    immActive = true;
+    ensureImmBar();
+    immBar.setAttribute("data-open", "");
+    syncImmModeUi();
+
+    const boot = () => {
+      if (!immActive) return;
+      startImmersiveObservers();
+      syncImmBar();
+    };
+
+    if (chrome && chrome.runtime && typeof chrome.runtime.sendMessage === "function") {
+      try {
+        chrome.runtime.sendMessage({ type: "BILI_GET_IMMERSIVE_PREFS" }, (res) => {
+          void (chrome.runtime && chrome.runtime.lastError);
+          if (res && res.ok) {
+            if (!immModelOverride && res.immersiveModel) immResolvedModel = res.immersiveModel;
+            if (res.target) immTargetLang = res.target;
+          }
+          boot();
+        });
+        return;
+      } catch (_) {}
+    }
+    boot();
+  }
+
+  function restartImmersiveWithNewModel() {
+    clearImmersiveDomOnly();
+    startImmersiveObservers();
+    syncImmBar();
+  }
+
+  function stopImmersivePage() {
+    immActive = false;
+    clearImmersiveDomOnly();
+    document.documentElement.removeAttribute("data-bit-imm-mode");
+    if (immBar) {
+      immBar.removeAttribute("data-open");
+    }
+  }
+
+  function toggleImmersivePage() {
+    if (immActive) stopImmersivePage();
+    else startImmersivePage();
+  }
+
   document.addEventListener("mouseup", (e) => {
     if (e.button !== 0) return;
-    if ((panel && panel.contains(e.target)) || (studyPanel && studyPanel.contains(e.target))) return;
+    if (
+      (panel && panel.contains(e.target)) ||
+      (studyPanel && studyPanel.contains(e.target)) ||
+      (immBar && immBar.contains(e.target))
+    ) {
+      return;
+    }
 
     setTimeout(() => {
       const picked = readSelection(e);
@@ -1404,10 +1930,17 @@
   });
 
   // ---- Keyboard Shortcuts ------------------------------------------------------------------
+  // Alt+A = toggle Immersive Bilingual Webpage
   // S = toggle Study Card | Space / Shift+Space = speak word (1x / 0.7x)
   // E / Shift+E = speak example (1x / 0.7x) | F = flip self-test | D = compact/detailed
   // M = 9B/35B model toggle | C = copy card/translation | 1-4 or ←/→ = switch cards | Esc = close
   document.addEventListener("keydown", (e) => {
+    if (e.altKey && !e.ctrlKey && !e.metaKey && (e.code === "KeyA" || e.key === "a" || e.key === "A")) {
+      e.preventDefault();
+      toggleImmersivePage();
+      return;
+    }
+
     if (!isOpen() && !isStudyOpen()) return;
 
     if (e.key === "Escape") {
@@ -1486,12 +2019,17 @@
 
   window.addEventListener("pagehide", () => {
     hideAll();
+    if (immActive) stopImmersivePage();
     try { chrome.runtime.sendMessage({ type: "BILI_PURGE_VOLATILE" }); } catch (_) {}
   });
 
   if (chrome && chrome.runtime && chrome.runtime.onMessage) {
     chrome.runtime.onMessage.addListener((msg) => {
       if (!msg) return;
+      if (msg.type === "BILI_TOGGLE_IMMERSIVE") {
+        toggleImmersivePage();
+        return;
+      }
       if (msg.type !== "BILI_CONTEXT_TRANSLATE" && msg.type !== "BILI_CONTEXT_STUDY") return;
 
       const picked = readSelection(null);

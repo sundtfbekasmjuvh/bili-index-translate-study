@@ -269,7 +269,8 @@
   <main>
     <section class="toolbar-strip">
       <div class="kbd-bar">
-        <span><strong>快捷键：</strong><span class="kbd">S</span> 词卡</span>
+        <span><strong>快捷键：</strong><span class="kbd">Alt+A</span> 沉浸式双语网页</span>
+        <span><span class="kbd">S</span> 词卡</span>
         <span><span class="kbd">Space</span> / <span class="kbd">Shift+Space</span> 1x / 0.7x 朗读</span>
         <span><span class="kbd">E</span> 朗读例句</span>
         <span><span class="kbd">D</span> 精简/详尽</span>
@@ -281,6 +282,7 @@
       </div>
       <div class="quick-row">
         <span class="quick-label">一键实测：</span>
+        <button class="quick-btn" id="btn-immersive-demo" type="button">Alt+A 沉浸式双语对照全页</button>
         <button class="quick-btn" type="button" data-sample="s-ja-word" data-open-study="1">日语汉字词 · 木漏れ日</button>
         <button class="quick-btn" type="button" data-sample="s-en-sent" data-open-study="1">英文倒装长句 · 流式渐进拆解</button>
         <button class="quick-btn" type="button" data-sample="s-en-word" data-open-study="1">英文高阶词 · ephemeral</button>
@@ -324,7 +326,9 @@
     </div>
 
     <section class="custom-area">
-      <h3>自由划词测试区（支持任意多语种文本选中翻译 + 伴随语言学习卡片）</h3>
+      <h3>自由划词测试区 &amp; instTrans 动态术语表（每行一条：源词 =&gt; 译词，单写词条为免译锁定）</h3>
+      <textarea id="opt-glossary" style="min-height: 68px; margin-bottom: 10px; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12.5px;" placeholder="例如：expedition => 极地科考队">expedition => 极地科考队
+summit => 绝顶主峰</textarea>
       <textarea placeholder="粘贴任意外语单词、台词或长句并选中测试…">Notwithstanding the turbulent weather, the expedition persevered toward the summit.</textarea>
     </section>
   </main>
@@ -334,6 +338,7 @@
       const statusEl = document.getElementById("api-status");
       const targetSel = document.getElementById("opt-target");
       const modelSel = document.getElementById("opt-model");
+      const glossaryEl = document.getElementById("opt-glossary");
       const themeBtn = document.getElementById("theme-toggle");
 
       themeBtn.addEventListener("click", () => {
@@ -391,13 +396,35 @@
                 if (portName === "bili-translate-stream" && msg.type === "START_TRANSLATE_STREAM") {
                   streamEndpoint(
                     "api/translate-stream",
-                    { text: msg.text, target: targetSel.value, model: modelSel.value },
+                    {
+                      text: msg.text,
+                      target: targetSel.value,
+                      model: modelSel.value,
+                      glossary: glossaryEl ? glossaryEl.value : ""
+                    },
                     abortCtrl,
                     (ev) => {
                       if (ev.type === "DONE" && ev.ok) {
                         statusEl.textContent = ev.cached
                           ? "译文 · ⚡内存瞬时"
                           : "译文完成 · " + (ev.elapsedMs || 0) + " ms";
+                      }
+                      msgHandlers.forEach((fn) => fn(ev));
+                    }
+                  );
+                } else if (portName === "bili-immersive-stream" && msg.type === "START_IMMERSIVE_BATCH") {
+                  streamEndpoint(
+                    "api/immersive-stream",
+                    {
+                      items: msg.items || [],
+                      target: targetSel.value,
+                      modelOverride: msg.modelOverride || "Index-Translate-2B",
+                      glossary: glossaryEl ? glossaryEl.value : ""
+                    },
+                    abortCtrl,
+                    (ev) => {
+                      if (ev.type === "BATCH_DONE" && ev.ok) {
+                        statusEl.textContent = "沉浸双语批次 · " + (ev.elapsedMs || 0) + " ms";
                       }
                       msgHandlers.forEach((fn) => fn(ev));
                     }
@@ -409,7 +436,8 @@
                       text: msg.text,
                       target: targetSel.value,
                       model: modelSel.value,
-                      modelOverride: msg.modelOverride || ""
+                      modelOverride: msg.modelOverride || "",
+                      glossary: glossaryEl ? glossaryEl.value : ""
                     },
                     abortCtrl,
                     (ev) => {
@@ -443,6 +471,13 @@
       };
 
       document.querySelectorAll(".quick-btn").forEach((btn) => {
+        if (btn.id === "btn-immersive-demo") {
+          btn.addEventListener("click", (ev) => {
+            ev.stopPropagation();
+            document.dispatchEvent(new KeyboardEvent("keydown", { key: "a", code: "KeyA", altKey: true, bubbles: true }));
+          });
+          return;
+        }
         btn.addEventListener("click", (ev) => {
           ev.stopPropagation();
           const id = btn.getAttribute("data-sample");

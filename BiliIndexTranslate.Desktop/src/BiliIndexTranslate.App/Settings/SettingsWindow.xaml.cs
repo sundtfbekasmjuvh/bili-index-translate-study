@@ -57,6 +57,7 @@ public partial class SettingsWindow : Window
         RelayBox.IsChecked = s.UseRelay;
         RelayBox2.Text = s.RelayPrefix;
         RelayBox2.IsEnabled = s.UseRelay;
+        GlossaryBox.Text = s.GlossaryText;
 
         ExcludedList.ItemsSource = _excluded;
 
@@ -87,6 +88,7 @@ public partial class SettingsWindow : Window
         s.Model = ModelBox.Text.Trim();
         s.UseRelay = RelayBox.IsChecked == true;
         s.RelayPrefix = RelayBox2.Text.Trim();
+        s.GlossaryText = GlossaryBox.Text;
         s.ExcludedProcesses = _excluded.ToList();
 
         s.HotkeyEnabled = HotkeyEnabledBox.IsChecked == true;

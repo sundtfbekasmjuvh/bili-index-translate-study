@@ -46,9 +46,10 @@ public sealed record TranslationRequest(
     string BaseUrl,
     bool UseRelay,
     string RelayPrefix,
-    string ApiKey);
+    string ApiKey,
+    string GlossaryText = "");
 
-public sealed record TranslationResult(string Translation, RequestRoute Route, double ElapsedMs, string Model);
+public sealed record TranslationResult(string Translation, RequestRoute Route, double ElapsedMs, string Model, int GlossaryHitCount = 0);
 
 /// <summary>Raw transport reply; separated so the translator can be tested with a fake transport.</summary>
 public sealed record TransportResponse(int StatusCode, string Body, string? ContentType);

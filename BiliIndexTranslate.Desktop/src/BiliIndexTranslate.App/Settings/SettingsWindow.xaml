@@ -95,6 +95,11 @@
         <TextBox x:Name="RelayBox2" Margin="0,2,0,0" />
         <TextBlock Style="{StaticResource HintText}" Text="Direct requests are always tried as configured. If the service answers HTTP 412 for direct requests, you can enable the relay here; the app never switches routes on its own. Your API key is stored encrypted for this Windows account." />
 
+        <!-- Glossary & No-Translate -->
+        <TextBlock Style="{StaticResource GroupTitle}" Text="GLOSSARY &amp; NO-TRANSLATE" />
+        <TextBlock Style="{StaticResource HintText}" Text="One rule per line: Source =&gt; Target forces terminology; a single term locks it unchanged (免译锁定). Only matched entries are injected per request." Margin="0,0,0,4" />
+        <TextBox x:Name="GlossaryBox" AcceptsReturn="True" VerticalScrollBarVisibility="Auto" TextWrapping="Wrap" Height="84" FontFamily="Consolas" FontSize="12" />
+
         <!-- Applications -->
         <TextBlock Style="{StaticResource GroupTitle}" Text="APPLICATIONS" />
         <TextBlock Style="{StaticResource HintText}" Text="Selections in these programs are ignored (process name without .exe)." Margin="0,0,0,4" />

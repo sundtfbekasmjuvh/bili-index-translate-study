@@ -5,22 +5,32 @@ const DEFAULTS = {
   base: "https://index-translate.bilibili.com/v1",
   proxy: "",
   model: "Index-Translate-9B",
+  immersiveModel: "Index-Translate-2B",
   key: "bili",
   target: "中文"
+};
+
+const LOCAL_DEFAULTS = {
+  glossary: ""
 };
 
 const DEFAULT_RELAY_HOST = "https://seep.eu.org/";
 
 const MENU_ID = "bili-translate-selection";
 const MENU_STUDY_ID = "bili-study-selection";
+const MENU_IMMERSIVE_ID = "bili-immersive-page";
 const MAX_LEN = 3000;
 const TIMEOUT_MS = 30000;
 const MAX_ERROR_BODY = 4000;
 
 // Strictly volatile in-RAM session LRU micro-cache (never persisted to chrome.storage or disk).
-const MEM_CACHE_LIMIT = 16;
+const MEM_CACHE_LIMIT = 64;
 const volatileTranslateCache = new Map();
 const volatileStudyCache = new Map();
+
+// Parsed glossary cache in RAM (rebuilt only when user edits options).
+let cachedGlossaryRaw = null;
+let cachedGlossaryEntries = [];
 
 function lruGet(map, key) {
   if (!map.has(key)) return null;
@@ -43,8 +53,14 @@ function stripSlashes(url) {
   return String(url || "").trim().replace(/\/+$/, "");
 }
 
-function getSettings() {
-  return chrome.storage.sync.get(DEFAULTS);
+async function getSettings() {
+  const syncCfg = await chrome.storage.sync.get(DEFAULTS);
+  let glossary = "";
+  if (chrome.storage.local) {
+    const localCfg = await chrome.storage.local.get(LOCAL_DEFAULTS);
+    glossary = String(localCfg.glossary || "");
+  }
+  return { ...syncCfg, glossary };
 }
 
 function isIndexModelOrHost(model, baseUrl) {
@@ -76,6 +92,76 @@ function stripThink(raw) {
   return s.replace(/^<think>\s*/i, "").trim();
 }
 
+// ---- Dynamic Hit-Only Glossary & Official instTrans Constrained Prompt Engine ------------
+
+function parseGlossary(rawText) {
+  const raw = String(rawText || "");
+  if (raw === cachedGlossaryRaw) return cachedGlossaryEntries;
+
+  const entries = [];
+  const seen = new Set();
+  const lines = raw.split(/\r?\n/);
+
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith("#") || line.startsWith("//")) continue;
+
+    let src = "";
+    let tgt = "";
+    const arrowMatch = /^(.*?)\s*(?:=>|->|→|\t|=)\s*(.+)$/.exec(line);
+    if (arrowMatch) {
+      src = arrowMatch[1].trim();
+      tgt = arrowMatch[2].trim();
+    } else {
+      // Single term on a line = immutable no-translate lock (src -> src)
+      src = line;
+      tgt = line;
+    }
+
+    if (!src || !tgt) continue;
+    const key = src.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    entries.push({ source: src, target: tgt, lower: key });
+  }
+
+  // Match longer multi-word phrases first (e.g. "Flash-Attention 2" before "Flash-Attention")
+  entries.sort((a, b) => b.source.length - a.source.length);
+
+  cachedGlossaryRaw = raw;
+  cachedGlossaryEntries = entries;
+  return entries;
+}
+
+function matchGlossaryHits(glossaryTextOrEntries, sourceText, maxHits = 24) {
+  const entries = Array.isArray(glossaryTextOrEntries)
+    ? glossaryTextOrEntries
+    : parseGlossary(glossaryTextOrEntries);
+  if (!entries || entries.length === 0) return [];
+
+  const hay = String(sourceText || "").toLowerCase();
+  if (!hay) return [];
+
+  const hits = [];
+  for (let i = 0; i < entries.length; i++) {
+    const e = entries[i];
+    if (hay.includes(e.lower)) {
+      hits.push({ source: e.source, target: e.target });
+      if (hits.length >= maxHits) break;
+    }
+  }
+  return hits;
+}
+
+function hasInlineBacktickCode(text) {
+  return /`[^`\r\n]{1,120}`/.test(String(text || ""));
+}
+
+function glossarySignature(hits) {
+  if (!hits || hits.length === 0) return "";
+  return hits.map((h) => h.source + "->" + h.target).join(";");
+}
+
 function isSimplifiedChineseTarget(target) {
   const t = String(target || "中文").trim();
   return t === "中文" || t === "简体中文" || /^zh([-_]?cn|[-_]?hans)?$/i.test(t) || /simplified chinese/i.test(t);
@@ -103,29 +189,162 @@ function normalizeTargetPrompt(target) {
   return t;
 }
 
-// Aligns with official bilibili/Index-Translate call_api.py::build_prompt for Index-* models,
-// with standard system+user fallback for generic OpenAI-compatible endpoints.
-function buildTranslateMessages(text, target, model, baseUrl) {
+// Aligns with official bilibili/Index-Translate call_api.py + docs/prompts_zh.md instTrans RL template.
+function buildTranslateMessages(text, target, model, baseUrl, glossaryHits = []) {
   const clean = String(text || "").trim();
+  const hits = Array.isArray(glossaryHits) ? glossaryHits : [];
+  const hasCode = hasInlineBacktickCode(clean);
+
   if (isIndexModelOrHost(model, baseUrl)) {
     const tgtName = normalizeChineseTargetName(target);
+    if (hits.length === 0 && !hasCode) {
+      return [
+        {
+          role: "user",
+          content: "请将以下文本翻译为" + tgtName + "，直接输出翻译结果，不要进行任何解释。\n\n" + clean
+        }
+      ];
+    }
+
+    const constraints = [];
+    if (hits.length > 0) {
+      const pairs = hits.map((h) => h.source + "\u2192" + h.target).join("\u3001");
+      constraints.push(constraints.length + 1 + ". 【硬性要求】专名/术语对照: " + pairs);
+    }
+    if (hasCode) {
+      constraints.push(constraints.length + 1 + ". 【硬性要求】反引号（`）内的代码片段保持原样，不要翻译");
+    }
+
     return [
       {
         role: "user",
-        content: "请将以下文本翻译为" + tgtName + "，直接输出翻译结果，不要进行任何解释。\n\n" + clean
+        content:
+          "请将以下文本翻译成" +
+          tgtName +
+          "，并且严格遵循所有约束要求。\n\n【源文】\n" +
+          clean +
+          "\n\n【约束要求】\n" +
+          constraints.join("\n") +
+          "\n\n只输出译文，不要有任何额外说明。"
       }
     ];
   }
+
+  // Standard OpenAI-compatible endpoint fallback
+  let sys =
+    "You are a translation engine. Translate the user text into " +
+    target +
+    ". Output ONLY the translation \u2014 no explanation, no quotes, no original text.";
+  if (hits.length > 0) {
+    sys += " Strictly enforce these terminology mappings: " + hits.map((h) => h.source + " -> " + h.target).join("; ") + ".";
+  }
+  if (hasCode) {
+    sys += " Preserve inline code inside backticks (`...`) unchanged.";
+  }
   return [
-    {
-      role: "system",
-      content:
-        "You are a translation engine. Translate the user text into " +
-        target +
-        ". Output ONLY the translation \u2014 no explanation, no quotes, no original text."
-    },
+    { role: "system", content: sys },
     { role: "user", content: clean }
   ];
+}
+
+// Multi-paragraph anchored batch prompt (〖P0〗…〖Pn-1〗) for streaming immersive bilingual webpage translation.
+function buildImmersiveBatchMessages(items, target, model, baseUrl, glossaryHits = []) {
+  const anchoredSource = items.map((t, i) => "\u3016P" + i + "\u3017" + String(t || "").trim()).join("\n");
+  const markers = items.map((_, i) => "\u3016P" + i + "\u3017").join("\u3001");
+  const hits = Array.isArray(glossaryHits) ? glossaryHits : [];
+  const hasCode = items.some((t) => hasInlineBacktickCode(t));
+
+  if (isIndexModelOrHost(model, baseUrl)) {
+    const tgtName = normalizeChineseTargetName(target);
+    const constraints = [
+      "1. 【硬性要求】保留源文中的段落标记 " + markers + " 不变，每段译文前原样保留对应标记"
+    ];
+    if (hits.length > 0) {
+      constraints.push(
+        constraints.length +
+          1 +
+          ". 【硬性要求】专名/术语对照: " +
+          hits.map((h) => h.source + "\u2192" + h.target).join("\u3001")
+      );
+    }
+    if (hasCode) {
+      constraints.push(constraints.length + 1 + ". 【硬性要求】反引号（`）内的代码片段保持原样，不要翻译");
+    }
+
+    return [
+      {
+        role: "user",
+        content:
+          "请将以下带有\u3016P0\u3017段落标记的文本逐段翻译成" +
+          tgtName +
+          "，并且严格遵循所有约束要求。\n\n【源文】\n" +
+          anchoredSource +
+          "\n\n【约束要求】\n" +
+          constraints.join("\n") +
+          "\n\n只输出译文，不要有任何额外说明。"
+      }
+    ];
+  }
+
+  let sys =
+    "Translate each paragraph marked with \u3016P0\u3017, \u3016P1\u3017, ... into " +
+    target +
+    ". Keep every \u3016Pk\u3017 prefix intact at the start of its translated paragraph. Output ONLY the translated paragraphs.";
+  if (hits.length > 0) {
+    sys += " Strictly enforce terminology: " + hits.map((h) => h.source + " -> " + h.target).join("; ") + ".";
+  }
+  if (hasCode) {
+    sys += " Preserve inline code inside backticks (`...`) unchanged.";
+  }
+  return [
+    { role: "system", content: sys },
+    { role: "user", content: anchoredSource }
+  ];
+}
+
+function parseAnchoredSegments(rawVisibleText, expectedCount) {
+  const s = stripThink(rawVisibleText);
+  const out = {};
+  if (!s) return out;
+
+  const re = /\u3016P(\d+)\u3017/g;
+  const matches = [];
+  let m;
+  while ((m = re.exec(s)) !== null) {
+    matches.push({ idx: Number(m[1]), start: m.index, contentStart: re.lastIndex });
+  }
+
+  if (matches.length > 0) {
+    for (let i = 0; i < matches.length; i++) {
+      const cur = matches[i];
+      const end = i + 1 < matches.length ? matches[i + 1].start : s.length;
+      if (cur.idx >= 0 && cur.idx < expectedCount) {
+        // Strip trailing incomplete marker prefix like "〖" or "〖P" while streaming
+        const val = s
+          .slice(cur.contentStart, end)
+          .replace(/\u3016P?\d*$/, "")
+          .trim();
+        if (val) out[cur.idx] = val;
+      }
+    }
+    return out;
+  }
+
+  // Fallback for generic models if markers were omitted
+  if (expectedCount === 1) {
+    out[0] = s.trim();
+    return out;
+  }
+  const lines = s
+    .split(/\n+/)
+    .map((l) => l.trim())
+    .filter(Boolean);
+  if (lines.length === expectedCount) {
+    lines.forEach((line, idx) => {
+      out[idx] = line;
+    });
+  }
+  return out;
 }
 
 function studySystemPrompt(target) {
@@ -153,18 +372,30 @@ function studySystemPrompt(target) {
   );
 }
 
-function buildStudyUserPrompt(text, target) {
+function buildStudyUserPrompt(text, target, glossaryHits = []) {
   const clean = String(text || "").trim();
+  const hits = Array.isArray(glossaryHits) ? glossaryHits : [];
+  const glossaryHint =
+    hits.length > 0
+      ? "\n（用户锁定专名/术语译名供参考：" + hits.map((h) => h.source + "\u2192" + h.target).join("、") + "）"
+      : "";
   if (isSimplifiedChineseTarget(target)) {
-    return "请拆解以下外语文本（所有释义、辨析、助记与例句译文务必使用纯正简体中文）：\n" + clean;
+    return "请拆解以下外语文本（所有释义、辨析、助记与例句译文务必使用纯正简体中文）：" + glossaryHint + "\n" + clean;
   }
-  return "Analyze this source text (write all definitions, nuances, mnemonics, and translations in " + normalizeTargetPrompt(target) + "):\n" + clean;
+  return (
+    "Analyze this source text (write all definitions, nuances, mnemonics, and translations in " +
+    normalizeTargetPrompt(target) +
+    "):" +
+    glossaryHint +
+    "\n" +
+    clean
+  );
 }
 
-function buildStudyMessages(text, target) {
+function buildStudyMessages(text, target, glossaryHits = []) {
   return [
     { role: "system", content: studySystemPrompt(target) },
-    { role: "user", content: buildStudyUserPrompt(text, target) }
+    { role: "user", content: buildStudyUserPrompt(text, target, glossaryHits) }
   ];
 }
 
@@ -656,10 +887,12 @@ async function streamTranslation(text, onDelta, externalSignal) {
   const s = await getSettings();
   const activeModel = String(s.model || DEFAULTS.model).trim();
   const base = stripSlashes(s.base);
-  const cacheKey = activeModel + "|" + s.target + "|" + base + "|" + text;
+  const hits = matchGlossaryHits(s.glossary, text);
+  const gSig = glossarySignature(hits);
+  const cacheKey = activeModel + "|" + s.target + "|" + base + "|" + gSig + "|" + text;
   const hit = lruGet(volatileTranslateCache, cacheKey);
   if (hit) {
-    return { ok: true, text: hit.text, model: hit.model, via: hit.via, cached: true };
+    return { ok: true, text: hit.text, model: hit.model, via: hit.via, glossaryHits: hits.length, cached: true };
   }
 
   const isIndex = isIndexModelOrHost(activeModel, base);
@@ -668,7 +901,7 @@ async function streamTranslation(text, onDelta, externalSignal) {
       model: activeModel,
       stream: true,
       temperature: isIndex ? 0.0 : 0.2,
-      messages: buildTranslateMessages(text, s.target, activeModel, base)
+      messages: buildTranslateMessages(text, s.target, activeModel, base, hits)
     },
     activeModel,
     base
@@ -702,7 +935,7 @@ async function streamTranslation(text, onDelta, externalSignal) {
       const j = JSON.parse(raw);
       const content = stripThink((j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content) || "");
       if (!content) return { ok: false, status: 200, body: "Empty translation.", via: via };
-      const out = { text: content, model: activeModel, via: via };
+      const out = { text: content, model: activeModel, via: via, glossaryHits: hits.length };
       lruSet(volatileTranslateCache, cacheKey, out);
       return { ok: true, ...out };
     }
@@ -731,7 +964,7 @@ async function streamTranslation(text, onDelta, externalSignal) {
             full += delta;
             const visible = stripThink(full);
             if (visible && typeof onDelta === "function") {
-              onDelta({ text: visible, model: activeModel, via: via });
+              onDelta({ text: visible, model: activeModel, via: via, glossaryHits: hits.length });
             }
           }
         } catch (_) {}
@@ -740,9 +973,190 @@ async function streamTranslation(text, onDelta, externalSignal) {
 
     const clean = stripThink(full);
     if (!clean) return { ok: false, status: 200, body: "Empty translation.", via: via };
-    const out = { text: clean, model: activeModel, via: via };
+    const out = { text: clean, model: activeModel, via: via, glossaryHits: hits.length };
     lruSet(volatileTranslateCache, cacheKey, out);
     return { ok: true, ...out };
+  } catch (err) {
+    if (externalSignal && externalSignal.aborted) {
+      return { ok: false, cancelled: true, status: 0, body: "Cancelled" };
+    }
+    return { ok: false, status: 0, body: String((err && err.message) || err) };
+  } finally {
+    clearTimeout(timer);
+    if (externalSignal) externalSignal.removeEventListener("abort", onAbort);
+  }
+}
+
+async function streamImmersiveBatch(rawItems, modelOverride, onProgress, externalSignal) {
+  const items = Array.isArray(rawItems) ? rawItems.map((x) => String(x || "").trim()) : [];
+  if (items.length === 0) return { ok: false, status: 0, body: "Empty batch." };
+
+  const s = await getSettings();
+  const activeModel = String(modelOverride || s.immersiveModel || DEFAULTS.immersiveModel || s.model).trim();
+  const base = stripSlashes(s.base);
+  const parsedEntries = parseGlossary(s.glossary);
+
+  // Check session volatile cache per item first
+  const finalSegments = {};
+  const uncachedIndices = [];
+  const uncachedTexts = [];
+
+  for (let i = 0; i < items.length; i++) {
+    const txt = items[i];
+    if (!txt) {
+      finalSegments[i] = "";
+      continue;
+    }
+    const itemHits = matchGlossaryHits(parsedEntries, txt);
+    const key = activeModel + "|" + s.target + "|" + base + "|" + glossarySignature(itemHits) + "|" + txt;
+    const hit = lruGet(volatileTranslateCache, key);
+    if (hit) {
+      finalSegments[i] = hit.text;
+    } else {
+      uncachedIndices.push(i);
+      uncachedTexts.push(txt);
+    }
+  }
+
+  if (uncachedTexts.length === 0) {
+    return { ok: true, segments: finalSegments, model: activeModel, via: "direct", cached: true };
+  }
+
+  // Emit any instant cached hits right away
+  if (Object.keys(finalSegments).length > 0 && typeof onProgress === "function") {
+    onProgress({ segments: { ...finalSegments }, model: activeModel, via: "cache" });
+  }
+
+  const combinedText = uncachedTexts.join("\n");
+  const batchHits = matchGlossaryHits(parsedEntries, combinedText);
+  const isIndex = isIndexModelOrHost(activeModel, base);
+
+  const messages =
+    uncachedTexts.length === 1
+      ? buildTranslateMessages(uncachedTexts[0], s.target, activeModel, base, batchHits)
+      : buildImmersiveBatchMessages(uncachedTexts, s.target, activeModel, base, batchHits);
+
+  const body = attachIndexTemplateKwargs(
+    {
+      model: activeModel,
+      stream: true,
+      temperature: isIndex ? 0.0 : 0.2,
+      messages: messages
+    },
+    activeModel,
+    base
+  );
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+  const onAbort = () => controller.abort();
+  if (externalSignal) {
+    if (externalSignal.aborted) controller.abort();
+    else externalSignal.addEventListener("abort", onAbort, { once: true });
+  }
+
+  try {
+    const relay = stripSlashes(s.proxy);
+    let via = relay ? "relay" : "direct";
+    let res = await openChatStream(relay || base, s.key, body, controller.signal);
+    if (!relay && res.status === 412) {
+      via = "relay";
+      res = await openChatStream(DEFAULT_RELAY_HOST + base, s.key, body, controller.signal);
+    }
+
+    if (!res.ok) {
+      const errRaw = await res.text();
+      return { ok: false, status: res.status, body: errRaw.slice(0, MAX_ERROR_BODY), via: via };
+    }
+
+    const applyParsedMap = (parsedSubMap, commitCache) => {
+      let changed = false;
+      for (let subIdx = 0; subIdx < uncachedIndices.length; subIdx++) {
+        const val = parsedSubMap[subIdx];
+        if (typeof val === "string" && val.length > 0) {
+          const origIdx = uncachedIndices[subIdx];
+          if (finalSegments[origIdx] !== val) {
+            finalSegments[origIdx] = val;
+            changed = true;
+          }
+          if (commitCache) {
+            const origText = uncachedTexts[subIdx];
+            const itemHits = matchGlossaryHits(parsedEntries, origText);
+            const cKey = activeModel + "|" + s.target + "|" + base + "|" + glossarySignature(itemHits) + "|" + origText;
+            lruSet(volatileTranslateCache, cKey, {
+              text: val,
+              model: activeModel,
+              via: via,
+              glossaryHits: itemHits.length
+            });
+          }
+        }
+      }
+      return changed;
+    };
+
+    const ctype = String(res.headers.get("content-type") || "").toLowerCase();
+    if (!ctype.includes("event-stream") || !res.body) {
+      const raw = await res.text();
+      const j = JSON.parse(raw);
+      const content = stripThink((j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content) || "");
+      const parsedMap =
+        uncachedTexts.length === 1
+          ? { 0: content.replace(/^\u3016P0\u3017\s*/, "").trim() }
+          : parseAnchoredSegments(content, uncachedTexts.length);
+      applyParsedMap(parsedMap, true);
+      return { ok: true, segments: finalSegments, model: activeModel, via: via, glossaryHits: batchHits.length };
+    }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let sseBuf = "";
+    let full = "";
+
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      sseBuf += decoder.decode(value, { stream: true });
+      const lines = sseBuf.split(/\r?\n/);
+      sseBuf = lines.pop() || "";
+
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed.startsWith("data:")) continue;
+        const payload = trimmed.slice(5).trim();
+        if (!payload || payload === "[DONE]") continue;
+        try {
+          const chunkObj = JSON.parse(payload);
+          const delta = (chunkObj.choices && chunkObj.choices[0] && chunkObj.choices[0].delta && chunkObj.choices[0].delta.content) || "";
+          if (delta) {
+            full += delta;
+            const visible = stripThink(full);
+            if (!visible) continue;
+            const parsedMap =
+              uncachedTexts.length === 1
+                ? { 0: visible.replace(/^\u3016P0\u3017\s*/, "").trim() }
+                : parseAnchoredSegments(visible, uncachedTexts.length);
+            if (applyParsedMap(parsedMap, false) && typeof onProgress === "function") {
+              onProgress({
+                segments: { ...finalSegments },
+                model: activeModel,
+                via: via,
+                glossaryHits: batchHits.length
+              });
+            }
+          }
+        } catch (_) {}
+      }
+    }
+
+    const clean = stripThink(full);
+    const finalParsed =
+      uncachedTexts.length === 1
+        ? { 0: clean.replace(/^\u3016P0\u3017\s*/, "").trim() }
+        : parseAnchoredSegments(clean, uncachedTexts.length);
+    applyParsedMap(finalParsed, true);
+
+    return { ok: true, segments: finalSegments, model: activeModel, via: via, glossaryHits: batchHits.length };
   } catch (err) {
     if (externalSignal && externalSignal.aborted) {
       return { ok: false, cancelled: true, status: 0, body: "Cancelled" };
@@ -762,7 +1176,8 @@ async function streamStudyCard(text, modelOverride, onPartial, externalSignal) {
   const s = await getSettings();
   const base = stripSlashes(s.base);
   const activeModel = resolveStudyModel(s.model, modelOverride);
-  const cacheKey = activeModel + "|" + s.target + "|" + base + "|" + text;
+  const hits = matchGlossaryHits(s.glossary, text);
+  const cacheKey = activeModel + "|" + s.target + "|" + base + "|" + glossarySignature(hits) + "|" + text;
   const hit = lruGet(volatileStudyCache, cacheKey);
   if (hit) {
     return { ok: true, deck: hit.deck, model: hit.model, via: hit.via, cached: true };
@@ -774,7 +1189,7 @@ async function streamStudyCard(text, modelOverride, onPartial, externalSignal) {
       stream: true,
       temperature: 0.2,
       max_tokens: 1100,
-      messages: buildStudyMessages(text, s.target)
+      messages: buildStudyMessages(text, s.target, hits)
     },
     activeModel,
     base
@@ -892,19 +1307,20 @@ async function translate(text) {
   const s = await getSettings();
   const activeModel = String(s.model || DEFAULTS.model).trim();
   const base = stripSlashes(s.base);
-  const cacheKey = activeModel + "|" + s.target + "|" + base + "|" + text;
+  const hits = matchGlossaryHits(s.glossary, text);
+  const cacheKey = activeModel + "|" + s.target + "|" + base + "|" + glossarySignature(hits) + "|" + text;
   const hit = lruGet(volatileTranslateCache, cacheKey);
   if (hit) return { ok: true, ...hit, cached: true };
 
   const isIndex = isIndexModelOrHost(activeModel, base);
   const res = await callChatCompletion(
-    buildTranslateMessages(text, s.target, activeModel, base),
+    buildTranslateMessages(text, s.target, activeModel, base, hits),
     s,
     isIndex ? 0.0 : 0.2,
     activeModel
   );
   if (!res.ok) return res;
-  const out = { text: res.content, model: res.model, via: res.via };
+  const out = { text: res.content, model: res.model, via: res.via, glossaryHits: hits.length };
   lruSet(volatileTranslateCache, cacheKey, out);
   return { ok: true, ...out };
 }
@@ -917,11 +1333,12 @@ async function generateStudyCard(text, modelOverride) {
   const s = await getSettings();
   const base = stripSlashes(s.base);
   const activeModel = resolveStudyModel(s.model, modelOverride);
-  const cacheKey = activeModel + "|" + s.target + "|" + base + "|" + text;
+  const hits = matchGlossaryHits(s.glossary, text);
+  const cacheKey = activeModel + "|" + s.target + "|" + base + "|" + glossarySignature(hits) + "|" + text;
   const hit = lruGet(volatileStudyCache, cacheKey);
   if (hit) return { ok: true, ...hit, cached: true };
 
-  const res = await callChatCompletion(buildStudyMessages(text, s.target), s, 0.2, activeModel, 1100);
+  const res = await callChatCompletion(buildStudyMessages(text, s.target, hits), s, 0.2, activeModel, 1100);
   if (!res.ok) return res;
 
   const deck = parseStudyCardJson(res.content, text);
@@ -952,6 +1369,19 @@ if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.onMessage)
         .catch((err) => {
           sendResponse({ ok: false, status: 0, body: String((err && err.message) || err) });
         });
+      return true;
+    }
+
+    if (msg.type === "BILI_GET_IMMERSIVE_PREFS") {
+      getSettings()
+        .then((s) =>
+          sendResponse({
+            ok: true,
+            immersiveModel: s.immersiveModel || DEFAULTS.immersiveModel,
+            target: s.target || DEFAULTS.target
+          })
+        )
+        .catch(() => sendResponse({ ok: false }));
       return true;
     }
 
@@ -995,6 +1425,33 @@ if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.onMessage)
         return;
       }
 
+      if (port.name === "bili-immersive-stream") {
+        const abortCtrl = new AbortController();
+        let disconnected = false;
+        port.onDisconnect.addListener(() => {
+          disconnected = true;
+          abortCtrl.abort();
+        });
+        port.onMessage.addListener((msg) => {
+          if (!msg || msg.type !== "START_IMMERSIVE_BATCH") return;
+          streamImmersiveBatch(
+            msg.items,
+            msg.modelOverride,
+            (progress) => {
+              if (!disconnected) {
+                try { port.postMessage({ type: "BATCH_DELTA", ...progress }); } catch (_) {}
+              }
+            },
+            abortCtrl.signal
+          ).then((finalRes) => {
+            if (!disconnected && !(finalRes && finalRes.cancelled)) {
+              try { port.postMessage({ type: "BATCH_DONE", ...finalRes }); } catch (_) {}
+            }
+          });
+        });
+        return;
+      }
+
       if (port.name === "bili-study-stream") {
         const abortCtrl = new AbortController();
         let disconnected = false;
@@ -1024,6 +1481,8 @@ if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.onMessage)
   }
 
   chrome.storage.onChanged.addListener(() => {
+    cachedGlossaryRaw = null;
+    cachedGlossaryEntries = [];
     volatileTranslateCache.clear();
     volatileStudyCache.clear();
   });
@@ -1046,8 +1505,16 @@ if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.onMessage)
         },
         () => void chrome.runtime.lastError
       );
+      chrome.contextMenus.create(
+        {
+          id: MENU_IMMERSIVE_ID,
+          title: "Toggle Bilingual Page Translation (\u53cc\u8bed\u5bf9\u7167\u7f51\u9875 \u00b7 Alt+A)",
+          contexts: ["page"]
+        },
+        () => void chrome.runtime.lastError
+      );
     });
-    getSettings().then((s) => chrome.storage.sync.set(s));
+    chrome.storage.sync.get(DEFAULTS).then((s) => chrome.storage.sync.set(s));
   });
 
   async function sendToFrame(tabId, frameId, msg) {
@@ -1063,6 +1530,14 @@ if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.onMessage)
 
   chrome.contextMenus.onClicked.addListener((info, tab) => {
     if (!tab || typeof tab.id !== "number" || tab.id < 0) return;
+
+    if (info.menuItemId === MENU_IMMERSIVE_ID) {
+      sendToFrame(tab.id, info.frameId || 0, { type: "BILI_TOGGLE_IMMERSIVE" }).catch((e) => {
+        console.warn("[Bili Index Translate] context menu immersive:", e && e.message);
+      });
+      return;
+    }
+
     if (info.menuItemId !== MENU_ID && info.menuItemId !== MENU_STUDY_ID) return;
 
     const msg = {
@@ -1086,7 +1561,12 @@ if (typeof module !== "undefined" && module.exports) {
     isIndexModelOrHost,
     resolveStudyModel,
     stripThink,
+    parseGlossary,
+    matchGlossaryHits,
+    hasInlineBacktickCode,
     buildTranslateMessages,
+    buildImmersiveBatchMessages,
+    parseAnchoredSegments,
     studySystemPrompt,
     buildStudyUserPrompt,
     buildStudyMessages,

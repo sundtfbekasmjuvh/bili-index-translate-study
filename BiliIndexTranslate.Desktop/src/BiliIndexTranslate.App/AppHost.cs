@@ -486,7 +486,7 @@ internal sealed class AppHost : IDisposable
     private TranslationRequest BuildRequest(string text, AppSettings s)
     {
         var lang = s.ResolvedTargetLanguage;
-        return new TranslationRequest(text.Trim(), lang.Code, lang.PromptName, s.SourceLanguage, s.Model, s.BaseUrl, s.UseRelay, s.RelayPrefix, s.ApiKey);
+        return new TranslationRequest(text.Trim(), lang.Code, lang.PromptName, s.SourceLanguage, s.Model, s.BaseUrl, s.UseRelay, s.RelayPrefix, s.ApiKey, s.GlossaryText);
     }
 
     private void StartTranslation(long requestId, SelectionSnapshot snapshot)

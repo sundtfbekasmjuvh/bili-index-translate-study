@@ -58,6 +58,7 @@ public sealed class AppSettings
     public string Model { get; set; } = DefaultModel;
     public bool UseRelay { get; set; }
     public string RelayPrefix { get; set; } = DefaultRelayPrefix;
+    public string GlossaryText { get; set; } = string.Empty;
 
     /// <summary>In-memory only. Persisted through <see cref="SettingsStore"/> as a protected blob.</summary>
     [JsonIgnore]
@@ -110,6 +111,9 @@ public sealed class AppSettings
         BaseUrl = string.IsNullOrWhiteSpace(BaseUrl) ? DefaultBaseUrl : BaseUrl.Trim();
         Model = string.IsNullOrWhiteSpace(Model) ? DefaultModel : Model.Trim();
         RelayPrefix = string.IsNullOrWhiteSpace(RelayPrefix) ? DefaultRelayPrefix : RelayPrefix.Trim();
+        GlossaryText = string.IsNullOrWhiteSpace(GlossaryText)
+            ? string.Empty
+            : (GlossaryText.Length > 64000 ? GlossaryText[..64000] : GlossaryText).Replace("\r\n", "\n").Trim();
         if (string.IsNullOrWhiteSpace(ApiKey)) ApiKey = DefaultApiKey;
         Hotkey = string.IsNullOrWhiteSpace(Hotkey) ? "Alt+Q" : Hotkey.Trim();
 

@@ -63,7 +63,8 @@ public sealed class StudyCardService
             effectiveReq.SourceLanguage,
             effectiveReq.TargetLanguageCode,
             stream: canStream,
-            baseUrl: effectiveReq.BaseUrl);
+            baseUrl: effectiveReq.BaseUrl,
+            glossaryText: effectiveReq.GlossaryText);
 
         var sw = Stopwatch.StartNew();
         TransportResponse response;
@@ -164,7 +165,10 @@ public sealed class StudyCardService
     }
 
     private static string BuildCacheKey(TranslationRequest r)
-        => $"{r.Model}|{r.TargetLanguageCode}|{r.BaseUrl}|{r.UseRelay}|{r.Text.Trim()}";
+    {
+        var gSig = GlossaryEngine.Signature(GlossaryEngine.MatchHits(r.GlossaryText, r.Text));
+        return $"{r.Model}|{r.TargetLanguageCode}|{r.BaseUrl}|{r.UseRelay}|{gSig}|{r.Text.Trim()}";
+    }
 
     private bool TryGetCached(string key, out StudyDeckResult? value)
     {

@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Bili Index Translate",
-  "version": "1.2.1",
-  "description": "Lightweight inline translation + companion Language Study Card powered by Bilibili Index-Translate.",
+  "version": "1.3.0",
+  "description": "Minimalist inline translation, Alt+A streaming bilingual page reading, instTrans glossary & companion Language Study Card.",
   "permissions": ["storage", "contextMenus", "activeTab", "scripting", "declarativeNetRequest"],
   "host_permissions": [
     "https://index-translate.bilibili.com/*",
