@@ -1,0 +1,77 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  extension:
+    name: Extension and sandbox (Node)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+
+      - name: Syntax check
+        run: |
+          for f in bili-index-translate/*.js bili-study-sandbox/*.js tests/extension/*.js; do
+            echo "node --check $f"
+            node --check "$f"
+          done
+
+      - name: Validate extension JSON
+        run: |
+          node -e '
+            const fs = require("fs");
+            const manifest = JSON.parse(fs.readFileSync("bili-index-translate/manifest.json", "utf8"));
+            const rules = JSON.parse(fs.readFileSync("bili-index-translate/dnr_rules.json", "utf8"));
+            if (manifest.manifest_version !== 3) throw new Error("manifest_version must be 3");
+            if (!Array.isArray(rules) || rules.length === 0) throw new Error("dnr_rules.json must be a non-empty array");
+            console.log("manifest", manifest.version, "with", rules.length, "DNR rule(s)");
+          '
+
+      - name: Unit tests
+        run: node --test "tests/**/*.test.js"
+
+  desktop:
+    name: Desktop (.NET 8, Windows)
+    runs-on: windows-latest
+    timeout-minutes: 20
+    env:
+      DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+      DOTNET_NOLOGO: "1"
+    defaults:
+      run:
+        working-directory: BiliIndexTranslate.Desktop
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Restore
+        run: dotnet restore BiliIndexTranslate.sln
+
+      - name: Build
+        run: dotnet build BiliIndexTranslate.sln -c Release --no-restore -warnaserror
+
+      - name: Test
+        run: dotnet test tests/BiliIndexTranslate.Core.Tests/BiliIndexTranslate.Core.Tests.csproj -c Release --no-build --logger "console;verbosity=normal"

@@ -493,6 +493,14 @@ public class VisionTranslationTests
     }
 
     [Fact]
+    public void ParseDualOutput_KeepsSourceText_WhenModelEmitsSourceFirst()
+    {
+        var reversed = VisionPromptBuilder.ParseDualOutput("〖原文〗The Sovereign Scheduler isolates workloads.\n〖译文〗主权调度器隔离负载。");
+        Assert.Equal("主权调度器隔离负载。", reversed.Translation);
+        Assert.Equal("The Sovereign Scheduler isolates workloads.", reversed.SourceText);
+    }
+
+    [Fact]
     public async Task VisionTranslationService_StreamsTranslationFirst_ExtractsSource_AndCachesInRam()
     {
         var transport = new FakeVisionSseTransport

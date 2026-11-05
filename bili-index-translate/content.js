@@ -752,7 +752,10 @@
     const head = res.status ? "HTTP " + res.status : "Request failed";
     let hint = "";
     if (res.status === 412) {
-      hint = "\n(Upstream blocked the request; check the Relay prefix in extension options.)";
+      hint =
+        res.via === "relay"
+          ? "\n(The relay was also rejected; check the Relay prefix, Base URL and API key in extension options.)"
+          : "\n(Upstream rejected the direct request. If you trust a relay, set the Relay prefix in extension options; nothing is switched automatically.)";
     }
     return head + (res.body ? "\n" + res.body : "") + hint;
   }

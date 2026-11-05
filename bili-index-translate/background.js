@@ -15,8 +15,6 @@ const LOCAL_DEFAULTS = {
   glossary: ""
 };
 
-const DEFAULT_RELAY_HOST = "https://seep.eu.org/";
-
 const MENU_ID = "bili-translate-selection";
 const MENU_STUDY_ID = "bili-study-selection";
 const MENU_IMAGE_ID = "bili-translate-image";
@@ -106,7 +104,7 @@ function resolveStudyModel(configuredModel, modelOverride) {
   return baseModel || "Index-Translate-9B";
 }
 
-// Index-Translate-35B-A3B (MoE, 3B active) is 3.2x faster (~1.5s) and highest accuracy for vision on public API;
+// Index-Translate-35B-A3B (MoE, 3B active) gives the most complete dual output for vision on the public API (slower than 2B/9B);
 // Nailong/Homura/Echo text-only checkpoints cannot take image_url, so auto-upgrade them to 35B-A3B.
 function resolveVisionModel(configuredVisionModel, modelOverride) {
   const ov = String(modelOverride || "").trim();
@@ -338,6 +336,12 @@ function parseVisionDualOutput(rawText) {
     return { translation, sourceText };
   }
 
+  if (srcIdx >= 0 && tgtIdx > srcIdx) {
+    const sourceText = s.slice(srcIdx + srcTag.length, tgtIdx).trim();
+    const translation = s.slice(tgtIdx + tgtTag.length).trim();
+    return { translation, sourceText };
+  }
+
   if (tgtIdx >= 0) {
     // Still streaming 〖译文〗 before 〖原文〗 arrives — strip trailing partial marker "〖", "〖原", "〖原文"
     const translation = s
@@ -345,12 +349,6 @@ function parseVisionDualOutput(rawText) {
       .replace(/\u3016(?:\u539f\u6587?)?$/, "")
       .trim();
     return { translation, sourceText: "" };
-  }
-
-  if (srcIdx >= 0 && tgtIdx > srcIdx) {
-    const sourceText = s.slice(srcIdx + srcTag.length, tgtIdx).trim();
-    const translation = s.slice(tgtIdx + tgtTag.length).trim();
-    return { translation, sourceText };
   }
 
   // Fallback when a model outputs plain translation without markers
@@ -960,20 +958,8 @@ async function callChatCompletion(messages, s, temperature = 0.0, activeModel = 
   );
   if (maxTokens) body.max_tokens = maxTokens;
 
-  let via;
-  let r;
-
-  if (relay) {
-    via = "relay";
-    r = await postChat(relay, s.key, body);
-  } else {
-    via = "direct";
-    r = await postChat(base, s.key, body);
-    if (r.status === 412) {
-      via = "relay";
-      r = await postChat(DEFAULT_RELAY_HOST + base, s.key, body);
-    }
-  }
+  const via = relay ? "relay" : "direct";
+  const r = await postChat(relay || base, s.key, body);
 
   if (!r.ok) {
     return { ok: false, status: r.status, body: r.raw.slice(0, MAX_ERROR_BODY), via: via };
@@ -1043,12 +1029,8 @@ async function streamTranslation(text, onDelta, externalSignal) {
 
   try {
     const relay = stripSlashes(s.proxy);
-    let via = relay ? "relay" : "direct";
-    let res = await openChatStream(relay || base, s.key, body, controller.signal);
-    if (!relay && res.status === 412) {
-      via = "relay";
-      res = await openChatStream(DEFAULT_RELAY_HOST + base, s.key, body, controller.signal);
-    }
+    const via = relay ? "relay" : "direct";
+    const res = await openChatStream(relay || base, s.key, body, controller.signal);
 
     if (!res.ok) {
       const errRaw = await res.text();
@@ -1150,12 +1132,8 @@ async function streamVisionTranslation(imageDataUrl, modelOverride, onDelta, ext
 
   try {
     const relay = stripSlashes(s.proxy);
-    let via = relay ? "relay" : "direct";
-    let res = await openChatStream(relay || base, s.key, body, controller.signal);
-    if (!relay && res.status === 412) {
-      via = "relay";
-      res = await openChatStream(DEFAULT_RELAY_HOST + base, s.key, body, controller.signal);
-    }
+    const via = relay ? "relay" : "direct";
+    const res = await openChatStream(relay || base, s.key, body, controller.signal);
 
     if (!res.ok) {
       const errRaw = await res.text();
@@ -1315,12 +1293,8 @@ async function streamImmersiveBatch(rawItems, modelOverride, onProgress, externa
 
   try {
     const relay = stripSlashes(s.proxy);
-    let via = relay ? "relay" : "direct";
-    let res = await openChatStream(relay || base, s.key, body, controller.signal);
-    if (!relay && res.status === 412) {
-      via = "relay";
-      res = await openChatStream(DEFAULT_RELAY_HOST + base, s.key, body, controller.signal);
-    }
+    const via = relay ? "relay" : "direct";
+    const res = await openChatStream(relay || base, s.key, body, controller.signal);
 
     if (!res.ok) {
       const errRaw = await res.text();
@@ -1463,12 +1437,8 @@ async function streamStudyCard(text, modelOverride, onPartial, externalSignal) {
 
   try {
     const relay = stripSlashes(s.proxy);
-    let via = relay ? "relay" : "direct";
-    let res = await openChatStream(relay || base, s.key, body, controller.signal);
-    if (!relay && res.status === 412) {
-      via = "relay";
-      res = await openChatStream(DEFAULT_RELAY_HOST + base, s.key, body, controller.signal);
-    }
+    const via = relay ? "relay" : "direct";
+    const res = await openChatStream(relay || base, s.key, body, controller.signal);
 
     if (!res.ok) {
       const errRaw = await res.text();
@@ -1916,6 +1886,11 @@ if (typeof module !== "undefined" && module.exports) {
     repairStudyJson,
     parseStudyCardJson,
     extractPartialStudyDeck,
-    inferSourceLang
+    inferSourceLang,
+    callChatCompletion,
+    streamTranslation,
+    streamVisionTranslation,
+    streamImmersiveBatch,
+    streamStudyCard
   };
 }

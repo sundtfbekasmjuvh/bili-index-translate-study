@@ -13,15 +13,15 @@
 | 目录 | 说明 | 状态 |
 |---|---|---|
 | [`bili-index-translate/`](bili-index-translate/) | **Chrome / Edge / Brave / Arc 浏览器扩展（Manifest V3）**：MV3 原生直连 + `Alt+S` 零 OCR 识图框选/右键图片直译 + `Alt+A` 视口流式双语对照 + `instTrans` 动态术语表 + 划词与伴随语言学习卡片 | 可直接加载未打包扩展或下载 Release ZIP |
-| [`BiliIndexTranslate.Desktop/`](BiliIndexTranslate.Desktop/) | **Windows 桌面全局划词与屏幕识图端（C# / .NET 8, WPF + UI Automation）**：跨应用非抢焦点浮窗翻译 + `Alt+Shift+S` 跨屏冻结框选识图直译/剪贴板截图直译 + `instTrans` 术语表 + 伴随学习卡片 | `0 warnings` 编译通过，`122/122` xUnit 核心单测通过（见 [`BiliIndexTranslate.Desktop/README.md`](BiliIndexTranslate.Desktop/README.md)） |
-| [`bili-study-sandbox/`](bili-study-sandbox/) | **零依赖本地浏览器预览沙盒（Node.js 标准库）**：无需重载扩展即可在本地 `http://localhost:3001` 实时体验划词、学习卡片、`Alt+S` 画布框选识图、术语表与 `Alt+A` 双语对照 | 运行 `node bili-study-sandbox/server.js` 即可启动 |
+| [`BiliIndexTranslate.Desktop/`](BiliIndexTranslate.Desktop/) | **Windows 桌面全局划词与屏幕识图端（C# / .NET 8, WPF + UI Automation）**：跨应用非抢焦点浮窗翻译 + `Alt+Shift+S` 跨屏冻结框选识图直译/剪贴板截图直译 + `instTrans` 术语表 + 伴随学习卡片 | Windows 上 `0 warnings` 编译通过，`123/123` xUnit 核心单测通过（见 [`BiliIndexTranslate.Desktop/README.md`](BiliIndexTranslate.Desktop/README.md)） |
+| [`bili-study-sandbox/`](bili-study-sandbox/) | **零依赖本地浏览器预览沙盒（Node.js 标准库）**：无需重载扩展即可在本地 `http://localhost:3001` 实时体验划词、学习卡片、`Alt+S` 画布框选识图、术语表与 `Alt+A` 双语对照 | 运行 `node bili-study-sandbox/server.js` 即可启动，默认只监听 `127.0.0.1` |
 
 ---
 
 ## 核心特性（v1.4.0 多模态全能旗舰版）
 
 ### 1. Zero-OCR 多模态识图框选直译 + 学习卡片全闭环（Chrome `Alt+S` / Windows `Alt+Shift+S`）
-- **突破不可选中像素边界**：无需外接任何第三方 OCR 引擎，直接调用 `Index-Translate-35B-A3B` 旗舰 MoE 视觉多模态能力（实测比 2B/9B 视觉快 `3.2x`，首字流式响应 `~0.9–1.2s`），一气呵成读懂**生肉漫画气泡、论文扫描图、架构示意图、游戏外语 UI 以及 YouTube/B 站暂停视频硬字幕帧**。
+- **突破不可选中像素边界**：无需外接任何第三方 OCR 引擎，直接调用 `Index-Translate-35B-A3B` 旗舰 MoE 视觉多模态能力，一气呵成读懂**生肉漫画气泡、论文扫描图、架构示意图、游戏外语 UI 以及 YouTube/B 站暂停视频硬字幕帧**。35B-A3B 比 2B/9B 慢，但译文和回填原文最完整（2B 不回填原文，9B 在日文样例中会重复句子），实测数据见下方「识图速度实测」。
 - **`〖译文〗` → `〖原文〗` 双轨流式提取，无缝打通词典级学习卡片**：译文优先逐字流式上屏，紧接着自动回填图片中的原始外语文本——原本无法选中的图片像素即刻点亮 **发音朗读** 与 **`S` 键伴随语言学习卡片**（音标/假名、词性、辨析、助记与双语例句一键拆解），并同步遵守用户自定义**术语表**！
 - **100% 纯内存裁剪，零临时文件落盘**：网页端基于 `<canvas>` 内存裁剪、Windows 端基于 `MemoryStream` 物理像素冻结截图裁剪（同时支持托盘菜单一键翻译 `Win+Shift+S` 剪贴板截图），绝不在磁盘写入任何截图缓存。
 
@@ -57,3 +57,39 @@
 1. **Chrome / Edge 浏览器扩展**：下载 Release 中的 `bili-index-translate-chrome-v1.4.0.zip` 解压 → 打开 `chrome://extensions` 开启右上角**开发者模式** → **加载已解压的扩展程序** 选择 `bili-index-translate/` 目录。
 2. **Windows 桌面端（.NET 8 WPF）**：下载 Release 中的 `BiliIndexTranslate-Desktop-win-x64-selfcontained-v1.4.0.zip`（自带运行时单文件免安装版）或 `BiliIndexTranslate-Desktop-win-x64-v1.4.0.zip`（轻量版），解压运行 `BiliIndexTranslate.exe`。
 3. **本地预览沙盒**：运行 `node bili-study-sandbox/server.js` 并访问 `http://localhost:3001`。
+   沙盒默认只监听本机 `127.0.0.1`；确需局域网访问时设置环境变量 `HOST=0.0.0.0`，端口用 `PORT` 修改。
+
+---
+
+## 网络与隐私
+
+- 扩展默认直连 `index-translate.bilibili.com`。官方接口对带扩展 `Origin` 头的请求返回 HTTP 412，扩展用 `dnr_rules.json` 在网络层去掉该头。
+- 中继（Relay prefix）只在选项页手动填写后使用。直连返回 412 时只显示错误和提示，不会自动改走任何第三方中继。中继会收到选中的文本、图片和 API key，只填写你信任的地址。
+- 桌面端同理：中继需要在设置里手动开启，应用不会自行切换线路。
+
+---
+
+## 识图速度实测
+
+2026-11-05 在 Windows 11 上用 Node 直连公共接口测得，每个模型 3 次，取中位数。走的是扩展的识图提示词，流式输出，`max_tokens` 为 1024。结果随网络和服务端负载变化，只作量级参考。
+
+| 样例图片 | 2B 首字 / 完成 | 9B 首字 / 完成 | 35B-A3B 首字 / 完成 |
+|---|---|---|---|
+| 720×160，两行英文 | 131 ms / 293 ms | 143 ms / 685 ms | 451 ms / 1599 ms |
+| 720×160，两行日文 | 154 ms / 305 ms | 183 ms / 1041 ms | 395 ms / 1384 ms |
+| 1280×720，7 行英文 | 287 ms / 1102 ms | 194 ms / 3419 ms | 490 ms / 7788 ms |
+
+2B 只返回译文，不回填 `〖原文〗`，识图后无法直接唤起学习卡片；9B 在日文样例中重复了句子；35B-A3B 三个样例的译文和原文都完整。`Alt+A` 双语对照用 5 段英文测得：2B 完成中位数 1087 ms，9B 为 1872 ms。
+
+---
+
+## 开发与测试
+
+| 检查 | 命令 |
+|---|---|
+| 扩展与沙盒单测（Node 22+，零依赖） | `node --test "tests/**/*.test.js"` |
+| JS 语法检查 | `node --check bili-index-translate/background.js`（其余脚本同理） |
+| 桌面端构建 | `dotnet build BiliIndexTranslate.Desktop/BiliIndexTranslate.sln -c Release` |
+| 桌面端单测 | `dotnet test BiliIndexTranslate.Desktop/tests/BiliIndexTranslate.Core.Tests -c Release` |
+
+`tests/extension/` 覆盖术语表解析、提示词构造、识图双轨解析、段落锚点、学习卡 JSON 修复与流式解析，并用模拟的 `fetch` 验证 412 时只发一次请求、不自动改走中继。GitHub Actions（`.github/workflows/ci.yml`）在每次推送和 PR 上运行以上全部检查，桌面端在 `windows-latest` 上构建和测试。

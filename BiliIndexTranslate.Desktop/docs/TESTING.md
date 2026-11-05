@@ -1,23 +1,34 @@
 # Testing
 
-## What was measured in this environment (Linux build sandbox, no Windows desktop)
+## Measured on Windows (2026-11-05)
+
+Windows 11 Pro for Workstations (build 26200), .NET SDK 8.0.427, from the v1.4.0 sources.
 
 | Check | Result |
 |---|---|
 | `dotnet build BiliIndexTranslate.sln -c Release` | 0 errors, 0 warnings |
-| `dotnet test tests/BiliIndexTranslate.Core.Tests -c Release` | **96 passed, 0 failed** (session state machine, placement/anchoring, endpoint resolution, response parsing, cache, coordinator races, settings load/migrate) |
-| `dotnet publish … -r win-x64 --self-contained false` | `publish/BiliIndexTranslate.exe` — PE32+ GUI, icon, PerMonitorV2 manifest, version 2.0.0 embedded (656 KB folder) |
-| `dotnet publish … --self-contained true -p:PublishSingleFile=true` | single 145 MB exe produced |
+| `dotnet test tests/BiliIndexTranslate.Core.Tests -c Release` | **123 passed, 0 failed** (session state machine, placement/anchoring, endpoint resolution, response parsing, vision dual output, study cards, cache, coordinator races, settings load/migrate) |
+| `dotnet publish … -r win-x64 --self-contained false` | `BiliIndexTranslate.exe` — PE32+ x64 GUI, version 1.4.0 embedded (864 KB folder) |
+| `dotnet publish … --self-contained true -p:PublishSingleFile=true` | single 139 MB exe produced |
 | Icon | `tools/make-icon.py` output inspected at 256 px |
 
-Everything below this line is **not measured**: the app was not executed. Timing targets
-(200–350 ms settle, prompt loading, cache hits without network) are design parameters, not results.
-The Diagnostics window reports p50/p95 for `detect`, `render`, `cache`, `network` and `inference`
-once the app runs; fill in the table from there.
+The app was started from the framework-dependent publish output and driven only through UI
+Automation and window messages (no text selection, no translation request). Start-up reached
+`ready` about 230 ms after `file logging enabled`, with both hotkeys registered; the idle process
+used 18 MB private memory and 548 handles. The Settings window opened from a second instance and
+closed with Cancel without rewriting `settings.json`. Scenarios 16 and 17 below have the details.
+
+Timing targets (200–350 ms settle, prompt loading, cache hits without network) are design
+parameters, not results. The Diagnostics window reports p50/p95 for `detect`, `render`, `cache`,
+`network` and `inference` while the app runs; fill in the table from there.
+
+If `dotnet test` aborts on Windows with `Win32Exception (5): Access is denied` while the test host
+looks up its parent process, security software is blocking the test host in `bin\`. Point the
+output somewhere else, for example `dotnet test … -o %TEMP%\bit-tests`.
 
 ## Scenarios
 
-Status key: ✅ verified on Windows · ◐ partial · ❌ failed · ⬜ not tested in this sandbox.
+Status key: ✅ verified on Windows · ◐ partial · ❌ failed · ⬜ not tested yet.
 Core-only logic that is covered by unit tests is marked (unit).
 
 | # | Scenario | Expected | Status |
@@ -37,8 +48,8 @@ Core-only logic that is covered by unit tests is marked (unit).
 | 13 | Unsupported control (no TextPattern) | Nothing appears; Diagnostics → Applications shows "unsupported", log line without text | ⬜ |
 | 14 | Stalled UIA provider | Probe watchdog (2.5 s) reports failure, observer thread recovers on next request, no replacement threads | ⬜ |
 | 15 | HTTP 412 / timeout / invalid JSON / empty output | Error card with concise message + route (direct/relay); no HTML rendered; no retry loop | ⬜ (parser + messages: unit) |
-| 16 | Start a second instance | Second process exits; running instance opens Settings | ⬜ |
-| 17 | Exit from tray | Hooks, WinEvent hooks, UIA handlers, HttpClient, windows and tray icon released; process ends | ⬜ |
+| 16 | Start a second instance | Second process exits; running instance opens Settings | ✅ second process exited with code 0 after 234 ms; log `second instance signalled; opening settings`; Settings window visible |
+| 17 | Exit from tray | Hooks, WinEvent hooks, UIA handlers, HttpClient, windows and tray icon released; process ends | ◐ tray menu → Exit: log `exit requested` → `observer thread stopped` → `stopped` in 2.1 s, process gone; individual handle release not inspected |
 | 18 | 200 repeated selections | Stable handle count and memory (single reused popup window, bounded caches/logs) | ⬜ |
 
 ## Applications

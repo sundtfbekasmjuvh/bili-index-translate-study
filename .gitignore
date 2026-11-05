@@ -6,6 +6,8 @@
 !/BiliIndexTranslate.Desktop/
 !/bili-index-translate/
 !/bili-study-sandbox/
+!/tests/
+!/.github/
 
 # Build output
 bin/

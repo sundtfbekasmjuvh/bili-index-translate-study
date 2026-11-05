@@ -6,12 +6,13 @@ elsewhere, or press Esc. No visible window otherwise, no shortcut needed for nor
 
 Built fresh in C# / .NET 8 (WPF for the card, UI Automation for reading selections).
 
-> **Status.** The code compiles cleanly (0 warnings) and the platform-independent core — state
-> machine, placement math, translation client, study-card streaming parser/placer, cache, settings — is
-> covered by 110 passing unit tests. The Windows-only parts (UI Automation, hooks, non-activating
-> popup, SAPI TTS, tray) were written and compiled on Linux and have **not** been run on a Windows
-> desktop in this environment. Treat `docs/TESTING.md` as the checklist to complete before relying
-> on it.
+> **Status.** The code compiles cleanly on Windows (0 warnings) and the platform-independent core —
+> state machine, placement math, translation client, vision and study-card parsers, cache, settings —
+> is covered by 123 passing unit tests. CI builds and tests every push and pull request on
+> `windows-latest`. On a Windows 11 desktop the app starts, registers its hotkeys, enforces a single
+> instance, opens Settings and exits cleanly from the tray. Selection reading, the popup, the snip
+> overlay and SAPI TTS have not been walked through yet; `docs/TESTING.md` lists what is verified
+> and what is still open.
 
 ## Run
 
@@ -23,7 +24,7 @@ Requirements: Windows 10 1809+ / Windows 11, [.NET 8 Desktop Runtime](https://do
 | Prebuilt (framework-dependent) | `publish\BiliIndexTranslate.exe` |
 | Build and run from source | `tools\run.cmd` (add `--welcome` to force the welcome window) |
 | Build a release folder | `tools\build.cmd` → `publish\` (runs the tests first) |
-| Self-contained single exe (no runtime install) | `tools\build-selfcontained.cmd` → `publish-sc\` (~145 MB) |
+| Self-contained single exe (no runtime install) | `tools\build-selfcontained.cmd` → `publish-sc\` (~139 MB) |
 | Unit tests | `tools\test.cmd` or `dotnet test` |
 
 The app lives in the notification area. Right-click the icon for: automatic translation on/off,

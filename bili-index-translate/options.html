@@ -135,7 +135,7 @@
 
         <label for="proxy"><span>Relay prefix (optional)</span></label>
         <input id="proxy" type="text" placeholder="Leave empty for direct Bilibili connection (MV3 DNR enabled)">
-        <small>Empty = direct connection to <code>index-translate.bilibili.com</code> (no Python proxy or third-party relay needed).</small>
+        <small>Empty = direct connection to <code>index-translate.bilibili.com</code> (no Python proxy needed). Requests never fall back to a relay on their own: if the direct endpoint answers HTTP 412, the error is shown and you decide. A relay receives your selected text, images and API key, so only enter one you trust.</small>
 
         <div class="grid-2">
           <div>
@@ -150,7 +150,7 @@
           <div>
             <label for="immersiveModel"><span>Bilingual Page Model (Alt+A)</span></label>
             <select id="immersiveModel">
-              <option value="Index-Translate-2B">Index-Translate-2B (~680ms/batch · Fast)</option>
+              <option value="Index-Translate-2B">Index-Translate-2B (Fastest)</option>
               <option value="Index-Translate-9B">Index-Translate-9B (High Precision)</option>
               <option value="Index-Translate-35B-A3B">Index-Translate-35B-A3B (Flagship MoE)</option>
             </select>
@@ -162,7 +162,7 @@
           <span class="badge">Multimodal</span>
         </label>
         <select id="visionModel">
-          <option value="Index-Translate-35B-A3B">Index-Translate-35B-A3B (~1.5s Fastest MoE · Recommended)</option>
+          <option value="Index-Translate-35B-A3B">Index-Translate-35B-A3B (Most accurate MoE · Recommended)</option>
           <option value="Index-Translate-9B">Index-Translate-9B (Vision 9B)</option>
           <option value="Index-Translate-2B">Index-Translate-2B (Vision 2B)</option>
         </select>
