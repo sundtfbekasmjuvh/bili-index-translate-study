@@ -99,7 +99,7 @@
           <TextBlock Style="{StaticResource FieldLabel}" Text="Vision model" />
           <ComboBox x:Name="VisionModelBox" Grid.Column="1" IsEditable="True" HorizontalAlignment="Left" MinWidth="220" />
         </Grid>
-        <TextBlock Style="{StaticResource HintText}" Text="Index-Translate-35B-A3B (MoE) is recommended for Zero-OCR screen snip &amp; clipboard image translation (~1.5s)." />
+        <TextBlock Style="{StaticResource HintText}" Text="Index-Translate-35B-A3B (MoE) is recommended for Zero-OCR screen snip &amp; clipboard image translation: slower than 2B/9B, but it returns the most complete source text." />
         <CheckBox x:Name="RelayBox" Content="Send requests through the relay instead of directly" Margin="0,8,0,2" Checked="OnRelayToggled" Unchecked="OnRelayToggled" />
         <TextBox x:Name="RelayBox2" Margin="0,2,0,0" />
         <TextBlock Style="{StaticResource HintText}" Text="Direct requests are always tried as configured. If the service answers HTTP 412 for direct requests, you can enable the relay here; the app never switches routes on its own. Your API key is stored encrypted for this Windows account." />

@@ -22,7 +22,7 @@ public static partial class VisionPromptBuilder
     private static partial Regex TrailingPartialSourceMarkerRegex();
 
     /// <summary>
-    /// Defaults vision requests to <c>Index-Translate-35B-A3B</c> (3.2x faster MoE on public API)
+    /// Defaults vision requests to <c>Index-Translate-35B-A3B</c> (most complete dual output on the public API)
     /// and automatically upgrades text-only Index checkpoints that lack an <c>mmproj</c> vision tower.
     /// </summary>
     public static string ResolveVisionModel(string? configuredVisionModel, string? modelOverride = null)
@@ -143,18 +143,18 @@ public static partial class VisionPromptBuilder
             return (translation, sourceText);
         }
 
-        if (tgtIdx >= 0)
-        {
-            var slice = s[(tgtIdx + TranslationTag.Length)..];
-            var translation = TrailingPartialSourceMarkerRegex().Replace(slice, string.Empty).Trim();
-            return (translation, string.Empty);
-        }
-
         if (srcIdx >= 0 && tgtIdx > srcIdx)
         {
             var sourceText = s[(srcIdx + SourceTag.Length)..tgtIdx].Trim();
             var translation = s[(tgtIdx + TranslationTag.Length)..].Trim();
             return (translation, sourceText);
+        }
+
+        if (tgtIdx >= 0)
+        {
+            var slice = s[(tgtIdx + TranslationTag.Length)..];
+            var translation = TrailingPartialSourceMarkerRegex().Replace(slice, string.Empty).Trim();
+            return (translation, string.Empty);
         }
 
         return (s.Trim(), string.Empty);

@@ -6,11 +6,11 @@ const fs = require("fs");
 const path = require("path");
 
 const PORT = Number(process.env.PORT) || 3001;
+const HOST = process.env.HOST || "127.0.0.1";
 const EXT_DIR = path.resolve(__dirname, "../bili-index-translate");
 const DEMO_HTML = path.join(__dirname, "index.html");
 
 const DEFAULT_BASE = "https://index-translate.bilibili.com/v1";
-const DEFAULT_RELAY = "https://seep.eu.org/";
 const DEFAULT_KEY = "bili";
 const TIMEOUT_MS = 30000;
 
@@ -41,29 +41,19 @@ function loadBg() {
 }
 
 async function openUpstreamStream(body, signal) {
-  let via = "direct";
   const headers = {
     "Content-Type": "application/json",
     "User-Agent": "Index-Translate-Client/1.0",
     Accept: "text/event-stream, application/json",
     Authorization: "Bearer " + DEFAULT_KEY
   };
-  let res = await fetch(DEFAULT_BASE + "/chat/completions", {
+  const res = await fetch(DEFAULT_BASE + "/chat/completions", {
     method: "POST",
     headers,
     body: JSON.stringify(body),
     signal
   });
-  if (res.status === 412) {
-    via = "relay";
-    res = await fetch(DEFAULT_RELAY + DEFAULT_BASE + "/chat/completions", {
-      method: "POST",
-      headers,
-      body: JSON.stringify(body),
-      signal
-    });
-  }
-  return { res, via };
+  return { res, via: "direct" };
 }
 
 function sendJson(res, status, obj) {
@@ -641,6 +631,6 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-server.listen(PORT, "0.0.0.0", () => {
-  console.log(`[bili-study-demo] listening on http://0.0.0.0:${PORT}`);
+server.listen(PORT, HOST, () => {
+  console.log(`[bili-study-demo] listening on http://${HOST}:${PORT}`);
 });

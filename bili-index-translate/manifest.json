@@ -6,8 +6,7 @@
   "permissions": ["storage", "contextMenus", "activeTab", "scripting", "declarativeNetRequest"],
   "host_permissions": [
     "<all_urls>",
-    "https://index-translate.bilibili.com/*",
-    "https://seep.eu.org/*"
+    "https://index-translate.bilibili.com/*"
   ],
   "declarative_net_request": {
     "rule_resources": [
