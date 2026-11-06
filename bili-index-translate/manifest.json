@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Bili Index Translate",
-  "version": "1.4.0",
+  "version": "1.4.1",
   "description": "Inline translation, Alt+A streaming bilingual page, Alt+S zero-OCR vision snip, instTrans glossary & Language Study Card.",
   "permissions": ["storage", "contextMenus", "activeTab", "scripting", "declarativeNetRequest"],
   "host_permissions": [

@@ -18,7 +18,7 @@
 
 ---
 
-## 核心特性（v1.4.0 多模态全能旗舰版）
+## 核心特性（v1.4.1 多模态全能旗舰版）
 
 ### 1. Zero-OCR 多模态识图框选直译 + 学习卡片全闭环（Chrome `Alt+S` / Windows `Alt+Shift+S`）
 - **突破不可选中像素边界**：无需外接任何第三方 OCR 引擎，直接调用 `Index-Translate-35B-A3B` 旗舰 MoE 视觉多模态能力，一气呵成读懂**生肉漫画气泡、论文扫描图、架构示意图、游戏外语 UI 以及 YouTube/B 站暂停视频硬字幕帧**。35B-A3B 首字比 2B/9B 慢，但译文和回填原文最完整（2B 不回填原文，2B 和 9B 在日文与多行样例中会重复句子），实测数据见下方「识图速度实测」。
@@ -54,8 +54,8 @@
 
 ## 快速安装指南
 
-1. **Chrome / Edge 浏览器扩展**：下载 Release 中的 `bili-index-translate-chrome-v1.4.0.zip` 解压 → 打开 `chrome://extensions` 开启右上角**开发者模式** → **加载已解压的扩展程序** 选择 `bili-index-translate/` 目录。
-2. **Windows 桌面端（.NET 8 WPF）**：下载 Release 中的 `BiliIndexTranslate-Desktop-win-x64-selfcontained-v1.4.0.zip`（自带运行时单文件免安装版）或 `BiliIndexTranslate-Desktop-win-x64-v1.4.0.zip`（轻量版），解压运行 `BiliIndexTranslate.exe`。
+1. **Chrome / Edge 浏览器扩展**：下载 Release 中的 `bili-index-translate-chrome-v1.4.1.zip` 解压 → 打开 `chrome://extensions` 开启右上角**开发者模式** → **加载已解压的扩展程序** 选择 `bili-index-translate/` 目录。
+2. **Windows 桌面端（.NET 8 WPF）**：下载 Release 中的 `BiliIndexTranslate-Desktop-win-x64-selfcontained-v1.4.1.zip`（自带运行时单文件免安装版）或 `BiliIndexTranslate-Desktop-win-x64-v1.4.1.zip`（轻量版），解压运行 `BiliIndexTranslate.exe`。
 3. **本地预览沙盒**：运行 `node bili-study-sandbox/server.js` 并访问 `http://localhost:3001`。
    沙盒默认只监听本机 `127.0.0.1`；确需局域网访问时设置环境变量 `HOST=0.0.0.0`，端口用 `PORT` 修改。
 
