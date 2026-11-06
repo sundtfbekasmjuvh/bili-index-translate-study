@@ -29,7 +29,7 @@ jobs:
 
       - name: Syntax check
         run: |
-          for f in bili-index-translate/*.js bili-study-sandbox/*.js tests/extension/*.js; do
+          for f in bili-index-translate/*.js bili-study-sandbox/*.js tests/extension/*.js tests/support/*.js tests/e2e/*.js; do
             echo "node --check $f"
             node --check "$f"
           done
@@ -47,6 +47,39 @@ jobs:
 
       - name: Unit tests
         run: node --test "tests/**/*.test.js"
+
+  e2e:
+    name: Extension end-to-end (Playwright, Chromium)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install test tooling
+        run: npm ci
+
+      - name: Install Chromium
+        run: npx playwright install --with-deps --no-shell chromium
+
+      - name: End-to-end tests
+        run: npm run test:e2e
+
+      - name: Upload report
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: playwright-report
+          path: |
+            playwright-report/
+            test-results/
+          retention-days: 7
 
   desktop:
     name: Desktop (.NET 8, Windows)
