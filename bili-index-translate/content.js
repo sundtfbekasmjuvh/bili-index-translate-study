@@ -773,6 +773,9 @@
   }
 
   function showResult(res, anchor) {
+    // Image fetch and capture errors can arrive while no panel is open, so make sure it is shown.
+    ensurePanel();
+    panel.setAttribute("data-open", "");
     if (res && res.ok) {
       currentTranslatedText = res.text || "";
       if (res.sourceText) {
