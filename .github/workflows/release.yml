@@ -1,0 +1,62 @@
+name: Release
+
+on:
+  push:
+    tags: ["v[0-9]+.[0-9]+.[0-9]+"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Package and draft the release
+    runs-on: windows-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    env:
+      DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+      DOTNET_NOLOGO: "1"
+      TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Extension and sandbox tests
+        run: node --test "tests/**/*.test.js"
+
+      - name: Desktop tests
+        run: dotnet test BiliIndexTranslate.Desktop/tests/BiliIndexTranslate.Core.Tests/BiliIndexTranslate.Core.Tests.csproj -c Release
+
+      - name: Package
+        run: ./.github/scripts/package-release.ps1 -Tag $env:TAG -OutDir dist
+
+      # The release stays a draft so its notes can be reviewed before it is published.
+      - name: Draft the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $assets = @(Get-ChildItem -LiteralPath dist -File | Where-Object { $_.Extension -eq ".zip" -or $_.Name -eq "SHA256SUMS.txt" } | ForEach-Object FullName)
+          if ($assets.Count -ne 4) { throw "Expected 3 ZIPs and SHA256SUMS.txt in dist, found $($assets.Count) files" }
+          $isDraft = gh release view $env:TAG --repo $env:GITHUB_REPOSITORY --json isDraft --jq .isDraft 2>$null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create $env:TAG @assets --repo $env:GITHUB_REPOSITORY --verify-tag --draft --title $env:TAG --generate-notes
+          } elseif ($isDraft -eq "true") {
+            gh release upload $env:TAG @assets --repo $env:GITHUB_REPOSITORY --clobber
+          } else {
+            throw "Release $env:TAG is already published; its assets are left unchanged"
+          }
+          if ($LASTEXITCODE -ne 0) { throw "gh release failed with exit code $LASTEXITCODE" }
