@@ -77,6 +77,42 @@ async function readJsonBody(req) {
   return JSON.parse(raw || "{}");
 }
 
+function openSse(res) {
+  res.writeHead(200, {
+    "Content-Type": "text/event-stream; charset=utf-8",
+    "Cache-Control": "no-cache, no-transform",
+    Connection: "keep-alive"
+  });
+}
+
+// Shared lifecycle of the streaming endpoints: abort on client disconnect or timeout, and report
+// upstream HTTP errors and exceptions as the final event of the given type.
+async function proxyChatStream(res, doneType, buildBody, handleResponse) {
+  const abortCtrl = new AbortController();
+  res.on("close", () => { if (!res.writableEnded) abortCtrl.abort(); });
+  const timer = setTimeout(() => abortCtrl.abort(), TIMEOUT_MS);
+  const t0 = Date.now();
+  const elapsed = () => Date.now() - t0;
+
+  try {
+    const { res: upRes, via } = await openUpstreamStream(buildBody(), abortCtrl.signal);
+    if (!upRes.ok) {
+      const errRaw = await upRes.text();
+      writeSse(res, { type: doneType, ok: false, status: upRes.status, body: errRaw.slice(0, 1000), via });
+    } else {
+      await handleResponse(upRes, via, elapsed);
+    }
+    res.end();
+  } catch (err) {
+    if (!res.writableEnded) {
+      writeSse(res, { type: doneType, ok: false, status: 0, body: String((err && err.message) || err) });
+      res.end();
+    }
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 const server = http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url, "http://localhost");
@@ -108,11 +144,7 @@ const server = http.createServer(async (req, res) => {
       const glossary = String(msg.glossary || "");
       const bg = loadBg();
 
-      res.writeHead(200, {
-        "Content-Type": "text/event-stream; charset=utf-8",
-        "Cache-Control": "no-cache, no-transform",
-        Connection: "keep-alive"
-      });
+      openSse(res);
 
       if (!text) {
         writeSse(res, { type: "DONE", ok: false, status: 0, body: "Nothing selected." });
@@ -130,14 +162,9 @@ const server = http.createServer(async (req, res) => {
         return;
       }
 
-      const abortCtrl = new AbortController();
-      res.on("close", () => { if (!res.writableEnded) abortCtrl.abort(); });
-      const timer = setTimeout(() => abortCtrl.abort(), TIMEOUT_MS);
-      const t0 = Date.now();
       const isIndex = bg.isIndexModelOrHost(model, DEFAULT_BASE);
-
-      try {
-        const reqBody = bg.attachIndexTemplateKwargs(
+      const buildBody = () =>
+        bg.attachIndexTemplateKwargs(
           {
             model,
             stream: true,
@@ -147,70 +174,31 @@ const server = http.createServer(async (req, res) => {
           model,
           DEFAULT_BASE
         );
-        const { res: upRes, via } = await openUpstreamStream(reqBody, abortCtrl.signal);
 
-        if (!upRes.ok) {
-          const errRaw = await upRes.text();
-          writeSse(res, { type: "DONE", ok: false, status: upRes.status, body: errRaw.slice(0, 1000), via });
-          res.end();
-          return;
-        }
-
-        const reader = upRes.body.getReader();
-        const decoder = new TextDecoder();
-        let sseBuf = "";
-        let full = "";
-
-        while (true) {
-          const { value, done } = await reader.read();
-          if (done) break;
-          sseBuf += decoder.decode(value, { stream: true });
-          const lines = sseBuf.split(/\r?\n/);
-          sseBuf = lines.pop() || "";
-
-          for (const line of lines) {
-            const trimmed = line.trim();
-            if (!trimmed.startsWith("data:")) continue;
-            const payload = trimmed.slice(5).trim();
-            if (!payload || payload === "[DONE]") continue;
-            try {
-              const j = JSON.parse(payload);
-              const delta = j?.choices?.[0]?.delta?.content || "";
-              if (delta) {
-                full += delta;
-                const visible = bg.stripThink(full);
-                if (visible) {
-                  writeSse(res, {
-                    type: "DELTA",
-                    text: visible,
-                    model,
-                    via,
-                    glossaryHits: hits.length,
-                    elapsedMs: Date.now() - t0
-                  });
-                }
-              }
-            } catch (_) {}
+      await proxyChatStream(res, "DONE", buildBody, async (upRes, via, elapsed) => {
+        const full = await bg.readChatContent(upRes, (partial) => {
+          const visible = bg.stripThink(partial);
+          if (visible) {
+            writeSse(res, {
+              type: "DELTA",
+              text: visible,
+              model,
+              via,
+              glossaryHits: hits.length,
+              elapsedMs: elapsed()
+            });
           }
-        }
+        });
 
         const clean = bg.stripThink(full);
         if (!clean) {
           writeSse(res, { type: "DONE", ok: false, status: 200, body: "Empty translation.", via });
-        } else {
-          const entry = { text: clean, model, via, glossaryHits: hits.length };
-          lruSet(translateMemCache, cacheKey, entry);
-          writeSse(res, { type: "DONE", ok: true, ...entry, elapsedMs: Date.now() - t0 });
+          return;
         }
-        res.end();
-      } catch (err) {
-        if (!res.writableEnded) {
-          writeSse(res, { type: "DONE", ok: false, status: 0, body: String((err && err.message) || err) });
-          res.end();
-        }
-      } finally {
-        clearTimeout(timer);
-      }
+        const entry = { text: clean, model, via, glossaryHits: hits.length };
+        lruSet(translateMemCache, cacheKey, entry);
+        writeSse(res, { type: "DONE", ok: true, ...entry, elapsedMs: elapsed() });
+      });
       return;
     }
 
@@ -223,11 +211,7 @@ const server = http.createServer(async (req, res) => {
       const glossary = String(msg.glossary || "");
       const bg = loadBg();
 
-      res.writeHead(200, {
-        "Content-Type": "text/event-stream; charset=utf-8",
-        "Cache-Control": "no-cache, no-transform",
-        Connection: "keep-alive"
-      });
+      openSse(res);
 
       if (items.length === 0) {
         writeSse(res, { type: "BATCH_DONE", ok: false, status: 0, body: "Empty batch." });
@@ -238,101 +222,50 @@ const server = http.createServer(async (req, res) => {
       const entries = bg.parseGlossary(glossary);
       const combined = items.join("\n");
       const batchHits = bg.matchGlossaryHits(entries, combined);
-      const abortCtrl = new AbortController();
-      res.on("close", () => { if (!res.writableEnded) abortCtrl.abort(); });
-      const timer = setTimeout(() => abortCtrl.abort(), TIMEOUT_MS);
-      const t0 = Date.now();
       const isIndex = bg.isIndexModelOrHost(model, DEFAULT_BASE);
-
-      try {
-        const messages =
-          items.length === 1
-            ? bg.buildTranslateMessages(items[0], target, model, DEFAULT_BASE, batchHits)
-            : bg.buildImmersiveBatchMessages(items, target, model, DEFAULT_BASE, batchHits);
-
-        const reqBody = bg.attachIndexTemplateKwargs(
+      const buildBody = () =>
+        bg.attachIndexTemplateKwargs(
           {
             model,
             stream: true,
             temperature: isIndex ? 0.0 : 0.2,
-            messages
+            messages:
+              items.length === 1
+                ? bg.buildTranslateMessages(items[0], target, model, DEFAULT_BASE, batchHits)
+                : bg.buildImmersiveBatchMessages(items, target, model, DEFAULT_BASE, batchHits)
           },
           model,
           DEFAULT_BASE
         );
-        const { res: upRes, via } = await openUpstreamStream(reqBody, abortCtrl.signal);
+      const parseBatch = (visible) =>
+        items.length === 1
+          ? { 0: visible.replace(/^\u3016P0\u3017\s*/, "").trim() }
+          : bg.parseAnchoredSegments(visible, items.length);
 
-        if (!upRes.ok) {
-          const errRaw = await upRes.text();
-          writeSse(res, { type: "BATCH_DONE", ok: false, status: upRes.status, body: errRaw.slice(0, 1000), via });
-          res.end();
-          return;
-        }
+      await proxyChatStream(res, "BATCH_DONE", buildBody, async (upRes, via, elapsed) => {
+        const full = await bg.readChatContent(upRes, (partial) => {
+          const visible = bg.stripThink(partial);
+          if (!visible) return;
+          writeSse(res, {
+            type: "BATCH_DELTA",
+            segments: parseBatch(visible),
+            model,
+            via,
+            glossaryHits: batchHits.length,
+            elapsedMs: elapsed()
+          });
+        });
 
-        const reader = upRes.body.getReader();
-        const decoder = new TextDecoder();
-        let sseBuf = "";
-        let full = "";
-
-        while (true) {
-          const { value, done } = await reader.read();
-          if (done) break;
-          sseBuf += decoder.decode(value, { stream: true });
-          const lines = sseBuf.split(/\r?\n/);
-          sseBuf = lines.pop() || "";
-
-          for (const line of lines) {
-            const trimmed = line.trim();
-            if (!trimmed.startsWith("data:")) continue;
-            const payload = trimmed.slice(5).trim();
-            if (!payload || payload === "[DONE]") continue;
-            try {
-              const j = JSON.parse(payload);
-              const delta = j?.choices?.[0]?.delta?.content || "";
-              if (delta) {
-                full += delta;
-                const visible = bg.stripThink(full);
-                if (!visible) continue;
-                const segments =
-                  items.length === 1
-                    ? { 0: visible.replace(/^\u3016P0\u3017\s*/, "").trim() }
-                    : bg.parseAnchoredSegments(visible, items.length);
-                writeSse(res, {
-                  type: "BATCH_DELTA",
-                  segments,
-                  model,
-                  via,
-                  glossaryHits: batchHits.length,
-                  elapsedMs: Date.now() - t0
-                });
-              }
-            } catch (_) {}
-          }
-        }
-
-        const clean = bg.stripThink(full);
-        const segments =
-          items.length === 1
-            ? { 0: clean.replace(/^\u3016P0\u3017\s*/, "").trim() }
-            : bg.parseAnchoredSegments(clean, items.length);
         writeSse(res, {
           type: "BATCH_DONE",
           ok: true,
-          segments,
+          segments: parseBatch(bg.stripThink(full)),
           model,
           via,
           glossaryHits: batchHits.length,
-          elapsedMs: Date.now() - t0
+          elapsedMs: elapsed()
         });
-        res.end();
-      } catch (err) {
-        if (!res.writableEnded) {
-          writeSse(res, { type: "BATCH_DONE", ok: false, status: 0, body: String((err && err.message) || err) });
-          res.end();
-        }
-      } finally {
-        clearTimeout(timer);
-      }
+      });
       return;
     }
 
@@ -345,11 +278,7 @@ const server = http.createServer(async (req, res) => {
       const bg = loadBg();
       const model = bg.resolveStudyModel(msg.model || "Index-Translate-9B", msg.modelOverride);
 
-      res.writeHead(200, {
-        "Content-Type": "text/event-stream; charset=utf-8",
-        "Cache-Control": "no-cache, no-transform",
-        Connection: "keep-alive"
-      });
+      openSse(res);
 
       if (!text) {
         writeSse(res, { type: "DONE", ok: false, status: 0, body: "Nothing selected." });
@@ -367,13 +296,8 @@ const server = http.createServer(async (req, res) => {
         return;
       }
 
-      const abortCtrl = new AbortController();
-      res.on("close", () => { if (!res.writableEnded) abortCtrl.abort(); });
-      const timer = setTimeout(() => abortCtrl.abort(), TIMEOUT_MS);
-      const t0 = Date.now();
-
-      try {
-        const reqBody = bg.attachIndexTemplateKwargs(
+      const buildBody = () =>
+        bg.attachIndexTemplateKwargs(
           {
             model,
             stream: true,
@@ -384,98 +308,38 @@ const server = http.createServer(async (req, res) => {
           model,
           DEFAULT_BASE
         );
-        const { res: upRes, via } = await openUpstreamStream(reqBody, abortCtrl.signal);
 
-        if (!upRes.ok) {
-          const errRaw = await upRes.text();
-          writeSse(res, { type: "DONE", ok: false, status: upRes.status, body: errRaw.slice(0, 1000), via });
-          res.end();
-          return;
-        }
-
-        const reader = upRes.body.getReader();
-        const decoder = new TextDecoder();
-        let sseBuf = "";
-        let full = "";
+      await proxyChatStream(res, "DONE", buildBody, async (upRes, via, elapsed) => {
         let lastSig = "";
-
-        while (true) {
-          const { value, done } = await reader.read();
-          if (done) break;
-          sseBuf += decoder.decode(value, { stream: true });
-          const lines = sseBuf.split(/\r?\n/);
-          sseBuf = lines.pop() || "";
-
-          for (const line of lines) {
-            const trimmed = line.trim();
-            if (!trimmed.startsWith("data:")) continue;
-            const payload = trimmed.slice(5).trim();
-            if (!payload || payload === "[DONE]") continue;
-            try {
-              const j = JSON.parse(payload);
-              const delta = j?.choices?.[0]?.delta?.content || "";
-              if (delta) {
-                full += delta;
-                const partial = bg.extractPartialStudyDeck(full, text);
-                if (partial) {
-                  const sig = partial.grammarNote.length + ":" + partial.cards.length;
-                  if (sig !== lastSig) {
-                    lastSig = sig;
-                    writeSse(res, {
-                      type: "PARTIAL",
-                      deck: partial,
-                      model,
-                      via,
-                      elapsedMs: Date.now() - t0
-                    });
-                  }
-                  if (partial.cards.length >= 4) {
-                    try { await reader.cancel(); } catch (_) {}
-                    const cappedDeck = {
-                      mode: partial.mode,
-                      sourceLang: partial.sourceLang,
-                      grammarNote: partial.grammarNote,
-                      cards: partial.cards
-                    };
-                    const entry = { deck: cappedDeck, model, via };
-                    lruSet(studyMemCache, cacheKey, entry);
-                    writeSse(res, {
-                      type: "DONE",
-                      ok: true,
-                      ...entry,
-                      elapsedMs: Date.now() - t0
-                    });
-                    res.end();
-                    return;
-                  }
-                }
-              }
-            } catch (_) {}
+        let cappedDeck = null;
+        const full = await bg.readChatContent(upRes, (partial) => {
+          const deck = bg.extractPartialStudyDeck(partial, text);
+          if (!deck) return;
+          const sig = deck.grammarNote.length + ":" + deck.cards.length;
+          if (sig !== lastSig) {
+            lastSig = sig;
+            writeSse(res, { type: "PARTIAL", deck, model, via, elapsedMs: elapsed() });
           }
-        }
+          if (deck.cards.length >= 4) {
+            cappedDeck = {
+              mode: deck.mode,
+              sourceLang: deck.sourceLang,
+              grammarNote: deck.grammarNote,
+              cards: deck.cards
+            };
+            return false;
+          }
+        });
 
-        const finalDeck = bg.parseStudyCardJson(full, text);
+        const finalDeck = cappedDeck || bg.parseStudyCardJson(full, text);
         if (!finalDeck) {
           writeSse(res, { type: "DONE", ok: false, status: 200, body: "Empty study card response.", via });
-        } else {
-          const entry = { deck: finalDeck, model, via };
-          lruSet(studyMemCache, cacheKey, entry);
-          writeSse(res, {
-            type: "DONE",
-            ok: true,
-            ...entry,
-            elapsedMs: Date.now() - t0
-          });
+          return;
         }
-        res.end();
-      } catch (err) {
-        if (!res.writableEnded) {
-          writeSse(res, { type: "DONE", ok: false, status: 0, body: String((err && err.message) || err) });
-          res.end();
-        }
-      } finally {
-        clearTimeout(timer);
-      }
+        const entry = { deck: finalDeck, model, via };
+        lruSet(studyMemCache, cacheKey, entry);
+        writeSse(res, { type: "DONE", ok: true, ...entry, elapsedMs: elapsed() });
+      });
       return;
     }
 
@@ -488,11 +352,7 @@ const server = http.createServer(async (req, res) => {
       const bg = loadBg();
       const model = bg.resolveVisionModel(msg.visionModel || "Index-Translate-35B-A3B", msg.modelOverride);
 
-      res.writeHead(200, {
-        "Content-Type": "text/event-stream; charset=utf-8",
-        "Cache-Control": "no-cache, no-transform",
-        Connection: "keep-alive"
-      });
+      openSse(res);
 
       if (!dataUrl.startsWith("data:image/")) {
         writeSse(res, { type: "DONE", ok: false, status: 0, body: "Invalid image payload." });
@@ -508,13 +368,8 @@ const server = http.createServer(async (req, res) => {
         return;
       }
 
-      const abortCtrl = new AbortController();
-      res.on("close", () => { if (!res.writableEnded) abortCtrl.abort(); });
-      const timer = setTimeout(() => abortCtrl.abort(), TIMEOUT_MS);
-      const t0 = Date.now();
-
-      try {
-        const reqBody = bg.attachIndexTemplateKwargs(
+      const buildBody = () =>
+        bg.attachIndexTemplateKwargs(
           {
             model,
             stream: true,
@@ -525,81 +380,42 @@ const server = http.createServer(async (req, res) => {
           model,
           DEFAULT_BASE
         );
-        const { res: upRes, via } = await openUpstreamStream(reqBody, abortCtrl.signal);
 
-        if (!upRes.ok) {
-          const errRaw = await upRes.text();
-          writeSse(res, { type: "DONE", ok: false, status: upRes.status, body: errRaw.slice(0, 1000), via });
-          res.end();
-          return;
-        }
-
-        const reader = upRes.body.getReader();
-        const decoder = new TextDecoder();
-        let sseBuf = "";
-        let full = "";
+      await proxyChatStream(res, "DONE", buildBody, async (upRes, via, elapsed) => {
         let lastShown = "";
-
-        while (true) {
-          const { value, done } = await reader.read();
-          if (done) break;
-          sseBuf += decoder.decode(value, { stream: true });
-          const lines = sseBuf.split(/\r?\n/);
-          sseBuf = lines.pop() || "";
-
-          for (const line of lines) {
-            const trimmed = line.trim();
-            if (!trimmed.startsWith("data:")) continue;
-            const payload = trimmed.slice(5).trim();
-            if (!payload || payload === "[DONE]") continue;
-            try {
-              const j = JSON.parse(payload);
-              const delta = j?.choices?.[0]?.delta?.content || "";
-              if (delta) {
-                full += delta;
-                const parsed = bg.parseVisionDualOutput(full);
-                if (parsed.translation && parsed.translation !== lastShown) {
-                  lastShown = parsed.translation;
-                  writeSse(res, {
-                    type: "DELTA",
-                    text: parsed.translation,
-                    sourceText: parsed.sourceText,
-                    model,
-                    via,
-                    vision: true,
-                    elapsedMs: Date.now() - t0
-                  });
-                }
-              }
-            } catch (_) {}
+        const full = await bg.readChatContent(upRes, (partial) => {
+          const parsed = bg.parseVisionDualOutput(partial);
+          if (parsed.translation && parsed.translation !== lastShown) {
+            lastShown = parsed.translation;
+            writeSse(res, {
+              type: "DELTA",
+              text: parsed.translation,
+              sourceText: parsed.sourceText,
+              model,
+              via,
+              vision: true,
+              elapsedMs: elapsed()
+            });
           }
-        }
+        });
 
         const finalParsed = bg.parseVisionDualOutput(full);
         if (!finalParsed.translation) {
           writeSse(res, { type: "DONE", ok: false, status: 200, body: "No readable text found in image.", via });
-        } else {
-          const hits = finalParsed.sourceText ? bg.matchGlossaryHits(glossary, finalParsed.sourceText).length : 0;
-          const entry = {
-            text: finalParsed.translation,
-            sourceText: finalParsed.sourceText,
-            model,
-            via,
-            vision: true,
-            glossaryHits: hits
-          };
-          lruSet(visionMemCache, cacheKey, entry);
-          writeSse(res, { type: "DONE", ok: true, ...entry, elapsedMs: Date.now() - t0 });
+          return;
         }
-        res.end();
-      } catch (err) {
-        if (!res.writableEnded) {
-          writeSse(res, { type: "DONE", ok: false, status: 0, body: String((err && err.message) || err) });
-          res.end();
-        }
-      } finally {
-        clearTimeout(timer);
-      }
+        const hits = finalParsed.sourceText ? bg.matchGlossaryHits(glossary, finalParsed.sourceText).length : 0;
+        const entry = {
+          text: finalParsed.translation,
+          sourceText: finalParsed.sourceText,
+          model,
+          via,
+          vision: true,
+          glossaryHits: hits
+        };
+        lruSet(visionMemCache, cacheKey, entry);
+        writeSse(res, { type: "DONE", ok: true, ...entry, elapsedMs: elapsed() });
+      });
       return;
     }
 

@@ -991,6 +991,83 @@ async function callChatCompletion(messages, s, temperature = 0.0, activeModel = 
   return { ok: true, content: stripThink(content), model: model, via: via };
 }
 
+async function readCompletionContent(res) {
+  const j = JSON.parse(await res.text());
+  return (j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content) || "";
+}
+
+// Returns the raw completion text. For SSE responses onText receives the accumulated text after each
+// delta; returning false from onText cancels the rest of the stream.
+async function readChatContent(res, onText) {
+  const ctype = String(res.headers.get("content-type") || "").toLowerCase();
+  if (!ctype.includes("event-stream") || !res.body) return readCompletionContent(res);
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let sseBuf = "";
+  let full = "";
+
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) return full;
+    sseBuf += decoder.decode(value, { stream: true });
+    const lines = sseBuf.split(/\r?\n/);
+    sseBuf = lines.pop() || "";
+
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed.startsWith("data:")) continue;
+      const payload = trimmed.slice(5).trim();
+      if (!payload || payload === "[DONE]") continue;
+      let keepReading = true;
+      try {
+        const chunkObj = JSON.parse(payload);
+        const delta = (chunkObj.choices && chunkObj.choices[0] && chunkObj.choices[0].delta && chunkObj.choices[0].delta.content) || "";
+        if (delta) {
+          full += delta;
+          if (typeof onText === "function") keepReading = onText(full) !== false;
+        }
+      } catch (_) {}
+      if (!keepReading) {
+        try { await reader.cancel(); } catch (_) {}
+        return full;
+      }
+    }
+  }
+}
+
+// Shared lifecycle of the streaming paths: timeout, caller abort, route choice and HTTP errors.
+async function runChatStream(s, base, body, externalSignal, handleResponse) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+  const onAbort = () => controller.abort();
+  if (externalSignal) {
+    if (externalSignal.aborted) controller.abort();
+    else externalSignal.addEventListener("abort", onAbort, { once: true });
+  }
+
+  try {
+    const relay = stripSlashes(s.proxy);
+    const via = relay ? "relay" : "direct";
+    const res = await openChatStream(relay || base, s.key, body, controller.signal);
+
+    if (!res.ok) {
+      const errRaw = await res.text();
+      return { ok: false, status: res.status, body: errRaw.slice(0, MAX_ERROR_BODY), via: via };
+    }
+
+    return await handleResponse(res, via);
+  } catch (err) {
+    if (externalSignal && externalSignal.aborted) {
+      return { ok: false, cancelled: true, status: 0, body: "Cancelled" };
+    }
+    return { ok: false, status: 0, body: String((err && err.message) || err) };
+  } finally {
+    clearTimeout(timer);
+    if (externalSignal) externalSignal.removeEventListener("abort", onAbort);
+  }
+}
+
 async function streamTranslation(text, onDelta, externalSignal) {
   text = String(text || "").trim();
   if (!text) return { ok: false, status: 0, body: "Nothing to translate." };
@@ -1019,80 +1096,20 @@ async function streamTranslation(text, onDelta, externalSignal) {
     base
   );
 
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
-  const onAbort = () => controller.abort();
-  if (externalSignal) {
-    if (externalSignal.aborted) controller.abort();
-    else externalSignal.addEventListener("abort", onAbort, { once: true });
-  }
-
-  try {
-    const relay = stripSlashes(s.proxy);
-    const via = relay ? "relay" : "direct";
-    const res = await openChatStream(relay || base, s.key, body, controller.signal);
-
-    if (!res.ok) {
-      const errRaw = await res.text();
-      return { ok: false, status: res.status, body: errRaw.slice(0, MAX_ERROR_BODY), via: via };
-    }
-
-    const ctype = String(res.headers.get("content-type") || "").toLowerCase();
-    if (!ctype.includes("event-stream") || !res.body) {
-      const raw = await res.text();
-      const j = JSON.parse(raw);
-      const content = stripThink((j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content) || "");
-      if (!content) return { ok: false, status: 200, body: "Empty translation.", via: via };
-      const out = { text: content, model: activeModel, via: via, glossaryHits: hits.length };
-      lruSet(volatileTranslateCache, cacheKey, out);
-      return { ok: true, ...out };
-    }
-
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder();
-    let sseBuf = "";
-    let full = "";
-
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      sseBuf += decoder.decode(value, { stream: true });
-      const lines = sseBuf.split(/\r?\n/);
-      sseBuf = lines.pop() || "";
-
-      for (const line of lines) {
-        const trimmed = line.trim();
-        if (!trimmed.startsWith("data:")) continue;
-        const payload = trimmed.slice(5).trim();
-        if (!payload || payload === "[DONE]") continue;
-        try {
-          const chunkObj = JSON.parse(payload);
-          const delta = (chunkObj.choices && chunkObj.choices[0] && chunkObj.choices[0].delta && chunkObj.choices[0].delta.content) || "";
-          if (delta) {
-            full += delta;
-            const visible = stripThink(full);
-            if (visible && typeof onDelta === "function") {
-              onDelta({ text: visible, model: activeModel, via: via, glossaryHits: hits.length });
-            }
-          }
-        } catch (_) {}
+  return runChatStream(s, base, body, externalSignal, async (res, via) => {
+    const raw = await readChatContent(res, (full) => {
+      const visible = stripThink(full);
+      if (visible && typeof onDelta === "function") {
+        onDelta({ text: visible, model: activeModel, via: via, glossaryHits: hits.length });
       }
-    }
+    });
 
-    const clean = stripThink(full);
+    const clean = stripThink(raw);
     if (!clean) return { ok: false, status: 200, body: "Empty translation.", via: via };
     const out = { text: clean, model: activeModel, via: via, glossaryHits: hits.length };
     lruSet(volatileTranslateCache, cacheKey, out);
     return { ok: true, ...out };
-  } catch (err) {
-    if (externalSignal && externalSignal.aborted) {
-      return { ok: false, cancelled: true, status: 0, body: "Cancelled" };
-    }
-    return { ok: false, status: 0, body: String((err && err.message) || err) };
-  } finally {
-    clearTimeout(timer);
-    if (externalSignal) externalSignal.removeEventListener("abort", onAbort);
-  }
+  });
 }
 
 async function streamVisionTranslation(imageDataUrl, modelOverride, onDelta, externalSignal) {
@@ -1122,84 +1139,23 @@ async function streamVisionTranslation(imageDataUrl, modelOverride, onDelta, ext
     base
   );
 
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
-  const onAbort = () => controller.abort();
-  if (externalSignal) {
-    if (externalSignal.aborted) controller.abort();
-    else externalSignal.addEventListener("abort", onAbort, { once: true });
-  }
-
-  try {
-    const relay = stripSlashes(s.proxy);
-    const via = relay ? "relay" : "direct";
-    const res = await openChatStream(relay || base, s.key, body, controller.signal);
-
-    if (!res.ok) {
-      const errRaw = await res.text();
-      return { ok: false, status: res.status, body: errRaw.slice(0, MAX_ERROR_BODY), via: via };
-    }
-
-    const ctype = String(res.headers.get("content-type") || "").toLowerCase();
-    if (!ctype.includes("event-stream") || !res.body) {
-      const raw = await res.text();
-      const j = JSON.parse(raw);
-      const content = (j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content) || "";
-      const parsed = parseVisionDualOutput(content);
-      if (!parsed.translation) return { ok: false, status: 200, body: "No readable text found in image.", via: via };
-      const hits = parsed.sourceText ? matchGlossaryHits(s.glossary, parsed.sourceText).length : 0;
-      const out = {
-        text: parsed.translation,
-        sourceText: parsed.sourceText,
-        model: activeModel,
-        via: via,
-        vision: true,
-        glossaryHits: hits
-      };
-      lruSet(volatileVisionCache, cacheKey, out);
-      return { ok: true, ...out };
-    }
-
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder();
-    let sseBuf = "";
-    let full = "";
+  return runChatStream(s, base, body, externalSignal, async (res, via) => {
     let lastShown = "";
-
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      sseBuf += decoder.decode(value, { stream: true });
-      const lines = sseBuf.split(/\r?\n/);
-      sseBuf = lines.pop() || "";
-
-      for (const line of lines) {
-        const trimmed = line.trim();
-        if (!trimmed.startsWith("data:")) continue;
-        const payload = trimmed.slice(5).trim();
-        if (!payload || payload === "[DONE]") continue;
-        try {
-          const chunkObj = JSON.parse(payload);
-          const delta = (chunkObj.choices && chunkObj.choices[0] && chunkObj.choices[0].delta && chunkObj.choices[0].delta.content) || "";
-          if (delta) {
-            full += delta;
-            const parsed = parseVisionDualOutput(full);
-            if (parsed.translation && parsed.translation !== lastShown && typeof onDelta === "function") {
-              lastShown = parsed.translation;
-              onDelta({
-                text: parsed.translation,
-                sourceText: parsed.sourceText,
-                model: activeModel,
-                via: via,
-                vision: true
-              });
-            }
-          }
-        } catch (_) {}
+    const raw = await readChatContent(res, (full) => {
+      const parsed = parseVisionDualOutput(full);
+      if (parsed.translation && parsed.translation !== lastShown && typeof onDelta === "function") {
+        lastShown = parsed.translation;
+        onDelta({
+          text: parsed.translation,
+          sourceText: parsed.sourceText,
+          model: activeModel,
+          via: via,
+          vision: true
+        });
       }
-    }
+    });
 
-    const finalParsed = parseVisionDualOutput(full);
+    const finalParsed = parseVisionDualOutput(raw);
     if (!finalParsed.translation) {
       return { ok: false, status: 200, body: "No readable text found in image.", via: via };
     }
@@ -1214,15 +1170,7 @@ async function streamVisionTranslation(imageDataUrl, modelOverride, onDelta, ext
     };
     lruSet(volatileVisionCache, cacheKey, out);
     return { ok: true, ...out };
-  } catch (err) {
-    if (externalSignal && externalSignal.aborted) {
-      return { ok: false, cancelled: true, status: 0, body: "Cancelled" };
-    }
-    return { ok: false, status: 0, body: String((err && err.message) || err) };
-  } finally {
-    clearTimeout(timer);
-    if (externalSignal) externalSignal.removeEventListener("abort", onAbort);
-  }
+  });
 }
 
 async function streamImmersiveBatch(rawItems, modelOverride, onProgress, externalSignal) {
@@ -1283,24 +1231,12 @@ async function streamImmersiveBatch(rawItems, modelOverride, onProgress, externa
     base
   );
 
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
-  const onAbort = () => controller.abort();
-  if (externalSignal) {
-    if (externalSignal.aborted) controller.abort();
-    else externalSignal.addEventListener("abort", onAbort, { once: true });
-  }
+  const parseBatch = (visible) =>
+    uncachedTexts.length === 1
+      ? { 0: visible.replace(/^\u3016P0\u3017\s*/, "").trim() }
+      : parseAnchoredSegments(visible, uncachedTexts.length);
 
-  try {
-    const relay = stripSlashes(s.proxy);
-    const via = relay ? "relay" : "direct";
-    const res = await openChatStream(relay || base, s.key, body, controller.signal);
-
-    if (!res.ok) {
-      const errRaw = await res.text();
-      return { ok: false, status: res.status, body: errRaw.slice(0, MAX_ERROR_BODY), via: via };
-    }
-
+  return runChatStream(s, base, body, externalSignal, async (res, via) => {
     const applyParsedMap = (parsedSubMap, commitCache) => {
       let changed = false;
       for (let subIdx = 0; subIdx < uncachedIndices.length; subIdx++) {
@@ -1327,77 +1263,22 @@ async function streamImmersiveBatch(rawItems, modelOverride, onProgress, externa
       return changed;
     };
 
-    const ctype = String(res.headers.get("content-type") || "").toLowerCase();
-    if (!ctype.includes("event-stream") || !res.body) {
-      const raw = await res.text();
-      const j = JSON.parse(raw);
-      const content = stripThink((j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content) || "");
-      const parsedMap =
-        uncachedTexts.length === 1
-          ? { 0: content.replace(/^\u3016P0\u3017\s*/, "").trim() }
-          : parseAnchoredSegments(content, uncachedTexts.length);
-      applyParsedMap(parsedMap, true);
-      return { ok: true, segments: finalSegments, model: activeModel, via: via, glossaryHits: batchHits.length };
-    }
-
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder();
-    let sseBuf = "";
-    let full = "";
-
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      sseBuf += decoder.decode(value, { stream: true });
-      const lines = sseBuf.split(/\r?\n/);
-      sseBuf = lines.pop() || "";
-
-      for (const line of lines) {
-        const trimmed = line.trim();
-        if (!trimmed.startsWith("data:")) continue;
-        const payload = trimmed.slice(5).trim();
-        if (!payload || payload === "[DONE]") continue;
-        try {
-          const chunkObj = JSON.parse(payload);
-          const delta = (chunkObj.choices && chunkObj.choices[0] && chunkObj.choices[0].delta && chunkObj.choices[0].delta.content) || "";
-          if (delta) {
-            full += delta;
-            const visible = stripThink(full);
-            if (!visible) continue;
-            const parsedMap =
-              uncachedTexts.length === 1
-                ? { 0: visible.replace(/^\u3016P0\u3017\s*/, "").trim() }
-                : parseAnchoredSegments(visible, uncachedTexts.length);
-            if (applyParsedMap(parsedMap, false) && typeof onProgress === "function") {
-              onProgress({
-                segments: { ...finalSegments },
-                model: activeModel,
-                via: via,
-                glossaryHits: batchHits.length
-              });
-            }
-          }
-        } catch (_) {}
+    const raw = await readChatContent(res, (full) => {
+      const visible = stripThink(full);
+      if (!visible) return;
+      if (applyParsedMap(parseBatch(visible), false) && typeof onProgress === "function") {
+        onProgress({
+          segments: { ...finalSegments },
+          model: activeModel,
+          via: via,
+          glossaryHits: batchHits.length
+        });
       }
-    }
+    });
 
-    const clean = stripThink(full);
-    const finalParsed =
-      uncachedTexts.length === 1
-        ? { 0: clean.replace(/^\u3016P0\u3017\s*/, "").trim() }
-        : parseAnchoredSegments(clean, uncachedTexts.length);
-    applyParsedMap(finalParsed, true);
-
+    applyParsedMap(parseBatch(stripThink(raw)), true);
     return { ok: true, segments: finalSegments, model: activeModel, via: via, glossaryHits: batchHits.length };
-  } catch (err) {
-    if (externalSignal && externalSignal.aborted) {
-      return { ok: false, cancelled: true, status: 0, body: "Cancelled" };
-    }
-    return { ok: false, status: 0, body: String((err && err.message) || err) };
-  } finally {
-    clearTimeout(timer);
-    if (externalSignal) externalSignal.removeEventListener("abort", onAbort);
-  }
+  });
 }
 
 async function streamStudyCard(text, modelOverride, onPartial, externalSignal) {
@@ -1427,104 +1308,34 @@ async function streamStudyCard(text, modelOverride, onPartial, externalSignal) {
     base
   );
 
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
-  const onAbort = () => controller.abort();
-  if (externalSignal) {
-    if (externalSignal.aborted) controller.abort();
-    else externalSignal.addEventListener("abort", onAbort, { once: true });
-  }
-
-  try {
-    const relay = stripSlashes(s.proxy);
-    const via = relay ? "relay" : "direct";
-    const res = await openChatStream(relay || base, s.key, body, controller.signal);
-
-    if (!res.ok) {
-      const errRaw = await res.text();
-      return { ok: false, status: res.status, body: errRaw.slice(0, MAX_ERROR_BODY), via: via };
-    }
-
-    const ctype = String(res.headers.get("content-type") || "").toLowerCase();
-    if (!ctype.includes("event-stream") || !res.body) {
-      const raw = await res.text();
-      const j = JSON.parse(raw);
-      const content = (j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content) || "";
-      const deck = parseStudyCardJson(content, text);
-      if (!deck) return { ok: false, status: 200, body: "Empty study card response.", via: via };
-      lruSet(volatileStudyCache, cacheKey, { deck: deck, model: activeModel, via: via });
-      return { ok: true, deck: deck, model: activeModel, via: via };
-    }
-
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder();
-    let sseBuf = "";
-    let fullContent = "";
+  return runChatStream(s, base, body, externalSignal, async (res, via) => {
     let lastEmitSignature = "";
-
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      sseBuf += decoder.decode(value, { stream: true });
-      const lines = sseBuf.split(/\r?\n/);
-      sseBuf = lines.pop() || "";
-
-      for (const line of lines) {
-        const trimmed = line.trim();
-        if (!trimmed.startsWith("data:")) continue;
-        const payload = trimmed.slice(5).trim();
-        if (!payload || payload === "[DONE]") continue;
-        try {
-          const chunkObj = JSON.parse(payload);
-          const delta =
-            (chunkObj.choices &&
-              chunkObj.choices[0] &&
-              chunkObj.choices[0].delta &&
-              chunkObj.choices[0].delta.content) ||
-            "";
-          if (delta) {
-            fullContent += delta;
-            if (typeof onPartial === "function") {
-              const partial = extractPartialStudyDeck(fullContent, text);
-              if (partial) {
-                const sig = partial.grammarNote.length + ":" + partial.cards.length;
-                if (sig !== lastEmitSignature) {
-                  lastEmitSignature = sig;
-                  onPartial({ partial: true, deck: partial, model: activeModel, via: via });
-                }
-                if (partial.cards.length >= 4) {
-                  try { await reader.cancel(); } catch (_) {}
-                  const cappedDeck = {
-                    mode: partial.mode,
-                    sourceLang: partial.sourceLang,
-                    grammarNote: partial.grammarNote,
-                    cards: partial.cards
-                  };
-                  lruSet(volatileStudyCache, cacheKey, { deck: cappedDeck, model: activeModel, via: via });
-                  return { ok: true, deck: cappedDeck, model: activeModel, via: via };
-                }
-              }
-            }
-          }
-        } catch (_) {}
+    let cappedDeck = null;
+    const raw = await readChatContent(res, (full) => {
+      if (typeof onPartial !== "function") return;
+      const partial = extractPartialStudyDeck(full, text);
+      if (!partial) return;
+      const sig = partial.grammarNote.length + ":" + partial.cards.length;
+      if (sig !== lastEmitSignature) {
+        lastEmitSignature = sig;
+        onPartial({ partial: true, deck: partial, model: activeModel, via: via });
       }
-    }
+      if (partial.cards.length >= 4) {
+        cappedDeck = {
+          mode: partial.mode,
+          sourceLang: partial.sourceLang,
+          grammarNote: partial.grammarNote,
+          cards: partial.cards
+        };
+        return false;
+      }
+    });
 
-    const finalDeck = parseStudyCardJson(fullContent, text);
-    if (!finalDeck) {
-      return { ok: false, status: 200, body: "Empty study card response.", via: via };
-    }
-    lruSet(volatileStudyCache, cacheKey, { deck: finalDeck, model: activeModel, via: via });
-    return { ok: true, deck: finalDeck, model: activeModel, via: via };
-  } catch (err) {
-    if (externalSignal && externalSignal.aborted) {
-      return { ok: false, cancelled: true, status: 0, body: "Cancelled" };
-    }
-    return { ok: false, status: 0, body: String((err && err.message) || err) };
-  } finally {
-    clearTimeout(timer);
-    if (externalSignal) externalSignal.removeEventListener("abort", onAbort);
-  }
+    const deck = cappedDeck || parseStudyCardJson(raw, text);
+    if (!deck) return { ok: false, status: 200, body: "Empty study card response.", via: via };
+    lruSet(volatileStudyCache, cacheKey, { deck: deck, model: activeModel, via: via });
+    return { ok: true, deck: deck, model: activeModel, via: via };
+  });
 }
 
 async function translate(text) {
@@ -1888,6 +1699,7 @@ if (typeof module !== "undefined" && module.exports) {
     extractPartialStudyDeck,
     inferSourceLang,
     callChatCompletion,
+    readChatContent,
     streamTranslation,
     streamVisionTranslation,
     streamImmersiveBatch,
