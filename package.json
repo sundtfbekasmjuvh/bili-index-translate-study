@@ -1,0 +1,12 @@
+{
+  "name": "bili-index-translate-study",
+  "private": true,
+  "description": "Test tooling for the Bili Index Translate extension and sandbox.",
+  "scripts": {
+    "test": "node --test \"tests/**/*.test.js\"",
+    "test:e2e": "playwright test -c tests/e2e"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.64.1"
+  }
+}

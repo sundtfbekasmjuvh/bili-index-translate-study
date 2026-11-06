@@ -10,9 +10,10 @@ Built fresh in C# / .NET 8 (WPF for the card, UI Automation for reading selectio
 > state machine, placement math, translation client, vision and study-card parsers, cache, settings —
 > is covered by 123 passing unit tests. CI builds and tests every push and pull request on
 > `windows-latest`. On a Windows 11 desktop the app starts, registers its hotkeys, enforces a single
-> instance, opens Settings and exits cleanly from the tray. Selection reading, the popup, the snip
-> overlay and SAPI TTS have not been walked through yet; `docs/TESTING.md` lists what is verified
-> and what is still open.
+> instance, opens Settings and exits cleanly from the tray. Selection reading, the popup card, the
+> error card, cache hits, foreground and minimize dismissal and the unsupported-control path have
+> been walked through against a local mock endpoint; the snip overlay, SAPI TTS and Chromium itself
+> have not. `docs/TESTING.md` lists what is verified and what is still open.
 
 ## Run
 

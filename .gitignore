@@ -8,6 +8,8 @@
 !/bili-study-sandbox/
 !/tests/
 !/.github/
+!/package.json
+!/package-lock.json
 
 # Build output
 bin/
@@ -18,3 +20,6 @@ TestResults/
 .vs/
 *.user
 *.suo
+
+# Written by Chromium when the unpacked extension is loaded (e2e tests, chrome://extensions)
+/bili-index-translate/_metadata/
