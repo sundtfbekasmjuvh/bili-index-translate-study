@@ -90,7 +90,8 @@ public sealed class HttpTranslationTransport : ISseTranslationTransport, IDispos
                     var trimmed = line.Trim();
                     if (!trimmed.StartsWith("data:", StringComparison.Ordinal)) continue;
                     var data = trimmed[5..].Trim();
-                    if (data.Length > 0 && data != "[DONE]")
+                    if (data == "[DONE]") break; // anything after the terminator is not part of this completion
+                    if (data.Length > 0)
                         onDataLine(data);
                 }
                 return new TransportResponse(status, string.Empty, contentType);

@@ -51,15 +51,11 @@ function lruSet(map, key, val) {
   }
 }
 
-function fastStringHash(str) {
-  let h = 2166136261;
-  const s = String(str || "");
-  const step = Math.max(1, Math.floor(s.length / 512));
-  for (let i = 0; i < s.length; i += step) {
-    h ^= s.charCodeAt(i);
-    h = Math.imul(h, 16777619);
-  }
-  return (h >>> 0).toString(36) + ":" + s.length;
+// Cache keys must cover the whole input: a sampled hash lets two different images of equal length
+// share a key and return the wrong translation. Matches the desktop client's SHA-256 keys.
+async function sha256Hex(str) {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(String(str || "")));
+  return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
 function arrayBufferToBase64(buf) {
@@ -1018,7 +1014,12 @@ async function readChatContent(res, onText) {
       const trimmed = line.trim();
       if (!trimmed.startsWith("data:")) continue;
       const payload = trimmed.slice(5).trim();
-      if (!payload || payload === "[DONE]") continue;
+      if (!payload) continue;
+      if (payload === "[DONE]") {
+        // Anything after the terminator is not part of this completion.
+        try { await reader.cancel(); } catch (_) {}
+        return full;
+      }
       let keepReading = true;
       try {
         const chunkObj = JSON.parse(payload);
@@ -1121,7 +1122,7 @@ async function streamVisionTranslation(imageDataUrl, modelOverride, onDelta, ext
   const s = await getSettings();
   const activeModel = resolveVisionModel(s.visionModel, modelOverride);
   const base = stripSlashes(s.base);
-  const cacheKey = activeModel + "|" + s.target + "|" + base + "|" + fastStringHash(s.glossary) + "|" + fastStringHash(dataUrl);
+  const cacheKey = activeModel + "|" + s.target + "|" + base + "|" + (await sha256Hex(s.glossary)) + "|" + (await sha256Hex(dataUrl));
   const hit = lruGet(volatileVisionCache, cacheKey);
   if (hit) {
     return { ok: true, ...hit, cached: true };
