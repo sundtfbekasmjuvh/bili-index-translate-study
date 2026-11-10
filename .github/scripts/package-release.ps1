@@ -1,6 +1,6 @@
 # Builds the three release ZIPs and SHA256SUMS.txt into an empty output folder.
 # The extension ZIP holds the committed bili-index-translate/ folder; each desktop ZIP holds one
-# single-file BiliIndexTranslate.exe (framework-dependent, and self-contained with compression).
+# single-file BiliIndexTranslate.exe. All ZIPs include the committed LICENSE and NOTICE files.
 [CmdletBinding()]
 param(
   [string]$Tag = "",
@@ -15,6 +15,7 @@ $root = (Resolve-Path (Join-Path $PSScriptRoot "../..")).Path
 $extDir = Join-Path $root "bili-index-translate"
 $desktopDir = Join-Path $root "BiliIndexTranslate.Desktop"
 $appProject = Join-Path $desktopDir "src/BiliIndexTranslate.App/BiliIndexTranslate.App.csproj"
+$legalFiles = @("LICENSE", "NOTICE")
 
 function Invoke-Checked([string]$File, [string[]]$Arguments) {
   & $File @Arguments
@@ -28,10 +29,16 @@ if ($version -notmatch '^\d+\.\d+\.\d+$') { throw "manifest.json version '$versi
 if ($propsVersion -ne $version) { throw "Directory.Build.props Version '$propsVersion' does not match manifest.json '$version'" }
 if ($Tag -and $Tag -ne "v$version") { throw "Tag '$Tag' does not match version v$version" }
 
-$dirty = @(git -C $root status --porcelain -- "bili-index-translate" "BiliIndexTranslate.Desktop")
+$dirty = @(git -C $root status --porcelain -- "bili-index-translate" "BiliIndexTranslate.Desktop" "LICENSE" "NOTICE")
+if ($LASTEXITCODE -ne 0) { throw "Could not inspect the release source status" }
 if ($dirty.Count -gt 0) {
-  if ($Tag) { throw "Uncommitted changes under bili-index-translate/ or BiliIndexTranslate.Desktop/; build a release from a clean checkout" }
-  Write-Warning "Uncommitted changes found: the extension ZIP is taken from HEAD, the desktop build from the working tree"
+  if ($Tag) { throw "Uncommitted release source or license changes; build a release from a clean checkout" }
+  Write-Warning "Uncommitted changes found: extension and license files are taken from HEAD, the desktop build from the working tree"
+}
+
+$trackedLegal = @(git -C $root ls-tree --name-only HEAD -- @legalFiles)
+if ($LASTEXITCODE -ne 0 -or @(Compare-Object $legalFiles $trackedLegal).Count -gt 0) {
+  throw "LICENSE and NOTICE must both be committed before packaging"
 }
 
 if (-not [IO.Path]::IsPathRooted($OutDir)) { $OutDir = Join-Path $root $OutDir }
@@ -40,11 +47,37 @@ if ((Test-Path -LiteralPath $OutDir) -and (Get-ChildItem -LiteralPath $OutDir -F
 }
 $work = Join-Path $OutDir "work"
 New-Item -ItemType Directory -Force -Path $work | Out-Null
+$legalArchive = Join-Path $work "legal.zip"
+$legalDir = Join-Path $work "legal"
+Invoke-Checked "git" (@("-C", $root, "-c", "core.autocrlf=false", "-c", "core.eol=lf", "archive", "--format=zip", "-o", $legalArchive, "HEAD", "--") + $legalFiles)
+[IO.Compression.ZipFile]::ExtractToDirectory($legalArchive, $legalDir)
+
+function Add-LegalFiles([IO.Compression.ZipArchive]$Zip, [string]$Prefix = "") {
+  foreach ($file in $legalFiles) {
+    [void][IO.Compression.ZipFileExtensions]::CreateEntryFromFile($Zip, (Join-Path $legalDir $file), "$Prefix$file", [IO.Compression.CompressionLevel]::Optimal)
+  }
+}
+
+function Assert-LegalFiles([string]$ZipPath, [string]$Prefix = "") {
+  $zip = [IO.Compression.ZipFile]::OpenRead($ZipPath)
+  try {
+    foreach ($file in $legalFiles) {
+      $entry = $zip.GetEntry("$Prefix$file")
+      if ($null -eq $entry -or $entry.Length -eq 0) { throw "$ZipPath is missing a non-empty $Prefix$file" }
+      $reader = [IO.StreamReader]::new($entry.Open())
+      try { $actual = $reader.ReadToEnd() } finally { $reader.Dispose() }
+      if ($actual -cne [IO.File]::ReadAllText((Join-Path $legalDir $file))) { throw "$ZipPath contains an altered $Prefix$file" }
+    }
+  } finally {
+    $zip.Dispose()
+  }
+}
 
 function New-ExeZip([string]$ZipPath, [string]$Exe) {
   $zip = [IO.Compression.ZipFile]::Open($ZipPath, [IO.Compression.ZipArchiveMode]::Create)
   try {
     [void][IO.Compression.ZipFileExtensions]::CreateEntryFromFile($zip, $Exe, "BiliIndexTranslate.exe", [IO.Compression.CompressionLevel]::Optimal)
+    Add-LegalFiles $zip
   } finally {
     $zip.Dispose()
   }
@@ -67,6 +100,8 @@ foreach ($file in $referenced) {
 }
 $extZip = Join-Path $OutDir "bili-index-translate-chrome-v$version.zip"
 Invoke-Checked "git" @("-C", $root, "-c", "core.autocrlf=false", "-c", "core.eol=lf", "archive", "--format=zip", "-o", $extZip, "HEAD", "--", "bili-index-translate")
+$zip = [IO.Compression.ZipFile]::Open($extZip, [IO.Compression.ZipArchiveMode]::Update)
+try { Add-LegalFiles $zip "bili-index-translate/" } finally { $zip.Dispose() }
 
 $variants = @(
   [pscustomobject]@{
@@ -90,11 +125,14 @@ foreach ($variant in $variants) {
 }
 
 $actualExt = @(Get-ZipEntries $extZip | Sort-Object)
-$expectedExt = @(@("bili-index-translate/") + $tracked | Sort-Object)
+$expectedExt = @(@("bili-index-translate/") + $tracked + @($legalFiles | ForEach-Object { "bili-index-translate/$_" }) | Sort-Object)
 if (Compare-Object $actualExt $expectedExt) { throw "Extension ZIP entries differ from the committed files" }
+Assert-LegalFiles $extZip "bili-index-translate/"
 foreach ($variant in $variants) {
-  $entries = @(Get-ZipEntries (Join-Path $OutDir $variant.Zip))
-  if ($entries.Count -ne 1 -or $entries[0] -ne "BiliIndexTranslate.exe") { throw "$($variant.Zip) must contain only BiliIndexTranslate.exe" }
+  $zipPath = Join-Path $OutDir $variant.Zip
+  $entries = @(Get-ZipEntries $zipPath)
+  if (Compare-Object $entries (@("BiliIndexTranslate.exe") + $legalFiles)) { throw "$($variant.Zip) must contain BiliIndexTranslate.exe, LICENSE and NOTICE" }
+  Assert-LegalFiles $zipPath
 }
 $assets = @(Get-ChildItem -LiteralPath $OutDir -File -Filter "*.zip" | Sort-Object Name)
 $sums = $assets | ForEach-Object { (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant() + "  " + $_.Name }
