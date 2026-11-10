@@ -166,6 +166,37 @@ test("streamVisionTranslation 只在译文变化时推送, 结束时带原文并
   assert.equal(calls[0].body.messages[0].content[1].image_url.url.startsWith("data:image/png;base64,AAAA"), true);
 });
 
+test("streamTranslation 在 [DONE] 后停止读取并取消上游流", async () => {
+  reset();
+  const stats = {};
+  respond = () => sseResponse([delta("hello"), "data: [DONE]\n\n", delta("hello")], stats);
+  const res = await bg.streamTranslation(unique("hello"), () => {});
+  assert.equal(res.ok, true);
+  assert.equal(res.text, "hello");
+  assert.equal(stats.cancelled, true);
+});
+
+test("streamVisionTranslation 的缓存区分长度相同, 只在非抽样位置不同的图片", async () => {
+  reset();
+  // 旧的抽样哈希只读每 floor(len/512) 个字符, 两张图只在抽样点之间不同时会碰撞.
+  const prefix = "data:image/png;base64,";
+  const filler = "A".repeat(12000 - prefix.length);
+  const imageA = prefix + filler;
+  // 12000 / 512 取整为 23, 抽样下标为 0, 23, 46...; 下标 24 不在其中.
+  const imageB = imageA.slice(0, 24) + "B" + imageA.slice(25);
+  let n = 0;
+  respond = () => jsonResponse("\u3016\u8bd1\u6587\u3017图" + ++n);
+  const a = await bg.streamVisionTranslation(imageA, "", () => {});
+  const b = await bg.streamVisionTranslation(imageB, "", () => {});
+  assert.equal(a.text, "图1");
+  assert.equal(b.cached, undefined);
+  assert.equal(b.text, "图2");
+  assert.equal(calls.length, 2);
+  const again = await bg.streamVisionTranslation(imageA, "", () => {});
+  assert.equal(again.cached, true);
+  assert.equal(again.text, "图1");
+});
+
 test("streamVisionTranslation 解析 JSON 回退, 无可读文本时报错", async () => {
   reset();
   respond = () => jsonResponse("\u3016\u8bd1\u6587\u3017你好\u3016\u539f\u6587\u3017Hello");

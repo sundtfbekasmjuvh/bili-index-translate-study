@@ -2,6 +2,7 @@
 "use strict";
 
 const http = require("http");
+const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
 
@@ -32,6 +33,11 @@ function lruSet(map, k, v) {
   if (map.has(k)) map.delete(k);
   map.set(k, v);
   if (map.size > MEM_LIMIT) map.delete(map.keys().next().value);
+}
+
+// Hash the full glossary and image so entries of equal length never share a cache slot.
+function sha256Hex(str) {
+  return crypto.createHash("sha256").update(String(str || ""), "utf8").digest("hex");
 }
 
 function loadBg() {
@@ -360,7 +366,7 @@ const server = http.createServer(async (req, res) => {
         return;
       }
 
-      const cacheKey = `${model}|${target}|${glossary.length}:${dataUrl.length}:${dataUrl.slice(-64)}`;
+      const cacheKey = `${model}|${target}|${sha256Hex(glossary)}|${sha256Hex(dataUrl)}`;
       const hit = lruGet(visionMemCache, cacheKey);
       if (hit) {
         writeSse(res, { type: "DONE", ok: true, ...hit, cached: true, elapsedMs: 0 });

@@ -8,7 +8,7 @@ Built fresh in C# / .NET 8 (WPF for the card, UI Automation for reading selectio
 
 > **Status.** The code compiles cleanly on Windows (0 warnings) and the platform-independent core —
 > state machine, placement math, translation client, vision and study-card parsers, cache, settings —
-> is covered by 123 passing unit tests. CI builds and tests every push and pull request on
+> is covered by 124 passing unit tests. CI builds and tests every push and pull request on
 > `windows-latest`. On a Windows 11 desktop the app starts, registers its hotkeys, enforces a single
 > instance, opens Settings and exits cleanly from the tray. Selection reading, the popup card, the
 > error card, cache hits, foreground and minimize dismissal and the unsupported-control path have
