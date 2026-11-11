@@ -2,6 +2,7 @@
 
 // Local stand-in for the OpenAI-compatible upstream used by the sandbox and extension tests.
 // Replies are deterministic and derived from the prompt, so tests can assert exact output.
+// POST .../translate is a DeepLX-style endpoint: { text, source_lang, target_lang } -> { code, data }.
 const http = require("http");
 const fs = require("fs");
 const path = require("path");
@@ -191,7 +192,8 @@ async function startMockUpstream(options = {}) {
         return;
       }
     }
-    if (req.method !== "POST" || !url.pathname.endsWith("/chat/completions")) {
+    const isDeeplx = url.pathname.endsWith("/translate");
+    if (req.method !== "POST" || !(isDeeplx || url.pathname.endsWith("/chat/completions"))) {
       res.writeHead(404, { "Content-Type": "text/plain" });
       res.end("not found");
       return;
@@ -200,12 +202,13 @@ async function startMockUpstream(options = {}) {
     let raw = "";
     for await (const chunk of req) raw += chunk;
     const body = JSON.parse(raw || "{}");
-    const kind = classify(body);
+    const kind = isDeeplx ? "deeplx" : classify(body);
     const entry = {
       kind,
       path: url.pathname,
+      token: url.searchParams.get("token") || "",
       body,
-      source: sourceText(kind, body),
+      source: isDeeplx ? String(body.text || "") : sourceText(kind, body),
       authorization: req.headers.authorization || "",
       aborted: false,
       completed: false
@@ -221,6 +224,20 @@ async function startMockUpstream(options = {}) {
     if (override && override.status) {
       res.writeHead(override.status, { "Content-Type": override.contentType || "text/html; charset=utf-8" });
       res.end(override.body || "");
+      return;
+    }
+
+    if (isDeeplx) {
+      // Like a real DeepLX service, translate line by line and keep the line breaks.
+      const data =
+        override && typeof override.reply === "string"
+          ? override.reply
+          : entry.source.split("\n").map(translationOf).join("\n");
+      await sleep(delayMs);
+      if (res.destroyed) return;
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ code: 200, id: requests.length, data, source_lang: "EN", target_lang: body.target_lang }));
+      entry.completed = true;
       return;
     }
 

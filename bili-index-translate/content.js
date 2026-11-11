@@ -813,7 +813,7 @@
       const lSpan = document.createElement("span");
       lSpan.textContent = left;
       const rSpan = document.createElement("span");
-      rSpan.textContent = currentSourceText ? "S \u8bcd\u5361" : "";
+      rSpan.textContent = currentSourceText && res.studyCard !== false ? "S \u8bcd\u5361" : "";
       footEl.appendChild(lSpan);
       footEl.appendChild(rSpan);
     } else {
@@ -1728,6 +1728,7 @@
   let immViewMode = "bilingual"; // "bilingual" | "target-only"
   let immModelOverride = ""; // "" uses options immersiveModel (default 2B); toggles 2B <-> 9B
   let immResolvedModel = "Index-Translate-2B";
+  let immModelSwitch = true; // false when the backend has no model to choose (DeepLX API format)
   let immTargetLang = "中文";
   let immBar = null;
   let immStatusEl = null;
@@ -1839,6 +1840,7 @@
       }
     }
     if (immModelBtn) {
+      immModelBtn.style.display = immModelSwitch ? "" : "none";
       const m = immModelOverride || immResolvedModel || "Index-Translate-2B";
       const shortLabel = m.replace(/^Index-Translate-/i, "").replace(/-A3B$/i, "");
       immModelBtn.textContent = shortLabel;
@@ -2184,6 +2186,8 @@
         chrome.runtime.sendMessage({ type: "BILI_GET_IMMERSIVE_PREFS" }, (res) => {
           void (chrome.runtime && chrome.runtime.lastError);
           if (res && res.ok) {
+            immModelSwitch = res.modelSwitch !== false;
+            if (!immModelSwitch) immModelOverride = "";
             if (!immModelOverride && res.immersiveModel) immResolvedModel = res.immersiveModel;
             if (res.target) immTargetLang = res.target;
           }

@@ -4,6 +4,7 @@
 const DEFAULTS = {
   base: "https://index-translate.bilibili.com/v1",
   proxy: "",
+  apiType: "openai",
   model: "Index-Translate-9B",
   immersiveModel: "Index-Translate-2B",
   visionModel: "Index-Translate-35B-A3B",
@@ -64,8 +65,42 @@ function ensureSelectValue(select, val) {
   select.value = val;
 }
 
+// The model choices and the glossary only apply to chat models; a DeepLX endpoint ignores them.
+function syncApiTypeUi() {
+  const deeplx = $("apiType").value === "deeplx";
+  for (const id of ["model", "immersiveModel", "visionModel", "glossary"]) $(id).disabled = deeplx;
+  $("base").placeholder = deeplx ? "https://host/translate?token={apiKey}" : DEFAULTS.base;
+}
+
+// Catches an endpoint entered under the wrong API format. "blocking" marks a combination that cannot
+// work; the others are hints, because an unusual URL may still be what the user means.
+function endpointFormatMismatch(s) {
+  let path = "";
+  try {
+    path = new URL(s.proxy || s.base).pathname.replace(/\/+$/, "");
+  } catch (_) {}
+  if (s.apiType === "deeplx") {
+    return /\/chat\/completions$|\/v\d+$/i.test(path)
+      ? {
+          blocking: false,
+          text: "This URL looks like an OpenAI-compatible root. The DeepLX format needs the full translate URL (it usually ends in /translate)."
+        }
+      : null;
+  }
+  if (/\{\{?apiKey\}?\}/i.test(s.base + " " + s.proxy)) {
+    return {
+      blocking: true,
+      text: "The URL contains {apiKey}, which only the DeepLX API format fills in. Choose DeepLX-compatible or remove the placeholder."
+    };
+  }
+  return /\/translate$/i.test(path)
+    ? { blocking: false, text: "This URL looks like a DeepLX endpoint. If requests fail, set API format to DeepLX-compatible." }
+    : null;
+}
+
 function fillForm(s, localCfg) {
   $("base").value = s.base;
+  $("apiType").value = s.apiType === "deeplx" ? "deeplx" : "openai";
   $("proxy").value = s.proxy;
   $("key").value = s.key;
   $("target").value = s.target;
@@ -74,12 +109,14 @@ function fillForm(s, localCfg) {
   ensureSelectValue($("visionModel"), s.visionModel || DEFAULTS.visionModel);
   $("glossary").value = (localCfg && localCfg.glossary) || "";
   syncGlossaryBadge();
+  syncApiTypeUi();
 }
 
 function readForm() {
   return {
     sync: {
       base: stripSlashes($("base").value),
+      apiType: $("apiType").value === "deeplx" ? "deeplx" : "openai",
       proxy: stripSlashes($("proxy").value),
       model: $("model").value,
       immersiveModel: $("immersiveModel").value,
@@ -108,6 +145,11 @@ async function save() {
     setStatus("Relay prefix must be empty or an http(s) URL.", true);
     return null;
   }
+  const mismatch = endpointFormatMismatch(s);
+  if (mismatch && mismatch.blocking) {
+    setStatus(mismatch.text, true);
+    return null;
+  }
 
   const granted = await requestHostAccess([s.base, s.proxy]);
   await chrome.storage.sync.set(s);
@@ -117,8 +159,10 @@ async function save() {
   syncGlossaryBadge();
 
   if (granted) {
-    const rules = countGlossaryRules(l.glossary);
-    setStatus("Saved" + (rules > 0 ? " (" + rules + " glossary rules active)." : "."));
+    const rules = s.apiType === "deeplx" ? 0 : countGlossaryRules(l.glossary);
+    const saved = "Saved" + (rules > 0 ? " (" + rules + " glossary rules active)." : ".");
+    if (mismatch) setStatus(saved + "\n" + mismatch.text, true);
+    else setStatus(saved);
   } else {
     setStatus("Saved, but host access was declined - requests to that host may fail (CORS).", true);
   }
@@ -129,7 +173,7 @@ async function test() {
   const s = await save();
   if (!s) return;
 
-  setStatus("Testing " + s.model + " ...");
+  setStatus("Testing " + (s.apiType === "deeplx" ? "DeepLX" : s.model) + " ...");
   let res;
   try {
     res = await chrome.runtime.sendMessage({ type: "BILI_TRANSLATE", text: TEST_TEXT });
@@ -151,6 +195,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   fillForm(syncCfg, localCfg);
 
   $("glossary").addEventListener("input", syncGlossaryBadge);
+  $("apiType").addEventListener("change", syncApiTypeUi);
   $("form").addEventListener("submit", (e) => {
     e.preventDefault();
     save();

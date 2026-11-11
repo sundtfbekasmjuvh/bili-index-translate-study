@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using BiliIndexTranslate.Core.Translation;
 
 namespace BiliIndexTranslate.Core.Settings;
 
@@ -56,6 +57,7 @@ public sealed class AppSettings
     public List<string> ExcludedProcesses { get; set; } = new();
 
     // Service
+    public ApiFormat ApiFormat { get; set; } = ApiFormat.OpenAi;
     public string BaseUrl { get; set; } = DefaultBaseUrl;
     public string Model { get; set; } = DefaultModel;
     public string VisionModel { get; set; } = DefaultVisionModel;
@@ -113,6 +115,7 @@ public sealed class AppSettings
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
 
+        if (!Enum.IsDefined(ApiFormat)) ApiFormat = ApiFormat.OpenAi;
         BaseUrl = string.IsNullOrWhiteSpace(BaseUrl) ? DefaultBaseUrl : BaseUrl.Trim();
         Model = string.IsNullOrWhiteSpace(Model) ? DefaultModel : Model.Trim();
         VisionModel = string.IsNullOrWhiteSpace(VisionModel) ? DefaultVisionModel : VisionModel.Trim();
@@ -120,7 +123,8 @@ public sealed class AppSettings
         GlossaryText = string.IsNullOrWhiteSpace(GlossaryText)
             ? string.Empty
             : (GlossaryText.Length > 64000 ? GlossaryText[..64000] : GlossaryText).Replace("\r\n", "\n").Trim();
-        if (string.IsNullOrWhiteSpace(ApiKey)) ApiKey = DefaultApiKey;
+        // The built-in key belongs to the default service; a DeepLX endpoint that needs no token gets no key at all.
+        if (string.IsNullOrWhiteSpace(ApiKey)) ApiKey = ApiFormat == ApiFormat.Deeplx ? string.Empty : DefaultApiKey;
         Hotkey = string.IsNullOrWhiteSpace(Hotkey) ? "Alt+Q" : Hotkey.Trim();
         SnipHotkey = string.IsNullOrWhiteSpace(SnipHotkey) ? "Alt+Shift+S" : SnipHotkey.Trim();
 

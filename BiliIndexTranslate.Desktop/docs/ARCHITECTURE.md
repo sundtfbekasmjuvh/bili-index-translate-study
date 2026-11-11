@@ -9,8 +9,8 @@
 | Source-app tracking | `App/Tracking/SourceWindowTracker` | WinEvents filtered to the source pid (location, move/size, scrolling, minimize) + global foreground hook + 200 ms sanity tick. |
 | Selection geometry | `Core/Selection/SelectionAnchor`, `Core/Selection/PopupPlacer`, `Core/Geometry/*` | Physical pixels end to end; per-monitor scale only for gap/margins/limits. Pure functions, unit-tested. |
 | Popup lifecycle | `Core/Session/ReadingSession` (decides) + `App/AppHost` (executes) + `App/Popup/PopupPresenter` (window) | Event → effects state machine; every async thing carries an id. |
-| Translation requests | `Core/Translation/*` | `EndpointResolver`, `PromptBuilder`, `OpenAiCompatibleTranslator`, `HttpTranslationTransport`, `TranslationCoordinator`. |
-| Caching | `Core/Translation/TranslationCache` | LRU 500 / TTL 24 h, in-memory only. Key = text + target + model + effective endpoint + prompt version + source language. |
+| Translation requests | `Core/Translation/*` | `EndpointResolver`, `PromptBuilder`, `DeeplxProtocol`, `OpenAiCompatibleTranslator`, `HttpTranslationTransport`, `TranslationCoordinator`. |
+| Caching | `Core/Translation/TranslationCache` | LRU 500 / TTL 24 h, in-memory only. Key = text + target + model + effective endpoint + prompt version + source language. In the DeepLX format the model and the glossary are not part of the key, and the endpoint part is the URL as entered (the key is never in it). |
 | Settings | `Core/Settings/*`, `App/Native/DpapiSecretProtector`, `App/Settings/SettingsWindow` | JSON + DPAPI blob, tolerant load, clamped ranges, schema migration. |
 | Diagnostics | `Core/Diagnostics/*`, `App/Diagnostics/DiagnosticsWindow` | 300-entry ring buffer, p50/p95 per timing category, per-app compatibility registry. |
 | Tray / lifetime | `App/Tray/TrayIcon`, `App/Program`, `App/AppHost` | Single instance (mutex + named event), explicit shutdown, ordered disposal. |
@@ -83,3 +83,11 @@ Response text is read from `choices[0].message.content` (string or text-part arr
 JSON, missing/empty content and non-2xx statuses become concise errors with the route
 (direct/relay) attached; 412 carries a hint pointing at the relay setting. No retries, no automatic
 route changes, no logging of text or keys.
+
+DeepLX format (`apiFormat: Deeplx` in the settings file): `POST` to the endpoint exactly as entered,
+with `{apiKey}` replaced by the escaped key (then no `Authorization` header) or, without the
+placeholder, `Authorization: Bearer {key}`. Body `{"text", "source_lang", "target_lang"}`; the
+translation is `data`. A non-200 `code` inside a 200 response is reported as that HTTP error. There
+is no prompt, so the glossary is not applied, and Study Card and image translation fail with a
+configuration error before any request is sent. Otherwise the same rules: one request, no retries,
+no route changes.

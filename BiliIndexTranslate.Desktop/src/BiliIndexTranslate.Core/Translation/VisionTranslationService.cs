@@ -41,6 +41,9 @@ public sealed class VisionTranslationService
         CancellationToken ct,
         Action<ImageTranslationDelta>? onDelta = null)
     {
+        if (request.Format == ApiFormat.Deeplx)
+            throw new TranslationException(DeeplxProtocol.Unsupported("Image translation", request.UseRelay ? RequestRoute.Relay : RequestRoute.Direct));
+
         if (!EndpointResolver.TryResolve(request.BaseUrl, request.UseRelay, request.RelayPrefix, out var endpoint, out var cfgError))
             throw new TranslationException(new TranslationError(TranslationErrorKind.Configuration, cfgError ?? "Invalid endpoint.", request.UseRelay ? RequestRoute.Relay : RequestRoute.Direct));
 

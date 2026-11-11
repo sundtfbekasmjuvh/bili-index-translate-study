@@ -104,6 +104,10 @@ public sealed class SettingsStore
         {
             settings.ApiKey = plainKey;
         }
+        else if (protectedKey is { Length: 0 })
+        {
+            settings.ApiKey = string.Empty; // saved without a key; Normalize decides whether a default applies
+        }
         else if (protectedKey is not null)
         {
             var un = scheme == _protector.Scheme ? SafeUnprotect(protectedKey) : null;
@@ -125,7 +129,8 @@ public sealed class SettingsStore
     {
         settings.Normalize();
         var node = JsonSerializer.SerializeToNode(settings, JsonOptions) as JsonObject ?? new JsonObject();
-        node["apiKeyProtected"] = _protector.Protect(settings.ApiKey);
+        // An empty key (a DeepLX endpoint without a token) is stored as an empty value: there is nothing to protect.
+        node["apiKeyProtected"] = settings.ApiKey.Length == 0 ? string.Empty : _protector.Protect(settings.ApiKey);
         node["apiKeyScheme"] = _protector.Scheme;
 
         var dir = Path.GetDirectoryName(FilePath);

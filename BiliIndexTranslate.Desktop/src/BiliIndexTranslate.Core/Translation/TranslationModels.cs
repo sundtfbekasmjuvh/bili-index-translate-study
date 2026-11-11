@@ -25,11 +25,11 @@ public sealed record TranslationError(TranslationErrorKind Kind, string Message,
         TranslationErrorKind.Http when StatusCode == 412 && Route == RequestRoute.Relay =>
             "The relay was also rejected (412). Check the endpoint and key in Settings.",
         TranslationErrorKind.Http when StatusCode is 401 or 403 => "Check the API key in Settings → Service.",
-        TranslationErrorKind.Http when StatusCode == 404 => "Check the endpoint URL (base or full /chat/completions URL).",
+        TranslationErrorKind.Http when StatusCode == 404 => "Check the endpoint URL and API format in Settings → Service.",
         TranslationErrorKind.Http when StatusCode == 429 => "The service is rate limiting; wait a moment and retry.",
         TranslationErrorKind.Timeout => "The service did not answer in time. Retry, or try a smaller model.",
         TranslationErrorKind.Network => "Check the network connection or the endpoint URL.",
-        TranslationErrorKind.InvalidResponse => "The endpoint did not return a chat completion. Check the URL and relay settings.",
+        TranslationErrorKind.InvalidResponse => "The endpoint did not return the expected response. Check the URL, API format and relay settings.",
         TranslationErrorKind.Configuration => "Open Settings → Service to fix the configuration.",
         _ => null,
     };
@@ -47,7 +47,8 @@ public sealed record TranslationRequest(
     bool UseRelay,
     string RelayPrefix,
     string ApiKey,
-    string GlossaryText = "");
+    string GlossaryText = "",
+    ApiFormat Format = ApiFormat.OpenAi);
 
 public sealed record TranslationResult(string Translation, RequestRoute Route, double ElapsedMs, string Model, int GlossaryHitCount = 0);
 
@@ -60,7 +61,8 @@ public sealed record ImageTranslationRequest(
     bool UseRelay,
     string RelayPrefix,
     string ApiKey,
-    string GlossaryText = "");
+    string GlossaryText = "",
+    ApiFormat Format = ApiFormat.OpenAi);
 
 public sealed record ImageTranslationDelta(
     string Translation,
