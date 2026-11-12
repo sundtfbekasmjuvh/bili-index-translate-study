@@ -52,6 +52,8 @@ public sealed class AppSettings
     public string SourceLanguage { get; set; } = "auto";
     public double TextScale { get; set; } = 1.0;
     public ThemePreference Theme { get; set; } = ThemePreference.System;
+    /// <summary>Interface language: "auto" (the Windows display language), "en" or "zh-CN".</summary>
+    public string UiLanguage { get; set; } = Localization.InterfaceLanguage.Auto;
     public bool ShowOriginalByDefault { get; set; }
     public EditableFieldPolicy EditableFieldPolicy { get; set; } = EditableFieldPolicy.SkipSingleLineInputs;
     public List<string> ExcludedProcesses { get; set; } = new();
@@ -119,6 +121,7 @@ public sealed class AppSettings
         if (string.IsNullOrWhiteSpace(SourceLanguage)) SourceLanguage = "auto";
         TextScale = double.IsFinite(TextScale) ? Math.Clamp(Math.Round(TextScale, 2), 0.8, 1.6) : 1.0;
         if (!Enum.IsDefined(Theme)) Theme = ThemePreference.System;
+        UiLanguage = Localization.InterfaceLanguage.NormalizeSetting(UiLanguage);
         if (!Enum.IsDefined(EditableFieldPolicy)) EditableFieldPolicy = EditableFieldPolicy.SkipSingleLineInputs;
         ExcludedProcesses = (ExcludedProcesses ?? new List<string>())
             .Where(p => !string.IsNullOrWhiteSpace(p))

@@ -12,6 +12,7 @@
 | Translation requests | `Core/Translation/*` | `EndpointResolver`, `PromptBuilder`, `DeeplxProtocol`, `CustomApiProtocol`, `OpenAiCompatibleTranslator`, `HttpTranslationTransport`, `TranslationCoordinator`. |
 | Caching | `Core/Translation/TranslationCache` | LRU 500 / TTL 24 h, in-memory only. Key = text + target + model + effective endpoint + prompt version + source language. In the DeepLX format the model and the glossary are not part of the key, and the endpoint part is the URL as entered (the key is never in it). |
 | Settings | `Core/Settings/*`, `App/Native/DpapiSecretProtector`, `App/Settings/SettingsWindow` | JSON + DPAPI blob, tolerant load, clamped ranges, schema migration. |
+| Interface language | `Core/Localization/UiText`, `Core/Localization/InterfaceLanguage`, `App/Localization/Loc` | Text of both languages in one table with the same keys. XAML reads it through `{loc:Tr Key}`, a binding to `Loc`'s indexer, so open windows follow a language change; code uses `Loc.T` / `Loc.Bind`. A unit test checks that every key the app uses exists and that every key is used. |
 | Diagnostics | `Core/Diagnostics/*`, `App/Diagnostics/DiagnosticsWindow` | 300-entry ring buffer, p50/p95 per timing category, per-app compatibility registry. |
 | Tray / lifetime | `App/Tray/TrayIcon`, `App/Program`, `App/AppHost` | Single instance (mutex + named event), explicit shutdown, ordered disposal. |
 

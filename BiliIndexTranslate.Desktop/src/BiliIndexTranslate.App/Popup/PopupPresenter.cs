@@ -7,6 +7,7 @@ using BiliIndexTranslate.Core.Geometry;
 using BiliIndexTranslate.Core.Selection;
 using BiliIndexTranslate.Core.Study;
 using BiliIndexTranslate.Core.Translation;
+using BiliIndexTranslate.App.Localization;
 
 namespace BiliIndexTranslate.App.Popup;
 
@@ -310,7 +311,7 @@ internal sealed class PopupPresenter : IDisposable
         }
         catch (Exception ex)
         {
-            error = new TranslationError(TranslationErrorKind.Network, $"Unexpected error ({ex.GetType().Name}).", RequestRoute.Direct);
+            error = new TranslationError(TranslationErrorKind.Network, Loc.T("App_UnexpectedError", ex.GetType().Name), RequestRoute.Direct);
         }
 
         if (cts.IsCancellationRequested) return;

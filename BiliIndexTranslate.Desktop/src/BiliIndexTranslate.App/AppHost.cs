@@ -20,6 +20,7 @@ using BiliIndexTranslate.Core.Session;
 using BiliIndexTranslate.Core.Settings;
 using BiliIndexTranslate.Core.Study;
 using BiliIndexTranslate.Core.Translation;
+using BiliIndexTranslate.App.Localization;
 
 namespace BiliIndexTranslate.App;
 
@@ -128,6 +129,7 @@ internal sealed class AppHost : IDisposable
 
         var load = _store.Load();
         _settings = load.Settings;
+        Loc.Instance.Apply(_settings.UiLanguage);
         if (load.Note is not null) _log.Info("settings", load.Note);
         if (load.WasMigrated) { _log.Info("settings", "migrated to schema v2"); TrySave(); }
         ConfigureFileLogging(_settings.DiagnosticsFileLogging);
@@ -216,7 +218,7 @@ internal sealed class AppHost : IDisposable
         catch (Exception ex) { _log.Warn("app", $"activation event unavailable: {ex.GetType().Name}"); }
 
         if (!_hooks.HooksInstalled)
-            _tray.ShowNotice("Bili Index Translate", "Input hooks could not be installed; automatic translation will not work. See Diagnostics.", warning: true);
+            _tray.ShowNotice("Bili Index Translate", Loc.T("App_HooksFailed"), warning: true);
 
         _log.Info("app", $"ready · auto={_settings.AutoTranslate} delay={_settings.StabilizationDelayMs}ms target={_settings.TargetLanguage} model={_settings.Model} relay={_settings.UseRelay}");
         if (_forceWelcome || !_settings.OnboardingCompleted) OpenWelcome(force: false);
@@ -529,10 +531,10 @@ internal sealed class AppHost : IDisposable
     private string? Caption(SelectionSnapshot snapshot, RequestRoute? route, bool fromCache)
     {
         var parts = new List<string>(3);
-        if (fromCache) parts.Add("cached");
-        if (route == RequestRoute.Relay || (route is null && _settings.UseRelay)) parts.Add("relay");
-        if (snapshot.Origin == SelectionOrigin.Clipboard) parts.Add("clipboard");
-        else if (_anchorFromPointer) parts.Add("near pointer");
+        if (fromCache) parts.Add(Loc.T("Caption_Cached"));
+        if (route == RequestRoute.Relay || (route is null && _settings.UseRelay)) parts.Add(Loc.T("Caption_Relay"));
+        if (snapshot.Origin == SelectionOrigin.Clipboard) parts.Add(Loc.T("Caption_Clipboard"));
+        else if (_anchorFromPointer) parts.Add(Loc.T("Caption_NearPointer"));
         return parts.Count == 0 ? null : string.Join(" · ", parts);
     }
 
@@ -543,7 +545,7 @@ internal sealed class AppHost : IDisposable
         try
         {
             var result = await _translator.TranslateAsync(request, ct);
-            return (true, $"OK · {result.ElapsedMs:0} ms via {result.Route.ToString().ToLowerInvariant()} · “{Truncate(result.Translation, 40)}”");
+            return (true, Loc.T("App_TestOk", $"{result.ElapsedMs:0}", result.Route.ToString().ToLowerInvariant(), Truncate(result.Translation, 40)));
         }
         catch (TranslationException ex)
         {
@@ -643,7 +645,7 @@ internal sealed class AppHost : IDisposable
             return;
         }
 
-        _tray.ShowNotice("Bili Index Translate", "The clipboard has neither text nor an image.");
+        _tray.ShowNotice("Bili Index Translate", Loc.T("App_ClipboardEmpty"));
     }
 
     // ---- Zero-OCR Vision Screen Snip --------------------------------------------------------------
@@ -684,7 +686,7 @@ internal sealed class AppHost : IDisposable
 
         var target = _settings.ResolvedTargetLanguage;
         var visionModel = VisionPromptBuilder.ResolveVisionModel(_settings.VisionModel);
-        _popup.ShowLoading(snapshot, $"{visionModel} · 识图直译中…");
+        _popup.ShowLoading(snapshot, Loc.T("Vision_Loading", visionModel));
 
         var req = new ImageTranslationRequest(
             capture.DataUrl,
@@ -727,7 +729,7 @@ internal sealed class AppHost : IDisposable
                         var liveSnap = string.IsNullOrWhiteSpace(delta.ExtractedSourceText)
                             ? baseSnapshot
                             : baseSnapshot with { Text = delta.ExtractedSourceText };
-                        _popup.ShowVisionTranslation(liveSnap, delta.Translation, $"{delta.Model} · 识图流式中…");
+                        _popup.ShowVisionTranslation(liveSnap, delta.Translation, Loc.T("Vision_Streaming", delta.Model));
                     });
                 }).ConfigureAwait(false);
         }
@@ -741,7 +743,7 @@ internal sealed class AppHost : IDisposable
         }
         catch (Exception ex)
         {
-            error = new TranslationError(TranslationErrorKind.Network, $"Unexpected vision error ({ex.GetType().Name}).", RequestRoute.Direct);
+            error = new TranslationError(TranslationErrorKind.Network, Loc.T("App_UnexpectedVisionError", ex.GetType().Name), RequestRoute.Direct);
         }
 
         if (cts.IsCancellationRequested) return;
@@ -754,9 +756,9 @@ internal sealed class AppHost : IDisposable
             {
                 _log.Info("vision", $"ok via {ok.Route} {ok.ElapsedMs:0} ms ({ok.Model}), srcChars={ok.ExtractedSourceText.Length}");
                 var finalSnap = baseSnapshot with { Text = ok.ExtractedSourceText };
-                var glossaryPart = ok.GlossaryHitCount > 0 ? $" · 术语×{ok.GlossaryHitCount}" : string.Empty;
-                var speedPart = ok.IsCached ? " · ⚡瞬时" : $" · {ok.Route.ToString().ToLowerInvariant()}";
-                _popup.ShowVisionTranslation(finalSnap, ok.Translation, $"{ok.Model} · 识图{glossaryPart}{speedPart}");
+                var glossaryPart = ok.GlossaryHitCount > 0 ? " · " + Loc.T("Caption_Glossary", ok.GlossaryHitCount) : string.Empty;
+                var speedPart = ok.IsCached ? " · " + Loc.T("Caption_Instant") : $" · {ok.Route.ToString().ToLowerInvariant()}";
+                _popup.ShowVisionTranslation(finalSnap, ok.Translation, $"{ok.Model} · {Loc.T("Vision_Tag")}{glossaryPart}{speedPart}");
             }
             else if (error is not null && error.Kind != TranslationErrorKind.Cancelled)
             {
@@ -799,6 +801,7 @@ internal sealed class AppHost : IDisposable
         var previous = _settings;
         _settings = next.Normalize();
         var saveError = TrySave(notifySaveFailure);
+        Loc.Instance.Apply(_settings.UiLanguage);
 
         _session.Options = new SessionOptions(_settings.AutoTranslate, _settings.StabilizationDelayMs);
         _theme.Apply(_settings.Theme);
@@ -853,7 +856,7 @@ internal sealed class AppHost : IDisposable
         else
         {
             _log.Warn("hotkey", error + " Automatic translation is unaffected.");
-            _tray.ShowNotice("Shortcut unavailable", error + " Automatic translation still works; change the shortcut in Settings.", warning: true);
+            _tray.ShowNotice(Loc.T("App_ShortcutUnavailable"), Loc.T("App_ShortcutUnavailableHint", error), warning: true);
         }
         _settingsWindow?.SetHotkeyStatus(error);
     }
@@ -865,7 +868,7 @@ internal sealed class AppHost : IDisposable
         else
         {
             _log.Warn("hotkey", error);
-            _tray.ShowNotice("Snip shortcut unavailable", error + " You can still snip from the tray menu or change it in Settings.", warning: true);
+            _tray.ShowNotice(Loc.T("App_SnipShortcutUnavailable"), Loc.T("App_SnipShortcutUnavailableHint", error), warning: true);
         }
         _settingsWindow?.SetSnipHotkeyStatus(error);
     }
@@ -888,13 +891,13 @@ internal sealed class AppHost : IDisposable
         catch (Exception ex)
         {
             _log.Error("settings", $"save failed: {ex.GetType().Name}: {ex.Message}");
-            var reason = $"Settings were not saved ({ex.GetType().Name}: {ex.Message}). They stay in effect until the app exits.";
+            var reason = Loc.T("App_SettingsNotSavedReason", ex.GetType().Name, ex.Message);
             // The Settings window shows the reason itself. Other saves run in the background, so the tray says it,
             // once per run of failures. The tray does not exist yet during start-up; the log entry covers that case.
             if (notify && !_saveFailureShown && _tray is not null)
             {
                 _saveFailureShown = true;
-                _tray.ShowNotice("Settings not saved", reason, warning: true);
+                _tray.ShowNotice(Loc.T("App_SettingsNotSaved"), reason, warning: true);
             }
             return reason;
         }
@@ -958,7 +961,7 @@ internal sealed class AppHost : IDisposable
             return;
         }
         _welcomeWindow = new WelcomeWindow();
-        if (!_hooks.HooksInstalled) _welcomeWindow.SetWarning("Input hooks are unavailable on this system, so selections cannot be detected automatically. The fallback shortcut may still work.");
+        if (!_hooks.HooksInstalled) _welcomeWindow.SetWarning(Loc.T("App_HooksWarning"));
         _welcomeWindow.SettingsRequested += OpenSettings;
         _welcomeWindow.Finished += dontShow =>
         {

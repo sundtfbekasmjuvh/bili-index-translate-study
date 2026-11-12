@@ -5,6 +5,8 @@ using System.Windows.Media;
 using BiliIndexTranslate.App.Input;
 using BiliIndexTranslate.Core.Settings;
 using BiliIndexTranslate.Core.Translation;
+using BiliIndexTranslate.App.Localization;
+using BiliIndexTranslate.Core.Localization;
 
 namespace BiliIndexTranslate.App.Settings;
 
@@ -36,13 +38,15 @@ public partial class SettingsWindow : Window
     /// <summary>Shows a transient hotkey registration status from the host.</summary>
     public void SetHotkeyStatus(string? error)
     {
-        HotkeyStatus.Text = error ?? "Used when UI Automation cannot read a selection: the app sends one Ctrl+C and translates the copied text. Automatic translation never uses the clipboard.";
+        if (error is null) Loc.Bind(HotkeyStatus, TextBlock.TextProperty, "Settings_HotkeyHelp");
+        else HotkeyStatus.Text = error;
         HotkeyStatus.Foreground = error is null ? (Brush)FindResource("Ui.TextSecondary") : (Brush)FindResource("Ui.Error");
     }
 
     public void SetSnipHotkeyStatus(string? error)
     {
-        SnipHotkeyStatus.Text = error ?? "Captures the selected screen region strictly in RAM (zero temp files) and extracts source text for TTS & Study Card.";
+        if (error is null) Loc.Bind(SnipHotkeyStatus, TextBlock.TextProperty, "Settings_SnipHelp");
+        else SnipHotkeyStatus.Text = error;
         SnipHotkeyStatus.Foreground = error is null ? (Brush)FindResource("Ui.TextSecondary") : (Brush)FindResource("Ui.Error");
     }
 
@@ -55,11 +59,14 @@ public partial class SettingsWindow : Window
         TextScaleSlider.Value = s.TextScale;
         TextScaleLabel.Text = $"{s.TextScale * 100:0}%";
         ThemeBox.SelectedIndex = (int)s.Theme;
+        UiLanguageBox.SelectedIndex = s.UiLanguage switch { InterfaceLanguage.English => 1, InterfaceLanguage.SimplifiedChinese => 2, _ => 0 };
         EditablePolicyBox.SelectedIndex = (int)s.EditableFieldPolicy;
         ShowOriginalBox.IsChecked = s.ShowOriginalByDefault;
 
         ApiFormatBox.SelectedIndex = (int)s.ApiFormat;
-        CustomPresetBox.Items.Add(new ComboBoxItem { Content = "Load a preset…" });
+        var noPreset = new ComboBoxItem();
+        Loc.Bind(noPreset, ContentControl.ContentProperty, "Settings_LoadPreset");
+        CustomPresetBox.Items.Add(noPreset);
         foreach (var preset in CustomApiPreset.All)
             CustomPresetBox.Items.Add(new ComboBoxItem { Content = preset.DisplayName, Tag = preset.Id });
         CustomPresetBox.SelectedIndex = 0;
@@ -99,6 +106,7 @@ public partial class SettingsWindow : Window
         s.TargetLanguage = (TargetLanguageBox.SelectedItem as ComboBoxItem)?.Tag as string ?? "zh-Hans";
         s.TextScale = TextScaleSlider.Value;
         s.Theme = (ThemePreference)Math.Max(0, ThemeBox.SelectedIndex);
+        s.UiLanguage = UiLanguageBox.SelectedIndex switch { 1 => InterfaceLanguage.English, 2 => InterfaceLanguage.SimplifiedChinese, _ => InterfaceLanguage.Auto };
         s.EditableFieldPolicy = (EditableFieldPolicy)Math.Max(0, EditablePolicyBox.SelectedIndex);
         s.ShowOriginalByDefault = ShowOriginalBox.IsChecked == true;
 
@@ -139,10 +147,10 @@ public partial class SettingsWindow : Window
             error = templateError;
             return null;
         }
-        if (string.IsNullOrWhiteSpace(s.Model)) { error = "Choose a model."; return null; }
-        if (string.IsNullOrWhiteSpace(s.VisionModel)) { error = "Choose a vision model."; return null; }
-        if (s.SnipHotkeyEnabled && !HotkeyParser.TryParse(s.SnipHotkey, out _)) { error = "Snip shortcut must be like Alt+Shift+S, Ctrl+Shift+X or Win+F9."; return null; }
-        if (s.HotkeyEnabled && !HotkeyParser.TryParse(s.Hotkey, out _)) { error = "Shortcut must be like Alt+Q, Ctrl+Shift+T or Win+F8."; return null; }
+        if (string.IsNullOrWhiteSpace(s.Model)) { error = Loc.T("Settings_ChooseModel"); return null; }
+        if (string.IsNullOrWhiteSpace(s.VisionModel)) { error = Loc.T("Settings_ChooseVisionModel"); return null; }
+        if (s.SnipHotkeyEnabled && !HotkeyParser.TryParse(s.SnipHotkey, out _)) { error = Loc.T("Settings_SnipShortcutInvalid"); return null; }
+        if (s.HotkeyEnabled && !HotkeyParser.TryParse(s.Hotkey, out _)) { error = Loc.T("Settings_ShortcutInvalid"); return null; }
         s.Normalize();
         return s;
     }
@@ -165,15 +173,15 @@ public partial class SettingsWindow : Window
         _testCts?.Cancel();
         _testCts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
         SaveTestButton.IsEnabled = false;
-        ShowStatus(saveError is null ? "Saved. Testing the connection…" : "Not saved. Testing the connection…", isError: saveError is not null);
+        ShowStatus(Loc.T(saveError is null ? "Settings_SavedTesting" : "Settings_NotSavedTesting"), isError: saveError is not null);
         try
         {
             var (ok, message) = await _tester(s, _testCts.Token);
             if (saveError is null) ShowStatus(message, isError: !ok);
-            else ShowStatus($"{saveError} Connection test: {message}", isError: true);
+            else ShowStatus(Loc.T("Settings_SaveErrorWithTest", saveError, message), isError: true);
         }
-        catch (OperationCanceledException) { ShowStatus("Test cancelled.", isError: true); }
-        catch (Exception ex) { ShowStatus($"Test failed: {ex.GetType().Name}", isError: true); }
+        catch (OperationCanceledException) { ShowStatus(Loc.T("Settings_TestCancelled"), isError: true); }
+        catch (Exception ex) { ShowStatus(Loc.T("Settings_TestFailed", ex.GetType().Name), isError: true); }
         finally { SaveTestButton.IsEnabled = true; }
     }
 
@@ -225,7 +233,7 @@ public partial class SettingsWindow : Window
         EndpointBox.Text = preset.BaseUrl;
         ShowTemplate(preset.Template);
         CustomPresetBox.SelectedIndex = 0;
-        ShowStatus($"Preset loaded: {preset.Template.Label}. Check the endpoint, enter your API key, then save and test.", isError: false);
+        ShowStatus(Loc.T("Settings_PresetLoaded", preset.Template.Label), isError: false);
     }
 
     private void OnRelayToggled(object sender, RoutedEventArgs e)
@@ -241,14 +249,14 @@ public partial class SettingsWindow : Window
             ApiKeyPlainBox.Text = ApiKeyBox.Password;
             ApiKeyPlainBox.Visibility = Visibility.Visible;
             ApiKeyBox.Visibility = Visibility.Collapsed;
-            RevealKeyButton.Content = "Hide";
+            Loc.Bind(RevealKeyButton, ContentControl.ContentProperty, "Settings_Hide");
         }
         else
         {
             ApiKeyBox.Password = ApiKeyPlainBox.Text;
             ApiKeyBox.Visibility = Visibility.Visible;
             ApiKeyPlainBox.Visibility = Visibility.Collapsed;
-            RevealKeyButton.Content = "Show";
+            Loc.Bind(RevealKeyButton, ContentControl.ContentProperty, "Settings_Show");
         }
     }
 

@@ -8,7 +8,7 @@ Built fresh in C# / .NET 8 (WPF for the card, UI Automation for reading selectio
 
 > **Status.** The code compiles cleanly on Windows (0 warnings) and the platform-independent core —
 > state machine, placement math, translation client, vision and study-card parsers, cache, settings —
-> is covered by 225 passing unit tests. CI builds and tests every push and pull request on
+> is covered by 253 passing unit tests. CI builds and tests every push and pull request on
 > `windows-latest`. On a Windows 11 desktop the app starts, registers its hotkeys, enforces a single
 > instance, opens Settings and exits cleanly from the tray. Selection reading, the popup card, the
 > error card, cache hits, foreground and minimize dismissal and the unsupported-control path have
@@ -59,7 +59,10 @@ translates the copied text. Automatic mode never touches the clipboard.
 
 * **Reading** – automatic translation, target language (简体中文 / 繁體中文 / English / 日本語 / 한국어),
   text size, light/dark/system theme, editable-field policy (default: skip single-line inputs such
-  as address bars; multi-line editors are translated), show original by default.
+  as address bars; multi-line editors are translated), show original by default, interface language
+  (English or 简体中文; "Auto" follows the Windows display language). A change applies to open
+  windows and the tray menu as soon as it is saved. Error details from the translation core and
+  the diagnostics log stay in English.
 * **Service** – API format (OpenAI-compatible by default, DeepLX-compatible, or a custom JSON template, see below),
   endpoint (base URL *or* full `/chat/completions` URL; the suffix is never
   duplicated), API key (stored with DPAPI for your Windows account), model

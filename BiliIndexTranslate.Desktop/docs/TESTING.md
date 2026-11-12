@@ -7,7 +7,7 @@ Windows 11 Pro for Workstations (build 26200), .NET SDK 8.0.427, from the v1.4.0
 | Check | Result |
 |---|---|
 | `dotnet build BiliIndexTranslate.sln -c Release` | 0 errors, 0 warnings |
-| `dotnet test tests/BiliIndexTranslate.Core.Tests -c Release` | **225 passed, 0 failed** (session state machine, placement/anchoring, endpoint resolution, DeepLX format, custom API templates, response parsing, SSE transport, vision dual output, study cards, cache, coordinator races, settings load/migrate) |
+| `dotnet test tests/BiliIndexTranslate.Core.Tests -c Release` | **253 passed, 0 failed** (session state machine, placement/anchoring, endpoint resolution, DeepLX format, custom API templates, response parsing, SSE transport, vision dual output, study cards, cache, coordinator races, settings load/migrate, interface text in both languages) |
 | `dotnet publish … -r win-x64 --self-contained false` | `BiliIndexTranslate.exe` — PE32+ x64 GUI, version 1.4.0 embedded (864 KB folder) |
 | `dotnet publish … --self-contained true -p:PublishSingleFile=true` | single 139 MB exe produced |
 | Icon | `tools/make-icon.py` output inspected at 256 px |
@@ -103,6 +103,26 @@ endpoint, whose made-up shape (`{ q: [...], to }` with an `X-Api-Key` header →
 The very first request of step 5 took 10.6 s; the six requests after it, including the first
 request of the restarted process, took 28–134 ms. The cause was not found: proxy auto-detection is
 off on this machine and `127.*` is in the proxy bypass list. It did not happen again.
+
+### Interface language through the Settings window (2026-11-12)
+
+Same setup as the walkthroughs above (publish output outside the checkout, UI Automation, the
+user's `settings.json` backed up and restored with the same SHA-256). Windows display language
+`zh-CN`; the settings file had no `uiLanguage`. Started with `--welcome` so that a second window
+is open while the setting changes.
+
+| # | Step | Result |
+|---|---|---|
+| 1 | Start with a settings file that has no `uiLanguage` | ✅ Welcome window in Chinese (`安静的阅读伴侣`, buttons `设置…` / `开始阅读`): "Auto" follows the Windows language |
+| 2 | Open Settings | ✅ title `Bili Index Translate — 设置`, buttons `取消` / `保存` / `保存并测试`; `Interface language` lists `自动（跟随 Windows 语言）` (selected), `English`, `简体中文` |
+| 3 | Select English, **Save** | ✅ the file has `"uiLanguage": "en"`; the Welcome window, which stayed open, now reads `A quiet reading companion` / `Settings…` / `Start reading` |
+| 4 | Reopen Settings | ✅ title `Bili Index Translate — Settings`, `Cancel` / `Save` / `Save and test`, English selected, the shortcut help and the `Show` button in English; selecting another language changes nothing until it is saved |
+| 5 | Select 简体中文, **Save**, reopen Settings | ✅ `"uiLanguage": "zh-CN"`; Welcome and Settings in Chinese, including the help texts set from code (`在 UI Automation 读不到选中内容时使用…`) and the `显示` button |
+| 6 | Select Auto, **Save** | ✅ `"uiLanguage": "auto"`; Welcome stays Chinese |
+
+Not exercised live in either language: the tray menu, the translation popup, the Study Card, the
+screen-snip overlay and the Diagnostics window (their text goes through the same table and binding;
+the unit tests check that every key they use exists).
 
 ### Resource behaviour over 200 selections
 

@@ -1,6 +1,7 @@
 <Window x:Class="BiliIndexTranslate.App.Popup.PopupWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:loc="clr-namespace:BiliIndexTranslate.App.Localization"
         Title="Bili Index Translate"
         WindowStyle="None" AllowsTransparency="True" Background="Transparent"
         ResizeMode="NoResize" SizeToContent="WidthAndHeight"
@@ -9,7 +10,7 @@
         UseLayoutRounding="True" SnapsToDevicePixels="True"
         TextOptions.TextFormattingMode="Ideal" TextOptions.TextRenderingMode="ClearType"
         FontFamily="{StaticResource Popup.FontFamily}"
-        AutomationProperties.Name="Translation popup">
+        AutomationProperties.Name="{loc:Tr Popup_Aria}">
 
   <!-- Outer margin reserves room for the shadow; PopupPresenter subtracts it when placing the card. -->
   <Grid x:Name="Root" Margin="14">
@@ -34,20 +35,20 @@
         <!-- Loading -->
         <StackPanel x:Name="LoadingPanel" Grid.Row="0" Orientation="Horizontal" Visibility="Collapsed" Margin="0,2,0,2">
           <TextBlock x:Name="LoadingDots" Text="···" Foreground="{DynamicResource Popup.TextFaint}" FontSize="16" FontWeight="Bold" VerticalAlignment="Center" Margin="0,0,8,0" />
-          <TextBlock x:Name="LoadingText" Text="Translating" Foreground="{DynamicResource Popup.TextSecondary}" FontSize="12.5" VerticalAlignment="Center" />
+          <TextBlock x:Name="LoadingText" Text="{loc:Tr Popup_Translating}" Foreground="{DynamicResource Popup.TextSecondary}" FontSize="12.5" VerticalAlignment="Center" />
         </StackPanel>
 
         <!-- Error -->
         <StackPanel x:Name="ErrorPanel" Grid.Row="0" Visibility="Collapsed" Margin="0,2,0,4">
           <StackPanel Orientation="Horizontal">
             <TextBlock Text="&#xE7BA;" FontFamily="{StaticResource Icon.FontFamily}" FontSize="12" Foreground="{DynamicResource Popup.Error}" VerticalAlignment="Center" Margin="0,1,6,0" />
-            <TextBlock x:Name="ErrorTitle" Text="Translation failed" Foreground="{DynamicResource Popup.Error}" FontSize="12.5" FontWeight="SemiBold" VerticalAlignment="Center" />
+            <TextBlock x:Name="ErrorTitle" Text="{loc:Tr Popup_Failed}" Foreground="{DynamicResource Popup.Error}" FontSize="12.5" FontWeight="SemiBold" VerticalAlignment="Center" />
           </StackPanel>
           <TextBlock x:Name="ErrorMessage" Foreground="{DynamicResource Popup.Text}" FontSize="12.5" TextWrapping="Wrap" Margin="0,4,0,0" MaxWidth="360" />
           <TextBlock x:Name="ErrorHint" Foreground="{DynamicResource Popup.TextSecondary}" FontSize="11.5" TextWrapping="Wrap" Margin="0,3,0,0" MaxWidth="360" />
           <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
-            <Button x:Name="RetryButton" Style="{StaticResource TextActionButton}" Content="Retry" Click="OnRetryClick" />
-            <Button x:Name="OpenSettingsButton" Style="{StaticResource TextActionButton}" Content="Open settings" Click="OnSettingsClick" />
+            <Button x:Name="RetryButton" Style="{StaticResource TextActionButton}" Content="{loc:Tr Common_Retry}" Click="OnRetryClick" />
+            <Button x:Name="OpenSettingsButton" Style="{StaticResource TextActionButton}" Content="{loc:Tr Popup_OpenSettings}" Click="OnSettingsClick" />
           </StackPanel>
         </StackPanel>
 
@@ -57,7 +58,7 @@
                      Foreground="{DynamicResource Popup.Text}"
                      TextWrapping="Wrap"
                      LineStackingStrategy="BlockLineHeight"
-                     AutomationProperties.Name="Translation"
+                     AutomationProperties.Name="{loc:Tr Popup_TranslationAria}"
                      AutomationProperties.LiveSetting="Polite" />
         </ScrollViewer>
 
@@ -70,7 +71,7 @@
                      LineStackingStrategy="BlockLineHeight"
                      MaxHeight="140"
                      TextTrimming="CharacterEllipsis"
-                     AutomationProperties.Name="Original text" />
+                     AutomationProperties.Name="{loc:Tr Popup_OriginalAria}" />
         </StackPanel>
 
         <!-- Footer: caption on the left, study card trigger + hover controls on the right. -->
@@ -83,18 +84,18 @@
           <TextBlock x:Name="Caption" Grid.Column="0" Foreground="{DynamicResource Popup.TextFaint}" FontSize="11" VerticalAlignment="Center" FontFamily="{StaticResource Ui.FontFamily}" />
           <Button x:Name="StudyButton" Grid.Column="1" Style="{StaticResource TextActionButton}" Padding="7,2" Margin="6,0,2,0"
                   Visibility="Collapsed" VerticalAlignment="Center"
-                  ToolTip="打开伴随语言学习卡片（词根助记·常见搭配·双语例句·发音）"
-                  Click="OnStudyClick" AutomationProperties.Name="Open language study card">
+                  ToolTip="{loc:Tr Popup_StudyTip}"
+                  Click="OnStudyClick" AutomationProperties.Name="{loc:Tr Popup_StudyAria}">
             <StackPanel Orientation="Horizontal">
               <TextBlock Text="&#xE82D;" FontFamily="{StaticResource Icon.FontFamily}" FontSize="11" VerticalAlignment="Center" Margin="0,0,4,0" />
-              <TextBlock Text="学习卡片" FontSize="11" VerticalAlignment="Center" />
+              <TextBlock Text="{loc:Tr Popup_StudyLabel}" FontSize="11" VerticalAlignment="Center" />
             </StackPanel>
           </Button>
           <StackPanel x:Name="Controls" Grid.Column="2" Orientation="Horizontal" Opacity="0" VerticalAlignment="Center" Margin="2,0,-4,0">
-            <Button x:Name="OriginalButton" Style="{StaticResource IconButton}" Content="&#xE8D2;" ToolTip="Show original text" Click="OnOriginalClick" AutomationProperties.Name="Show original text" />
-            <Button x:Name="CopyButton" Style="{StaticResource IconButton}" Content="&#xE8C8;" ToolTip="Copy translation" Click="OnCopyClick" AutomationProperties.Name="Copy translation" />
-            <Button x:Name="PinButton" Style="{StaticResource IconButton}" Content="&#xE718;" ToolTip="Keep this translation open (pinned window)" Click="OnPinClick" AutomationProperties.Name="Keep open" />
-            <Button x:Name="CloseButton" Style="{StaticResource IconButton}" Content="&#xE711;" ToolTip="Close (Esc)" Click="OnCloseClick" AutomationProperties.Name="Close" />
+            <Button x:Name="OriginalButton" Style="{StaticResource IconButton}" Content="&#xE8D2;" ToolTip="{loc:Tr Popup_ShowOriginal}" Click="OnOriginalClick" AutomationProperties.Name="{loc:Tr Popup_ShowOriginal}" />
+            <Button x:Name="CopyButton" Style="{StaticResource IconButton}" Content="&#xE8C8;" ToolTip="{loc:Tr Popup_Copy}" Click="OnCopyClick" AutomationProperties.Name="{loc:Tr Popup_Copy}" />
+            <Button x:Name="PinButton" Style="{StaticResource IconButton}" Content="&#xE718;" ToolTip="{loc:Tr Popup_Pin}" Click="OnPinClick" AutomationProperties.Name="{loc:Tr Popup_PinAria}" />
+            <Button x:Name="CloseButton" Style="{StaticResource IconButton}" Content="&#xE711;" ToolTip="{loc:Tr Popup_Close}" Click="OnCloseClick" AutomationProperties.Name="{loc:Tr Common_Close}" />
           </StackPanel>
         </Grid>
       </Grid>

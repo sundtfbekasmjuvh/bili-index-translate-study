@@ -1,15 +1,16 @@
 <Window x:Class="BiliIndexTranslate.App.Diagnostics.DiagnosticsWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Bili Index Translate — Diagnostics"
+        xmlns:loc="clr-namespace:BiliIndexTranslate.App.Localization"
+        Title="{loc:Tr Diag_Title}"
         Style="{StaticResource UiWindow}"
         Width="720" Height="560" MinWidth="520" MinHeight="360"
         WindowStartupLocation="CenterScreen" ShowInTaskbar="True">
   <DockPanel Margin="14">
     <DockPanel DockPanel.Dock="Top" Margin="0,0,0,8">
       <StackPanel Orientation="Horizontal" DockPanel.Dock="Right">
-        <Button Style="{StaticResource SecondaryButton}" Content="Copy report" Click="OnCopyReport" Margin="0,0,6,0" />
-        <Button Style="{StaticResource SecondaryButton}" Content="Clear log" Click="OnClear" />
+        <Button Style="{StaticResource SecondaryButton}" Content="{loc:Tr Diag_CopyReport}" Click="OnCopyReport" Margin="0,0,6,0" />
+        <Button Style="{StaticResource SecondaryButton}" Content="{loc:Tr Diag_ClearLog}" Click="OnClear" />
       </StackPanel>
       <TextBlock x:Name="Summary" VerticalAlignment="Center" Foreground="{DynamicResource Ui.TextSecondary}" FontSize="12" TextWrapping="Wrap" />
     </DockPanel>
@@ -21,12 +22,12 @@
         <RowDefinition Height="*" />
       </Grid.RowDefinitions>
 
-      <Expander Grid.Row="0" Header="Timings (ms, last 128 samples)" IsExpanded="True" Margin="0,0,0,6">
+      <Expander Grid.Row="0" Header="{loc:Tr Diag_Timings}" IsExpanded="True" Margin="0,0,0,6">
         <TextBox x:Name="TimingsBox" IsReadOnly="True" FontFamily="{StaticResource Mono.FontFamily}" FontSize="12" BorderThickness="0"
                  Background="{DynamicResource Ui.Panel}" Foreground="{DynamicResource Ui.Text}" Padding="8" TextWrapping="NoWrap" />
       </Expander>
 
-      <Expander Grid.Row="1" Header="Applications seen this session" IsExpanded="True" Margin="0,0,0,6">
+      <Expander Grid.Row="1" Header="{loc:Tr Diag_Apps}" IsExpanded="True" Margin="0,0,0,6">
         <TextBox x:Name="AppsBox" IsReadOnly="True" FontFamily="{StaticResource Mono.FontFamily}" FontSize="12" BorderThickness="0" MaxHeight="140"
                  VerticalScrollBarVisibility="Auto" Background="{DynamicResource Ui.Panel}" Foreground="{DynamicResource Ui.Text}" Padding="8" TextWrapping="NoWrap" />
       </Expander>

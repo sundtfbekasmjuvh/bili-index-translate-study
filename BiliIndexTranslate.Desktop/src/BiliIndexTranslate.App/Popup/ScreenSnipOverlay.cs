@@ -4,6 +4,7 @@ using System.Drawing.Imaging;
 using System.IO;
 using System.Windows.Forms;
 using BiliIndexTranslate.Core.Geometry;
+using BiliIndexTranslate.App.Localization;
 
 namespace BiliIndexTranslate.App.Popup;
 
@@ -214,7 +215,7 @@ internal static class ScreenSnipOverlay
                     using var borderPen = new Pen(Color.FromArgb(255, 59, 130, 246), 2f);
                     g.DrawRectangle(borderPen, sel.X, sel.Y, sel.Width - 1, sel.Height - 1);
 
-                    var label = $"{sel.Width} × {sel.Height} px  ·  松开即识图直译";
+                    var label = Loc.T("Snip_Release", sel.Width, sel.Height);
                     DrawPill(g, label, sel.X, Math.Max(8, sel.Y - 30));
                 }
             }
@@ -224,7 +225,7 @@ internal static class ScreenSnipOverlay
                 var primary = Screen.PrimaryScreen?.Bounds ?? new Rectangle(0, 0, Width, Height);
                 var localCenterX = primary.Left - Left + primary.Width / 2;
                 var localTopY = primary.Top - Top + 28;
-                DrawPill(g, "拖拽框选屏幕任意图片 / 视频字幕 / 游戏界面直译 + 词卡  ·  Esc 取消", localCenterX - 210, localTopY);
+                DrawPill(g, Loc.T("Snip_Hint"), localCenterX - 210, localTopY);
             }
         }
 
