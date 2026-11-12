@@ -14,7 +14,8 @@ const DEFAULTS = {
   model: "Index-Translate-9B",
   immersiveModel: "Index-Translate-2B",
   visionModel: "Index-Translate-35B-A3B",
-  target: "中文"
+  target: "中文",
+  uiLang: "auto"
 };
 
 // chrome.storage.local: the API key stays on this device and is not synced to the browser account.
@@ -27,6 +28,37 @@ const TEST_TEXT = "The quick brown fox jumps over the lazy dog.";
 
 function $(id) {
   return document.getElementById(id);
+}
+
+// Interface language of this page: the saved setting, or what the language box currently shows.
+let uiLang = BiliI18n.resolveLang("auto");
+const englishPageText = new Map();
+
+function tr(key, ...args) {
+  return BiliI18n.translate(uiLang, key, ...args);
+}
+
+function normalizeUiLang(value) {
+  return BiliI18n.LANGS.includes(value) ? value : "auto";
+}
+
+// The English text is the markup of options.html. Another language replaces the content of every
+// element with a data-i18n key; going back to English restores the markup that was there at load.
+function applyPageLanguage(setting) {
+  uiLang = BiliI18n.resolveLang(setting);
+  document.documentElement.lang = uiLang;
+  const page = BiliI18n.PAGE_TEXT[uiLang] || {};
+  for (const el of document.querySelectorAll("[data-i18n]")) {
+    if (!englishPageText.has(el)) englishPageText.set(el, el.innerHTML);
+    const html = page[el.dataset.i18n];
+    el.innerHTML = html !== undefined ? html : englishPageText.get(el);
+  }
+  for (const el of document.querySelectorAll("[data-i18n-placeholder]")) {
+    if (!englishPageText.has(el)) englishPageText.set(el, el.placeholder);
+    const text = page[el.dataset.i18nPlaceholder];
+    el.placeholder = text !== undefined ? text : englishPageText.get(el);
+  }
+  syncGlossaryBadge();
 }
 
 function setStatus(text, isError) {
@@ -62,7 +94,7 @@ function countGlossaryRules(raw) {
 
 function syncGlossaryBadge() {
   const n = countGlossaryRules($("glossary").value);
-  $("glossaryCount").textContent = n + (n === 1 ? " rule" : " rules");
+  $("glossaryCount").textContent = n === 1 ? tr("opt.ruleOne") : tr("opt.ruleMany", n);
 }
 
 function ensureSelectValue(select, val) {
@@ -130,7 +162,7 @@ function applyCustomPreset(name) {
   $("base").value = preset.base;
   for (const id of CUSTOM_FIELDS) $(id).value = preset[id];
   syncApiTypeUi();
-  setStatus("Preset loaded: " + preset.customName + ". Check the URL, enter your API key, then press Save & test.");
+  setStatus(tr("opt.presetLoaded", preset.customName));
 }
 
 // Catches an endpoint entered under the wrong API format. "blocking" marks a combination that cannot
@@ -143,20 +175,14 @@ function endpointFormatMismatch(s) {
   } catch (_) {}
   if (s.apiType === "deeplx") {
     return /\/chat\/completions$|\/v\d+$/i.test(path)
-      ? {
-          blocking: false,
-          text: "This URL looks like an OpenAI-compatible root. The DeepLX format needs the full translate URL (it usually ends in /translate)."
-        }
+      ? { blocking: false, text: tr("opt.mismatchOpenAiRoot") }
       : null;
   }
   if (/\{\{?apiKey\}?\}/i.test(s.base + " " + s.proxy)) {
-    return {
-      blocking: true,
-      text: "The URL contains {apiKey}, which the OpenAI-compatible format does not fill in. Choose DeepLX-compatible or Custom JSON API, or remove the placeholder."
-    };
+    return { blocking: true, text: tr("opt.mismatchApiKey") };
   }
   return /\/translate$/i.test(path)
-    ? { blocking: false, text: "This URL looks like a DeepLX endpoint. If requests fail, set API format to DeepLX-compatible." }
+    ? { blocking: false, text: tr("opt.mismatchDeeplx") }
     : null;
 }
 
@@ -173,6 +199,8 @@ function fillForm(s, localCfg) {
   $("proxy").value = s.proxy;
   $("key").value = String((localCfg && localCfg.key) ?? "");
   $("target").value = s.target;
+  $("uiLang").value = normalizeUiLang(s.uiLang);
+  applyPageLanguage($("uiLang").value);
   ensureSelectValue($("model"), s.model || DEFAULTS.model);
   ensureSelectValue($("immersiveModel"), s.immersiveModel || DEFAULTS.immersiveModel);
   ensureSelectValue($("visionModel"), s.visionModel || DEFAULTS.visionModel);
@@ -196,7 +224,8 @@ function readForm() {
       model: $("model").value,
       immersiveModel: $("immersiveModel").value,
       visionModel: $("visionModel").value,
-      target: $("target").value.trim() || DEFAULTS.target
+      target: $("target").value.trim() || DEFAULTS.target,
+      uiLang: normalizeUiLang($("uiLang").value)
     },
     local: {
       glossary: $("glossary").value.replace(/\r\n/g, "\n").trim(),
@@ -213,11 +242,11 @@ function requestHostAccess(urls) {
 async function save() {
   const { sync: s, local: l } = readForm();
   if (!isHttpUrl(s.base)) {
-    setStatus("Base URL must be an http(s) URL.", true);
+    setStatus(tr("opt.baseInvalid"), true);
     return null;
   }
   if (s.proxy && !isHttpUrl(s.proxy)) {
-    setStatus("Relay prefix must be empty or an http(s) URL.", true);
+    setStatus(tr("opt.proxyInvalid"), true);
     return null;
   }
   const mismatch = endpointFormatMismatch(s);
@@ -243,11 +272,11 @@ async function save() {
 
   if (granted) {
     const rules = s.apiType === "openai" ? countGlossaryRules(l.glossary) : 0;
-    const saved = "Saved" + (rules > 0 ? " (" + rules + " glossary rules active)." : ".");
+    const saved = rules > 0 ? tr("opt.savedRules", rules) : tr("opt.saved");
     if (mismatch) setStatus(saved + "\n" + mismatch.text, true);
     else setStatus(saved);
   } else {
-    setStatus("Saved, but host access was declined - requests to that host may fail (CORS).", true);
+    setStatus(tr("opt.savedNoHost"), true);
   }
   return s;
 }
@@ -257,7 +286,7 @@ async function test() {
   if (!s) return;
 
   const label = s.apiType === "deeplx" ? "DeepLX" : s.apiType === "custom" ? s.customName || "Custom API" : s.model;
-  setStatus("Testing " + label + " ...");
+  setStatus(tr("opt.testing", label));
   let res;
   try {
     res = await chrome.runtime.sendMessage({ type: "BILI_TRANSLATE", text: TEST_TEXT });
@@ -266,10 +295,10 @@ async function test() {
   }
 
   if (res && res.ok) {
-    setStatus("OK via " + res.via + " (" + res.model + "):\n" + res.text);
+    setStatus(tr("opt.ok", res.via, res.model, res.text));
   } else {
     const status = res && res.status ? "HTTP " + res.status + " " : "";
-    setStatus("Failed: " + status + String((res && res.body) || "no response").slice(0, 300), true);
+    setStatus(tr("opt.failed", status + String((res && res.body) || tr("opt.noResponse")).slice(0, 300)), true);
   }
 }
 
@@ -283,6 +312,8 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   $("glossary").addEventListener("input", syncGlossaryBadge);
   $("apiType").addEventListener("change", syncApiTypeUi);
+  // Shows the page in the chosen language at once; like every other field it is stored by Save.
+  $("uiLang").addEventListener("change", () => applyPageLanguage($("uiLang").value));
   $("customMethod").addEventListener("change", syncApiTypeUi);
   $("customPreset").addEventListener("change", () => applyCustomPreset($("customPreset").value));
   $("form").addEventListener("submit", (e) => {
@@ -294,6 +325,6 @@ document.addEventListener("DOMContentLoaded", async () => {
     fillForm(DEFAULTS, LOCAL_DEFAULTS);
     await chrome.storage.sync.set(DEFAULTS);
     if (chrome.storage.local) await chrome.storage.local.set(LOCAL_DEFAULTS);
-    setStatus("Defaults restored.");
+    setStatus(tr("opt.reset"));
   });
 });

@@ -1,5 +1,6 @@
 "use strict";
 
+// 界面语言由夹具固定为简体中文 (英文界面见 i18n.spec.js).
 // 选项页: 读取已存设置, 保存与校验, Save & test 走真实后台链路, 术语表计数, 修改设置后清空内存缓存.
 const { test, expect, dragSelect, requestsOf } = require("./fixtures");
 
@@ -21,7 +22,7 @@ test.describe("选项页", () => {
     await options.locator("#test").click();
     const status = options.locator("#status");
     await expect(status).toHaveText(
-      "OK via direct (Index-Translate-9B):\n译文：The quick brown fox jumps over the lazy dog."
+      "测试通过，线路 direct（Index-Translate-9B）：\n译文：The quick brown fox jumps over the lazy dog."
     );
     await expect(status).toHaveClass("ok");
     const [req] = requestsOf(upstream, "translate");
@@ -36,19 +37,19 @@ test.describe("选项页", () => {
 
     await options.locator("#base").fill("ftp://example.com/v1");
     await options.locator("#save").click();
-    await expect(status).toHaveText("Base URL must be an http(s) URL.");
+    await expect(status).toHaveText("接口地址必须是 http(s) 地址。");
     await expect(status).toHaveClass("err");
 
     await options.locator("#base").fill(upstream.base);
     await options.locator("#proxy").fill("not a url");
     await options.locator("#save").click();
-    await expect(status).toHaveText("Relay prefix must be empty or an http(s) URL.");
+    await expect(status).toHaveText("中继前缀必须留空或是 http(s) 地址。");
 
     await options.locator("#proxy").fill(upstream.origin + "/relay/v1///");
     await options.locator("#glossary").fill("# comment\nexpedition => 远征队\nExpedition -> 探险队\nFlash-Attention\n\n// note");
-    await expect(options.locator("#glossaryCount")).toHaveText("2 rules");
+    await expect(options.locator("#glossaryCount")).toHaveText("2 条规则");
     await options.locator("#save").click();
-    await expect(status).toHaveText("Saved (2 glossary rules active).");
+    await expect(status).toHaveText("已保存（2 条术语规则生效）。");
 
     // API key 只写入本机存储, 不进同步存储.
     const stored = await serviceWorker.evaluate(async () => ({
@@ -78,7 +79,7 @@ test.describe("选项页", () => {
 
     await options.locator("#test").click();
     await expect(options.locator("#status")).toHaveText(
-      "OK via direct (Index-Translate-9B):\n译文：The quick brown fox jumps over the lazy dog."
+      "测试通过，线路 direct（Index-Translate-9B）：\n译文：The quick brown fox jumps over the lazy dog."
     );
     expect(requestsOf(upstream, "translate")[0].authorization).toBe("Bearer legacy-key");
     expect(await serviceWorker.evaluate(() => chrome.storage.sync.get("key"))).toEqual({});
@@ -89,7 +90,7 @@ test.describe("选项页", () => {
     upstream.override("translate", { status: 401, body: "invalid key" });
     const options = await openOptions(context, extensionId);
     await options.locator("#test").click();
-    await expect(options.locator("#status")).toHaveText("Failed: HTTP 401 invalid key");
+    await expect(options.locator("#status")).toHaveText("失败：HTTP 401 invalid key");
     await expect(options.locator("#status")).toHaveClass("err");
     await options.close();
   });
@@ -102,7 +103,7 @@ test.describe("选项页", () => {
     const options = await openOptions(context, extensionId);
     await options.locator("#model").selectOption("Index-Translate-35B-A3B");
     await options.locator("#save").click();
-    await expect(options.locator("#status")).toHaveText("Saved.");
+    await expect(options.locator("#status")).toHaveText("已保存。");
     await options.close();
 
     await page.bringToFront();
@@ -118,14 +119,18 @@ test.describe("选项页", () => {
   test("Reset defaults 恢复官方地址且不发请求", async ({ context, extensionId, serviceWorker, upstream }) => {
     const options = await openOptions(context, extensionId);
     await options.locator("#reset").click();
-    await expect(options.locator("#status")).toHaveText("Defaults restored.");
+    // 恢复默认后界面语言回到"自动", 即选项页所见的浏览器语言, 它随运行测试的机器而不同.
+    const browserIsChinese = /^zh\b/i.test(await options.evaluate(() => chrome.i18n.getUILanguage()));
+    await expect(options.locator("#status")).toHaveText(browserIsChinese ? "已恢复默认设置。" : "Defaults restored.");
+    await expect(options.locator("#save")).toHaveText(browserIsChinese ? "保存" : "Save");
+    await expect(options.locator("#uiLang")).toHaveValue("auto");
     await expect(options.locator("#base")).toHaveValue("https://index-translate.bilibili.com/v1");
     await expect(options.locator("#key")).toHaveValue("bili");
     const stored = await serviceWorker.evaluate(async () => ({
-      sync: await chrome.storage.sync.get(["base", "proxy", "key"]),
+      sync: await chrome.storage.sync.get(["base", "proxy", "key", "uiLang"]),
       local: await chrome.storage.local.get("key")
     }));
-    expect(stored.sync).toEqual({ base: "https://index-translate.bilibili.com/v1", proxy: "" });
+    expect(stored.sync).toEqual({ base: "https://index-translate.bilibili.com/v1", proxy: "", uiLang: "auto" });
     expect(stored.local).toEqual({ key: "bili" });
     expect(upstream.requests).toHaveLength(0);
     await options.close();

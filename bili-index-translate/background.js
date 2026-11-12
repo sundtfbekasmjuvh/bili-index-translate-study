@@ -1,6 +1,10 @@
 // background.js
 "use strict";
 
+// Interface text. The service worker loads it with importScripts; Node (unit tests, the sandbox) with require.
+const I18N =
+  typeof module !== "undefined" && module.exports ? require("./i18n.js") : (importScripts("i18n.js"), globalThis.BiliI18n);
+
 const DEFAULTS = {
   base: "https://index-translate.bilibili.com/v1",
   proxy: "",
@@ -14,7 +18,8 @@ const DEFAULTS = {
   model: "Index-Translate-9B",
   immersiveModel: "Index-Translate-2B",
   visionModel: "Index-Translate-35B-A3B",
-  target: "中文"
+  target: "中文",
+  uiLang: "auto"
 };
 
 // Kept in chrome.storage.local: the glossary because of its size, the API key so that it stays on
@@ -28,6 +33,13 @@ const MENU_ID = "bili-translate-selection";
 const MENU_STUDY_ID = "bili-study-selection";
 const MENU_IMAGE_ID = "bili-translate-image";
 const MENU_IMMERSIVE_ID = "bili-immersive-page";
+// Context menu entries: id, title key, context.
+const MENUS = [
+  [MENU_ID, "menu.translate", "selection"],
+  [MENU_STUDY_ID, "menu.study", "selection"],
+  [MENU_IMAGE_ID, "menu.image", "image"],
+  [MENU_IMMERSIVE_ID, "menu.immersive", "page"]
+];
 const MAX_LEN = 3000;
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
 const TIMEOUT_MS = 35000;
@@ -103,9 +115,25 @@ async function migrateKeyToLocal() {
   return true;
 }
 
+// Language of the messages and menu titles this worker produces: the uiLang setting, or the browser's
+// language while it is "auto". Every request reads the settings first, which refreshes it; only a check
+// made before that read (an empty selection, say) can still use the language the worker started with.
+let uiLang = I18N.resolveLang("auto");
+
+function tr(key, ...args) {
+  return I18N.translate(uiLang, key, ...args);
+}
+
+function menuTitles() {
+  const titles = {};
+  for (const [id, titleKey] of MENUS) titles[id] = tr(titleKey);
+  return titles;
+}
+
 async function getSettings() {
   await migrateKeyToLocal();
   const syncCfg = await chrome.storage.sync.get(DEFAULTS);
+  uiLang = I18N.resolveLang(syncCfg.uiLang);
   const localCfg = await chrome.storage.local.get(LOCAL_DEFAULTS);
   return { ...syncCfg, glossary: String(localCfg.glossary || ""), key: String(localCfg.key ?? "") };
 }
@@ -925,7 +953,7 @@ async function sendRequest(url, method, headers, bodyText, externalSignal) {
     return { ok: res.ok, status: res.status, raw: raw };
   } catch (err) {
     if (err && err.name === "AbortError") {
-      throw new Error(externalSignal && externalSignal.aborted ? "Cancelled" : "Request timed out after " + TIMEOUT_MS / 1000 + " s");
+      throw new Error(externalSignal && externalSignal.aborted ? "Cancelled" : tr("bg.timeout", TIMEOUT_MS / 1000));
     }
     throw err;
   } finally {
@@ -1044,7 +1072,7 @@ function parseDeeplxResponse(raw, httpStatus) {
   try {
     data = JSON.parse(raw);
   } catch (_) {
-    return { ok: false, status: httpStatus, body: "Response is not JSON: " + String(raw).slice(0, MAX_ERROR_BODY) };
+    return { ok: false, status: httpStatus, body: tr("bg.notJson", String(raw).slice(0, MAX_ERROR_BODY)) };
   }
   const code = data && typeof data.code === "number" ? data.code : 200;
   if (code !== 200) {
@@ -1052,7 +1080,7 @@ function parseDeeplxResponse(raw, httpStatus) {
   }
   const text = data && typeof data.data === "string" ? data.data.trim() : "";
   if (!text) {
-    return { ok: false, status: httpStatus, body: "No translation in \"data\": " + String(raw).slice(0, MAX_ERROR_BODY) };
+    return { ok: false, status: httpStatus, body: tr("bg.deeplxNoData", String(raw).slice(0, MAX_ERROR_BODY)) };
   }
   return { ok: true, text: text };
 }
@@ -1172,7 +1200,7 @@ function readJsonPath(data, tokens) {
 }
 
 function customConfigError(message) {
-  return { ok: false, error: "Custom API: " + message };
+  return { ok: false, error: message };
 }
 
 function parseCustomTemplate(s) {
@@ -1185,7 +1213,7 @@ function parseCustomTemplate(s) {
     const line = rawLine.trim();
     if (!line || line.startsWith("#")) continue;
     const m = /^([A-Za-z0-9_-]+)\s*:\s*(.*)$/.exec(line);
-    if (!m) return customConfigError('the header line "' + line.slice(0, 80) + '" is not in the form "Name: value".');
+    if (!m) return customConfigError(tr("bg.custom.headerLine", line.slice(0, 80)));
     headers.push([m[1], m[2]]);
     if (m[1].toLowerCase() === "content-type") contentType = m[2];
   }
@@ -1198,19 +1226,17 @@ function parseCustomTemplate(s) {
   const resultPath = parseJsonPath(resultPathText);
   if (!resultPath) {
     return customConfigError(
-      resultPathText
-        ? 'the result path "' + resultPathText + '" is not valid. Use a path like translations[0].text or data.'
-        : "the result path is empty. It says where the translation is in the JSON reply, for example translations[0].text."
+      resultPathText ? tr("bg.custom.resultPathInvalid", resultPathText) : tr("bg.custom.resultPathEmpty")
     );
   }
   const errorPathText = String(s.customErrorPath || "").trim();
   const errorPath = errorPathText ? parseJsonPath(errorPathText) : null;
-  if (errorPathText && !errorPath) return customConfigError('the error path "' + errorPathText + '" is not valid.');
+  if (errorPathText && !errorPath) return customConfigError(tr("bg.custom.errorPathInvalid", errorPathText));
 
   const endpoint = stripSlashes(s.proxy) || stripSlashes(s.base);
   const batch = /\{\{?texts\}?\}/i.test(bodyTemplate);
   if (!batch && !/\{\{?text\}?\}/i.test(endpoint + "\n" + bodyTemplate)) {
-    return customConfigError("the template never sends the text. Put {text} in the URL or the body, or {texts} in the body.");
+    return customConfigError(tr("bg.custom.noText"));
   }
 
   return {
@@ -1250,10 +1276,7 @@ function buildCustomRequest(tpl, endpoint, key, texts, target) {
       try {
         JSON.parse(request.body);
       } catch (_) {
-        return {
-          error:
-            "Custom API: the request body is not valid JSON once the placeholders are filled in. Write {text} inside the quotes of a string and {texts} without quotes."
-        };
+        return { error: tr("bg.custom.bodyNotJson") };
       }
     }
   }
@@ -1279,7 +1302,7 @@ function parseCustomResponse(raw, httpStatus, httpOk, tpl, expected) {
   const snippet = String(raw).slice(0, MAX_ERROR_BODY);
 
   if (!httpOk) return { ok: false, status: httpStatus, body: errorText ? errorText.slice(0, MAX_ERROR_BODY) : snippet };
-  if (!isJson) return { ok: false, status: httpStatus, body: "Response is not JSON: " + snippet };
+  if (!isJson) return { ok: false, status: httpStatus, body: tr("bg.notJson", snippet) };
 
   const texts = [];
   let valid = true;
@@ -1291,7 +1314,7 @@ function parseCustomResponse(raw, httpStatus, httpOk, tpl, expected) {
   const missing = {
     ok: false,
     status: httpStatus,
-    body: errorText || 'No translation at "' + tpl.resultPathText + '" in: ' + snippet
+    body: errorText || tr("bg.customNoResult", tpl.resultPathText, snippet)
   };
   if (!valid || texts.length === 0) return missing;
 
@@ -1302,7 +1325,7 @@ function parseCustomResponse(raw, httpStatus, httpOk, tpl, expected) {
         ok: false,
         status: httpStatus,
         mismatch: true,
-        body: "Expected " + expected + ' translation(s) at "' + tpl.resultPathText + '" but found ' + out.filter(Boolean).length + "."
+        body: tr("bg.customCount", expected, tpl.resultPathText, out.filter(Boolean).length)
       };
     }
     return { ok: true, texts: out };
@@ -1483,15 +1506,12 @@ async function engineImmersiveBatch(engine, s, items, onProgress, externalSignal
   };
 }
 
-function textOnlyUnsupported(feature, engine) {
+// featureKey names the feature (bg.feature.image or bg.feature.study) that the text-only format cannot do.
+function textOnlyUnsupported(featureKey, engine) {
   return {
     ok: false,
     status: 0,
-    body:
-      feature +
-      " needs an OpenAI-compatible chat model. The " +
-      (engine.label === DEEPLX_LABEL ? "DeepLX" : "custom") +
-      " API format only translates text; change the API format in the extension options to use it."
+    body: tr("bg.unsupported", tr(featureKey), tr(engine.label === DEEPLX_LABEL ? "bg.format.deeplx" : "bg.format.custom"))
   };
 }
 
@@ -1523,10 +1543,10 @@ async function readBodyCapped(res, maxBytes) {
 
 async function fetchImageAsDataUrl(srcUrl, timeoutMs = TIMEOUT_MS) {
   const url = String(srcUrl || "").trim();
-  if (!url) throw new Error("Empty image URL.");
+  if (!url) throw new Error(tr("bg.image.emptyUrl"));
   if (url.startsWith("data:image/")) return url;
 
-  const tooLarge = "Image exceeds 8 MB limit; use Alt+S region snip instead.";
+  const tooLarge = tr("bg.image.tooLarge");
   const controller = new AbortController();
   let timedOut = false;
   const timer = setTimeout(() => {
@@ -1535,18 +1555,18 @@ async function fetchImageAsDataUrl(srcUrl, timeoutMs = TIMEOUT_MS) {
   }, timeoutMs);
   try {
     const res = await fetch(url, { credentials: "omit", signal: controller.signal });
-    if (!res.ok) throw new Error("Failed to fetch image (HTTP " + res.status + ").");
+    if (!res.ok) throw new Error(tr("bg.image.http", res.status));
     // Content-Length can be missing or wrong, so it only allows an early refusal; the capped read is the limit.
     if (Number(res.headers.get("content-length")) > MAX_IMAGE_BYTES) throw new Error(tooLarge);
     const bytes = await readBodyCapped(res, MAX_IMAGE_BYTES);
     if (!bytes) throw new Error(tooLarge);
-    if (bytes.byteLength === 0) throw new Error("Image is empty.");
+    if (bytes.byteLength === 0) throw new Error(tr("bg.image.empty"));
 
     const rawType = (res.headers.get("content-type") || "image/png").split(";")[0].trim().toLowerCase();
     const mime = rawType.startsWith("image/") ? rawType : "image/png";
     return "data:" + mime + ";base64," + arrayBufferToBase64(bytes);
   } catch (err) {
-    if (timedOut) throw new Error("Image download timed out after " + timeoutMs / 1000 + " s.");
+    if (timedOut) throw new Error(tr("bg.image.timeout", timeoutMs / 1000));
     throw err;
   } finally {
     clearTimeout(timer);
@@ -1585,7 +1605,7 @@ async function callChatCompletion(messages, s, temperature = 0.0, activeModel = 
     return {
       ok: false,
       status: r.status,
-      body: "Response is not JSON: " + r.raw.slice(0, MAX_ERROR_BODY),
+      body: tr("bg.notJson", r.raw.slice(0, MAX_ERROR_BODY)),
       via: via
     };
   }
@@ -1596,7 +1616,7 @@ async function callChatCompletion(messages, s, temperature = 0.0, activeModel = 
     return {
       ok: false,
       status: r.status,
-      body: "No choices[0].message.content in: " + r.raw.slice(0, MAX_ERROR_BODY),
+      body: tr("bg.noContent", r.raw.slice(0, MAX_ERROR_BODY)),
       via: via
     };
   }
@@ -1688,8 +1708,8 @@ async function runChatStream(s, base, body, externalSignal, handleResponse) {
 
 async function streamTranslation(text, onDelta, externalSignal) {
   text = String(text || "").trim();
-  if (!text) return { ok: false, status: 0, body: "Nothing to translate." };
-  if (text.length > MAX_LEN) return { ok: false, status: 0, body: "Selection is longer than " + MAX_LEN + " characters." };
+  if (!text) return { ok: false, status: 0, body: tr("bg.nothingToTranslate") };
+  if (text.length > MAX_LEN) return { ok: false, status: 0, body: tr("bg.tooLong", MAX_LEN) };
 
   const s = await getSettings();
   const textOnly = textEngine(s);
@@ -1725,7 +1745,7 @@ async function streamTranslation(text, onDelta, externalSignal) {
     });
 
     const clean = stripThink(raw);
-    if (!clean) return { ok: false, status: 200, body: "Empty translation.", via: via };
+    if (!clean) return { ok: false, status: 200, body: tr("bg.emptyTranslation"), via: via };
     const out = { text: clean, model: activeModel, via: via, glossaryHits: hits.length };
     lruSet(volatileTranslateCache, cacheKey, out);
     return { ok: true, ...out };
@@ -1735,12 +1755,12 @@ async function streamTranslation(text, onDelta, externalSignal) {
 async function streamVisionTranslation(imageDataUrl, modelOverride, onDelta, externalSignal) {
   const dataUrl = String(imageDataUrl || "").trim();
   if (!dataUrl.startsWith("data:image/")) {
-    return { ok: false, status: 0, body: "Invalid image payload." };
+    return { ok: false, status: 0, body: tr("bg.invalidImage") };
   }
 
   const s = await getSettings();
   const textOnly = textEngine(s);
-  if (textOnly) return textOnlyUnsupported("Image translation", textOnly);
+  if (textOnly) return textOnlyUnsupported("bg.feature.image", textOnly);
   const activeModel = resolveVisionModel(s.visionModel, modelOverride);
   const base = stripSlashes(s.base);
   const cacheKey = activeModel + "|" + s.target + "|" + base + "|" + (await sha256Hex(s.glossary)) + "|" + (await sha256Hex(dataUrl));
@@ -1779,7 +1799,7 @@ async function streamVisionTranslation(imageDataUrl, modelOverride, onDelta, ext
 
     const finalParsed = parseVisionDualOutput(raw);
     if (!finalParsed.translation) {
-      return { ok: false, status: 200, body: "No readable text found in image.", via: via };
+      return { ok: false, status: 200, body: tr("bg.noTextInImage"), via: via };
     }
     const hits = finalParsed.sourceText ? matchGlossaryHits(s.glossary, finalParsed.sourceText).length : 0;
     const out = {
@@ -1797,7 +1817,7 @@ async function streamVisionTranslation(imageDataUrl, modelOverride, onDelta, ext
 
 async function streamImmersiveBatch(rawItems, modelOverride, onProgress, externalSignal) {
   const items = Array.isArray(rawItems) ? rawItems.map((x) => String(x || "").trim()) : [];
-  if (items.length === 0) return { ok: false, status: 0, body: "Empty batch." };
+  if (items.length === 0) return { ok: false, status: 0, body: tr("bg.emptyBatch") };
 
   const s = await getSettings();
   const textOnly = textEngine(s);
@@ -1907,12 +1927,12 @@ async function streamImmersiveBatch(rawItems, modelOverride, onProgress, externa
 
 async function streamStudyCard(text, modelOverride, onPartial, externalSignal) {
   text = String(text || "").trim();
-  if (!text) return { ok: false, status: 0, body: "Nothing to analyze." };
-  if (text.length > MAX_LEN) return { ok: false, status: 0, body: "Selection is longer than " + MAX_LEN + " characters." };
+  if (!text) return { ok: false, status: 0, body: tr("bg.nothingToAnalyze") };
+  if (text.length > MAX_LEN) return { ok: false, status: 0, body: tr("bg.tooLong", MAX_LEN) };
 
   const s = await getSettings();
   const textOnly = textEngine(s);
-  if (textOnly) return textOnlyUnsupported("Study Card", textOnly);
+  if (textOnly) return textOnlyUnsupported("bg.feature.study", textOnly);
   const base = stripSlashes(s.base);
   const activeModel = resolveStudyModel(s.model, modelOverride);
   const hits = matchGlossaryHits(s.glossary, text);
@@ -1958,7 +1978,7 @@ async function streamStudyCard(text, modelOverride, onPartial, externalSignal) {
     });
 
     const deck = cappedDeck || parseStudyCardJson(raw, text);
-    if (!deck) return { ok: false, status: 200, body: "Empty study card response.", via: via };
+    if (!deck) return { ok: false, status: 200, body: tr("bg.emptyStudy"), via: via };
     lruSet(volatileStudyCache, cacheKey, { deck: deck, model: activeModel, via: via });
     return { ok: true, deck: deck, model: activeModel, via: via };
   });
@@ -1966,8 +1986,8 @@ async function streamStudyCard(text, modelOverride, onPartial, externalSignal) {
 
 async function translate(text) {
   text = String(text || "").trim();
-  if (!text) return { ok: false, status: 0, body: "Nothing to translate." };
-  if (text.length > MAX_LEN) return { ok: false, status: 0, body: "Selection is longer than " + MAX_LEN + " characters." };
+  if (!text) return { ok: false, status: 0, body: tr("bg.nothingToTranslate") };
+  if (text.length > MAX_LEN) return { ok: false, status: 0, body: tr("bg.tooLong", MAX_LEN) };
 
   const s = await getSettings();
   const textOnly = textEngine(s);
@@ -1994,12 +2014,12 @@ async function translate(text) {
 
 async function generateStudyCard(text, modelOverride) {
   text = String(text || "").trim();
-  if (!text) return { ok: false, status: 0, body: "Nothing to analyze." };
-  if (text.length > MAX_LEN) return { ok: false, status: 0, body: "Selection is longer than " + MAX_LEN + " characters." };
+  if (!text) return { ok: false, status: 0, body: tr("bg.nothingToAnalyze") };
+  if (text.length > MAX_LEN) return { ok: false, status: 0, body: tr("bg.tooLong", MAX_LEN) };
 
   const s = await getSettings();
   const textOnly = textEngine(s);
-  if (textOnly) return textOnlyUnsupported("Study Card", textOnly);
+  if (textOnly) return textOnlyUnsupported("bg.feature.study", textOnly);
   const base = stripSlashes(s.base);
   const activeModel = resolveStudyModel(s.model, modelOverride);
   const hits = matchGlossaryHits(s.glossary, text);
@@ -2011,7 +2031,7 @@ async function generateStudyCard(text, modelOverride) {
   if (!res.ok) return res;
 
   const deck = parseStudyCardJson(res.content, text);
-  if (!deck) return { ok: false, status: 200, body: "Empty study card response.", via: res.via };
+  if (!deck) return { ok: false, status: 200, body: tr("bg.emptyStudy"), via: res.via };
   const out = { deck: deck, model: res.model, via: res.via };
   lruSet(volatileStudyCache, cacheKey, out);
   return { ok: true, ...out };
@@ -2066,7 +2086,15 @@ if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.onMessage)
     }
 
     if (msg.type === "BILI_CHECK_API_CONFIG") {
-      sendResponse(checkApiConfig(msg.settings || {}));
+      // The options page asks before it saves, so answer in the language the page is showing.
+      const settings = msg.settings || {};
+      const savedLang = uiLang;
+      uiLang = I18N.resolveLang(settings.uiLang);
+      try {
+        sendResponse(checkApiConfig(settings));
+      } finally {
+        uiLang = savedLang;
+      }
       return false;
     }
 
@@ -2202,50 +2230,43 @@ if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.onMessage)
     });
   }
 
-  chrome.storage.onChanged.addListener(() => {
+  function createMenus() {
+    chrome.contextMenus.removeAll(() => {
+      for (const [id, titleKey, context] of MENUS) {
+        chrome.contextMenus.create({ id: id, title: tr(titleKey), contexts: [context] }, () => void chrome.runtime.lastError);
+      }
+    });
+  }
+
+  function refreshMenuTitles() {
+    for (const [id, title] of Object.entries(menuTitles())) {
+      chrome.contextMenus.update(id, { title: title }, () => void chrome.runtime.lastError);
+    }
+  }
+
+  chrome.storage.onChanged.addListener((changes, area) => {
     noMergedBatch.clear();
     cachedGlossaryRaw = null;
     cachedGlossaryEntries = [];
     volatileTranslateCache.clear();
     volatileStudyCache.clear();
     volatileVisionCache.clear();
+    if (area === "sync" && changes && changes.uiLang) {
+      uiLang = I18N.resolveLang(changes.uiLang.newValue);
+      refreshMenuTitles();
+    }
   });
 
-  chrome.runtime.onInstalled.addListener(() => {
-    chrome.contextMenus.removeAll(() => {
-      chrome.contextMenus.create(
-        {
-          id: MENU_ID,
-          title: "Translate selection with Bili",
-          contexts: ["selection"]
-        },
-        () => void chrome.runtime.lastError
-      );
-      chrome.contextMenus.create(
-        {
-          id: MENU_STUDY_ID,
-          title: "Open Bili Study Card (\u5b66\u4e60\u5361\u7247)",
-          contexts: ["selection"]
-        },
-        () => void chrome.runtime.lastError
-      );
-      chrome.contextMenus.create(
-        {
-          id: MENU_IMAGE_ID,
-          title: "Translate image with Bili (\u8bc6\u56fe\u76f4\u8bd1 + \u8bcd\u5361)",
-          contexts: ["image"]
-        },
-        () => void chrome.runtime.lastError
-      );
-      chrome.contextMenus.create(
-        {
-          id: MENU_IMMERSIVE_ID,
-          title: "Toggle Bilingual Page Translation (\u53cc\u8bed\u5bf9\u7167\u7f51\u9875 \u00b7 Alt+A)",
-          contexts: ["page"]
-        },
-        () => void chrome.runtime.lastError
-      );
+  // The menus outlive a browser restart, but the browser's language may have changed since.
+  if (chrome.runtime.onStartup) {
+    chrome.runtime.onStartup.addListener(() => {
+      getSettings().then(refreshMenuTitles, () => {});
     });
+  }
+
+  chrome.runtime.onInstalled.addListener(() => {
+    // The titles follow the interface language, so the settings are read first.
+    getSettings().then(createMenus, createMenus);
     chrome.storage.sync.get(DEFAULTS).then((s) => chrome.storage.sync.set(s));
     migrateKeyToLocal().catch((err) => console.warn("[Bili Index Translate] API key migration failed:", err));
   });
@@ -2256,7 +2277,7 @@ if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.onMessage)
       await chrome.tabs.sendMessage(tabId, msg, { frameId: frameId });
     } catch (_) {
       await chrome.scripting.insertCSS({ target: target, files: ["content.css"] });
-      await chrome.scripting.executeScript({ target: target, files: ["content.js"] });
+      await chrome.scripting.executeScript({ target: target, files: ["i18n.js", "content.js"] });
       await chrome.tabs.sendMessage(tabId, msg, { frameId: frameId });
     }
   }
@@ -2288,7 +2309,10 @@ if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.onMessage)
     }
 
     if (info.menuItemId === MENU_IMAGE_ID && info.srcUrl) {
-      fetchImageAsDataUrl(info.srcUrl)
+      // Reading the settings first puts a download error in the current interface language.
+      getSettings()
+        .catch(() => null)
+        .then(() => fetchImageAsDataUrl(info.srcUrl))
         .then((dataUrl) =>
           sendToFrame(tab.id, frameId, {
             type: "BILI_CONTEXT_IMAGE_DATA",
@@ -2355,6 +2379,7 @@ if (typeof module !== "undefined" && module.exports) {
     buildCustomRequest,
     parseCustomResponse,
     checkApiConfig,
+    menuTitles,
     migrateKeyToLocal,
     getSettings,
     fetchImageAsDataUrl,

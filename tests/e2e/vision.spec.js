@@ -134,7 +134,7 @@ test.describe("识图直译", () => {
     });
     await expect(page.locator("#bili-index-translate-panel")).toHaveAttribute("data-open", "");
     await expect(page.locator("#bili-index-translate-panel .bit-error")).toHaveText(
-      "Request failed\nFailed to fetch image (HTTP 404)."
+      "请求失败\n图片下载失败 (HTTP 404)。"
     );
     expect(requestsOf(upstream, "vision")).toHaveLength(0);
     expect(pageErrors).toEqual([]);
@@ -152,7 +152,7 @@ test.describe("识图直译", () => {
         srcUrl: upstream.origin + "/huge.png" + query
       });
       await expect(page.locator("#bili-index-translate-panel .bit-error")).toHaveText(
-        "Request failed\nImage exceeds 8 MB limit; use Alt+S region snip instead."
+        "请求失败\n图片超过 8 MB 上限，请改用 Alt+S 框选。"
       );
       await expect.poll(() => upstream.downloads.map((d) => d.closedEarly)).toEqual([true]);
       expect(upstream.downloads[0].sent).toBeLessThan(sentBelow);

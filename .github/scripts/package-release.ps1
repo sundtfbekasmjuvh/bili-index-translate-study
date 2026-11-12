@@ -63,7 +63,8 @@ $referenced = @($manifest.background.service_worker, $manifest.options_ui.page) 
   @($manifest.content_scripts | ForEach-Object { $_.js + $_.css }) +
   @($manifest.declarative_net_request.rule_resources | ForEach-Object { $_.path }) +
   @($manifest.icons.PSObject.Properties | ForEach-Object { $_.Value }) +
-  @($manifest.action.default_icon.PSObject.Properties | ForEach-Object { $_.Value })
+  @($manifest.action.default_icon.PSObject.Properties | ForEach-Object { $_.Value }) +
+  @("_locales/$($manifest.default_locale)/messages.json")
 foreach ($file in $referenced) {
   if ($tracked -notcontains "bili-index-translate/$file") { throw "manifest.json references '$file', which is not committed" }
 }

@@ -49,13 +49,13 @@ test.describe("自定义接口模板", () => {
     await expect(options.locator("#customHeaders")).toHaveValue("Authorization: DeepL-Auth-Key {apiKey}");
     await expect(options.locator("#customBody")).toHaveValue('{"text": {texts}, "target_lang": "{targetLang}"}');
     await expect(options.locator("#customResultPath")).toHaveValue("translations[*].text");
-    await expect(status).toContainText("Preset loaded: DeepL");
+    await expect(status).toContainText("已载入预设：DeepL");
     expect(await storedService()).toEqual({ custom: false, base: upstream.base });
 
     // 结果路径为空的模板无法工作: 拒绝保存, 也不申请主机权限.
     await options.locator("#customResultPath").fill("");
     await options.locator("#save").click();
-    await expect(status).toContainText("Custom API: the result path is empty");
+    await expect(status).toContainText("自定义接口：结果路径为空");
     await expect(status).toHaveClass("err");
     expect(await storedService()).toEqual({ custom: false, base: upstream.base });
 
@@ -71,7 +71,7 @@ test.describe("自定义接口模板", () => {
     await options.locator("#customResultPath").fill(TEMPLATE.customResultPath);
     await options.locator("#customErrorPath").fill(TEMPLATE.customErrorPath);
     await options.locator("#test").click();
-    await expect(status).toHaveText("OK via direct (Mock MT):\n译文：" + TEST_TEXT);
+    await expect(status).toHaveText("测试通过，线路 direct（Mock MT）：\n译文：" + TEST_TEXT);
     await expect(status).toHaveClass("ok");
 
     expect(upstream.requests).toHaveLength(1);
@@ -101,7 +101,7 @@ test.describe("自定义接口模板", () => {
     ]);
 
     await page.keyboard.press("s");
-    await expect(page.locator("#bili-index-study-panel .bit-error")).toContainText("The custom API format only translates text");
+    await expect(page.locator("#bili-index-study-panel .bit-error")).toContainText("自定义接口格式只能翻译文本");
     expect(upstream.requests).toHaveLength(1);
 
     upstream.override("custom", { status: 403, contentType: "application/json", body: '{"error":{"message":"Key rejected by Mock MT"}}' });
