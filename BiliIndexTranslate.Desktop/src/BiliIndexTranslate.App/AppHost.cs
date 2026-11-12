@@ -92,6 +92,7 @@ internal sealed class AppHost : IDisposable
     private DiagnosticsWindow? _diagnosticsWindow;
     private WelcomeWindow? _welcomeWindow;
     private StreamWriter? _fileLog;
+    private bool _saveFailureShown;
     private EventWaitHandle? _activateEvent;
     private RegisteredWaitHandle? _activateWait;
     private bool _started;
@@ -792,11 +793,12 @@ internal sealed class AppHost : IDisposable
 
     // ---- settings --------------------------------------------------------------------------------------
 
-    private void ApplySettings(AppSettings next, bool notifySession)
+    /// <summary>Applies the settings and writes them to disk. Returns why they could not be written, or null.</summary>
+    private string? ApplySettings(AppSettings next, bool notifySession, bool notifySaveFailure = true)
     {
         var previous = _settings;
         _settings = next.Normalize();
-        TrySave();
+        var saveError = TrySave(notifySaveFailure);
 
         _session.Options = new SessionOptions(_settings.AutoTranslate, _settings.StabilizationDelayMs);
         _theme.Apply(_settings.Theme);
@@ -818,6 +820,7 @@ internal sealed class AppHost : IDisposable
             _log.Info("settings", $"service: format={_settings.ApiFormat} target={_settings.TargetLanguage} model={_settings.Model} vision={_settings.VisionModel} relay={_settings.UseRelay} host={HostOf(_settings)}");
         }
         if (notifySession) Dispatch(new SessionEvent.SettingsChanged());
+        return saveError;
     }
 
     /// <summary>What answers the requests: the model, or the name of a format that has no model.</summary>
@@ -873,10 +876,28 @@ internal sealed class AppHost : IDisposable
         _saveTimer.Start();
     }
 
-    private void TrySave()
+    /// <summary>Writes the settings file. Returns null when it was written, otherwise the reason it was not.</summary>
+    private string? TrySave(bool notify = true)
     {
-        try { _store.Save(_settings); }
-        catch (Exception ex) { _log.Error("settings", $"save failed: {ex.GetType().Name}: {ex.Message}"); }
+        try
+        {
+            _store.Save(_settings);
+            _saveFailureShown = false;
+            return null;
+        }
+        catch (Exception ex)
+        {
+            _log.Error("settings", $"save failed: {ex.GetType().Name}: {ex.Message}");
+            var reason = $"Settings were not saved ({ex.GetType().Name}: {ex.Message}). They stay in effect until the app exits.";
+            // The Settings window shows the reason itself. Other saves run in the background, so the tray says it,
+            // once per run of failures. The tray does not exist yet during start-up; the log entry covers that case.
+            if (notify && !_saveFailureShown && _tray is not null)
+            {
+                _saveFailureShown = true;
+                _tray.ShowNotice("Settings not saved", reason, warning: true);
+            }
+            return reason;
+        }
     }
 
     private void ConfigureFileLogging(bool enabled)
@@ -897,7 +918,7 @@ internal sealed class AppHost : IDisposable
             _log.SetSink(entry => { lock (writer) writer.WriteLine(entry.ToString()); });
             _log.Info("diag", "file logging enabled");
         }
-        catch (Exception ex) { _log.Warn("diag", $"file logging unavailable: {ex.GetType().Name}"); }
+        catch (Exception ex) { _log.Warn("diag", $"file logging unavailable: {ex.GetType().Name}: {ex.Message}"); }
     }
 
     // ---- windows -------------------------------------------------------------------------------------
@@ -909,7 +930,7 @@ internal sealed class AppHost : IDisposable
             _settingsWindow.Activate();
             return;
         }
-        _settingsWindow = new SettingsWindow(_settings, _store.FilePath, TestConnectionAsync, s => ApplySettings(s, notifySession: true));
+        _settingsWindow = new SettingsWindow(_settings, _store.FilePath, TestConnectionAsync, s => ApplySettings(s, notifySession: true, notifySaveFailure: false));
         _settingsWindow.SetHotkeyStatus(_hotkeyError);
         _settingsWindow.SetSnipHotkeyStatus(_snipHotkeyError);
         _settingsWindow.Closed += (_, _) => _settingsWindow = null;

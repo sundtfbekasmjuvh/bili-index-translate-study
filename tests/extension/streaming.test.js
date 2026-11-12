@@ -3,18 +3,14 @@
 // 四条流式请求路径的行为: SSE 增量与分块边界, 非 SSE JSON 回退, 取消, 网络错误, 学习卡 4 张封顶.
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const { storageArea } = require("../support/fake-storage");
 
 const settings = { proxy: "" };
 const local = { glossary: "" };
 const calls = [];
 let respond;
 
-globalThis.chrome = {
-  storage: {
-    sync: { get: async (defaults) => ({ ...defaults, ...settings }) },
-    local: { get: async (defaults) => ({ ...defaults, ...local }) }
-  }
-};
+globalThis.chrome = { storage: { sync: storageArea(settings), local: storageArea(local) } };
 globalThis.fetch = async (url, init) => {
   calls.push({ url: String(url), body: JSON.parse(init.body) });
   if (init.signal && init.signal.aborted) throw new DOMException("The operation was aborted.", "AbortError");

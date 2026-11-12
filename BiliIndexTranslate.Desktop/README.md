@@ -28,6 +28,10 @@ Requirements: Windows 10 1809+ / Windows 11, [.NET 8 Desktop Runtime](https://do
 | Self-contained single exe (no runtime install) | `tools\build-selfcontained.cmd` → `publish-sc\` (~139 MB) |
 | Unit tests | `tools\test.cmd` or `dotnet test` |
 
+If the settings file cannot be written, the Settings window says so and stays open, and a
+background save reports it once through a tray notice; [docs/TESTING.md](docs/TESTING.md) describes
+one cause (a checkout under a directory with a Low integrity label).
+
 The app lives in the notification area. Right-click the icon for: automatic translation on/off,
 "Don't translate in *app*", translate clipboard text, Settings, Diagnostics, Welcome, Exit.
 A second instance does not start twice; it opens the Settings window of the running one.

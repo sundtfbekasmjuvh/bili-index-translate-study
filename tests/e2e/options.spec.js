@@ -50,12 +50,38 @@ test.describe("选项页", () => {
     await options.locator("#save").click();
     await expect(status).toHaveText("Saved (2 glossary rules active).");
 
+    // API key 只写入本机存储, 不进同步存储.
     const stored = await serviceWorker.evaluate(async () => ({
-      sync: await chrome.storage.sync.get(["base", "proxy"]),
-      local: await chrome.storage.local.get("glossary")
+      sync: await chrome.storage.sync.get(["base", "proxy", "key"]),
+      local: await chrome.storage.local.get(["glossary", "key"])
     }));
     expect(stored.sync).toEqual({ base: upstream.base, proxy: upstream.origin + "/relay/v1" });
-    expect(stored.local.glossary).toBe("# comment\nexpedition => 远征队\nExpedition -> 探险队\nFlash-Attention\n\n// note");
+    expect(stored.local).toEqual({
+      glossary: "# comment\nexpedition => 远征队\nExpedition -> 探险队\nFlash-Attention\n\n// note",
+      key: "e2e-key"
+    });
+    await options.close();
+  });
+
+  test("旧版本留在同步存储里的 API key 在打开选项页时移到本机存储, 之后的请求仍带这个 key", async ({ context, extensionId, serviceWorker, upstream }) => {
+    await serviceWorker.evaluate(async () => {
+      await chrome.storage.local.remove("key");
+      await chrome.storage.sync.set({ key: "legacy-key" });
+    });
+    const options = await openOptions(context, extensionId);
+    await expect(options.locator("#key")).toHaveValue("legacy-key");
+    const stored = await serviceWorker.evaluate(async () => ({
+      sync: await chrome.storage.sync.get("key"),
+      local: await chrome.storage.local.get("key")
+    }));
+    expect(stored).toEqual({ sync: {}, local: { key: "legacy-key" } });
+
+    await options.locator("#test").click();
+    await expect(options.locator("#status")).toHaveText(
+      "OK via direct (Index-Translate-9B):\n译文：The quick brown fox jumps over the lazy dog."
+    );
+    expect(requestsOf(upstream, "translate")[0].authorization).toBe("Bearer legacy-key");
+    expect(await serviceWorker.evaluate(() => chrome.storage.sync.get("key"))).toEqual({});
     await options.close();
   });
 
@@ -95,8 +121,12 @@ test.describe("选项页", () => {
     await expect(options.locator("#status")).toHaveText("Defaults restored.");
     await expect(options.locator("#base")).toHaveValue("https://index-translate.bilibili.com/v1");
     await expect(options.locator("#key")).toHaveValue("bili");
-    const stored = await serviceWorker.evaluate(() => chrome.storage.sync.get(["base", "proxy", "key"]));
-    expect(stored).toEqual({ base: "https://index-translate.bilibili.com/v1", proxy: "", key: "bili" });
+    const stored = await serviceWorker.evaluate(async () => ({
+      sync: await chrome.storage.sync.get(["base", "proxy", "key"]),
+      local: await chrome.storage.local.get("key")
+    }));
+    expect(stored.sync).toEqual({ base: "https://index-translate.bilibili.com/v1", proxy: "" });
+    expect(stored.local).toEqual({ key: "bili" });
     expect(upstream.requests).toHaveLength(0);
     await options.close();
   });

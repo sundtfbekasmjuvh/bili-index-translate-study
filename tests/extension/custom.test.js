@@ -3,19 +3,16 @@
 // 自定义 JSON 接口模板: 结果路径, 模板校验, 占位符转义, 响应解析, 以及划词, 双语对照, 学习卡和识图在该格式下的行为.
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const { storageArea } = require("../support/fake-storage");
 
 const IMAGE = "data:image/png;base64,iVBORw0KGgo=";
 
 const settings = {};
+const local = { glossary: "fox => 狐狸" };
 const calls = [];
 let respond;
 
-globalThis.chrome = {
-  storage: {
-    sync: { get: async (defaults) => ({ ...defaults, ...settings }) },
-    local: { get: async (defaults) => ({ ...defaults, glossary: "fox => 狐狸" }) }
-  }
-};
+globalThis.chrome = { storage: { sync: storageArea(settings), local: storageArea(local) } };
 // 与真实 fetch 一致: 信号已中止时直接拒绝, 不算发出请求. 请求体按原样记录, GET 请求没有请求体.
 globalThis.fetch = async (url, init) => {
   if (init.signal && init.signal.aborted) throw new DOMException("The operation was aborted.", "AbortError");
@@ -49,6 +46,9 @@ function reset(overrides = {}) {
   calls.length = 0;
   for (const k of Object.keys(settings)) delete settings[k];
   Object.assign(settings, DEEPL, overrides);
+  // The API key is the one setting kept in chrome.storage.local.
+  local.key = settings.key;
+  delete settings.key;
   respond = (call) => jsonResponse({ translations: JSON.parse(call.body).text.map((t) => ({ detected_source_language: "EN", text: tr(t) })) });
 }
 

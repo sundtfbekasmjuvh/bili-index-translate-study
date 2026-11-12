@@ -106,6 +106,8 @@
 - 扩展默认直连 `index-translate.bilibili.com`。官方接口对带扩展 `Origin` 头的请求返回 HTTP 412，扩展用 `dnr_rules.json` 在网络层去掉该头。
 - 中继（Relay prefix）只在选项页手动填写后使用。直连返回 412 时只显示错误和提示，不会自动改走任何第三方中继。中继会收到选中的文本、图片和 API key，只填写你信任的地址。
 - 桌面端同理：中继需要在设置里手动开启，应用不会自行切换线路。
+- 扩展的 API key 只存在本机的 `chrome.storage.local`，不随浏览器账号同步；其余设置仍在 `chrome.storage.sync`。1.4.1 及更早版本把 key 存在同步存储里，升级后第一次读取设置时会把它移到本机并删除同步副本。其他设备上的旧版本因此读不到同步的 key，需要在那台设备上重新填写一次。
+- 右键图片翻译最多下载 8 MB：响应头声明的大小超限时不读取响应体，没有声明时边下载边计数，超限即中断；下载超过 35 秒按超时处理。
 
 ---
 
@@ -147,7 +149,7 @@
 | 桌面端构建 | `dotnet build BiliIndexTranslate.Desktop/BiliIndexTranslate.sln -c Release` |
 | 桌面端单测 | `dotnet test BiliIndexTranslate.Desktop/tests/BiliIndexTranslate.Core.Tests -c Release` |
 
-- `tests/extension/` 覆盖术语表解析、提示词构造、识图双轨解析、段落锚点、学习卡 JSON 修复与流式解析，四条流式请求路径的分块、取消和 JSON 回退，并用模拟的 `fetch` 验证 412 时只发一次请求、不自动改走中继；`deeplx.test.js` 和 `custom.test.js` 覆盖 DeepLX 格式与自定义模板的请求构造、占位符转义、响应解析和各条功能路径。
-- `tests/e2e/` 在无头 Chromium 里加载未打包的扩展，后端换成 `tests/support/mock-upstream.js`（本地 OpenAI 兼容模拟服务，按提示词返回确定的译文、词卡和识图结果）。用例覆盖划词流式与取消、术语表注入、412 与显式中继、学习卡片快捷键、`Alt+A` 双语对照（视口优先、跳过中文和代码、滚动续翻、仅译与模型切换、无损还原）、`Alt+S` 框选裁剪、右键图片、选项页、DeepLX 接口格式（模拟服务的 `/translate` 端点）和自定义模板（模拟服务里一个形状自拟的 `/custom-api` 端点）。每个用例结束时检查没有请求离开 `127.0.0.1`。右键菜单和扩展快捷键无法在 Playwright 里直接点击，用例在 service worker 里派发与 Chrome 相同的事件。
+- `tests/extension/` 覆盖术语表解析、提示词构造、识图双轨解析、段落锚点、学习卡 JSON 修复与流式解析，四条流式请求路径的分块、取消和 JSON 回退，并用模拟的 `fetch` 验证 412 时只发一次请求、不自动改走中继；`deeplx.test.js` 和 `custom.test.js` 覆盖 DeepLX 格式与自定义模板的请求构造、占位符转义、响应解析和各条功能路径；`settings.test.js` 覆盖 API key 从同步存储到本机存储的迁移；`image-fetch.test.js` 覆盖右键图片下载的 8 MB 上限和超时。
+- `tests/e2e/` 在无头 Chromium 里加载未打包的扩展，后端换成 `tests/support/mock-upstream.js`（本地 OpenAI 兼容模拟服务，按提示词返回确定的译文、词卡和识图结果）。用例覆盖划词流式与取消、术语表注入、412 与显式中继、学习卡片快捷键、`Alt+A` 双语对照（视口优先、跳过中文和代码、滚动续翻、仅译与模型切换、无损还原）、`Alt+S` 框选裁剪、右键图片（含超过 8 MB 时中断下载）、选项页（含旧版本 API key 的迁移）、DeepLX 接口格式（模拟服务的 `/translate` 端点）和自定义模板（模拟服务里一个形状自拟的 `/custom-api` 端点）。每个用例结束时检查没有请求离开 `127.0.0.1`。右键菜单和扩展快捷键无法在 Playwright 里直接点击，用例在 service worker 里派发与 Chrome 相同的事件。
 - GitHub Actions（`.github/workflows/ci.yml`）在每次推送和 PR 上运行以上全部检查；端到端测试失败时上传 Playwright 报告和 trace，桌面端在 `windows-latest` 上构建、测试，并试打一次发布包。Dependabot（`.github/dependabot.yml`）每周检查 Actions、npm 和 NuGet 依赖。
 - 发布：先把 `bili-index-translate/manifest.json` 的 `version` 和 `BiliIndexTranslate.Desktop/Directory.Build.props` 的 `<Version>` 改成同一个版本号并合入 `main`，再推送 `vX.Y.Z` tag。`.github/workflows/release.yml` 会跑全部单测，用 `.github/scripts/package-release.ps1` 打出 3 个 ZIP 和 `SHA256SUMS.txt`，建成草稿 Release，核对说明后手动发布。tag 与两处版本号不一致或工作区有未提交改动时脚本直接失败。本地预演：`pwsh .github/scripts/package-release.ps1 -OutDir <空目录>`。

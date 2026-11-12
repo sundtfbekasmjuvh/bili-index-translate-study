@@ -95,14 +95,14 @@ const test = base.test.extend({
             sync: {
               base: upstream.base,
               proxy: "",
-              key: "e2e-key",
               target: "中文",
               model: "Index-Translate-9B",
               immersiveModel: "Index-Translate-2B",
               visionModel: "Index-Translate-35B-A3B",
               ...(overrides.sync || {})
             },
-            local: { glossary: "", ...(overrides.local || {}) }
+            // The API key lives in chrome.storage.local, not in the synced area.
+            local: { glossary: "", key: "e2e-key", ...(overrides.local || {}) }
           }
         );
       };

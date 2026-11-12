@@ -14,12 +14,13 @@ const DEFAULTS = {
   model: "Index-Translate-9B",
   immersiveModel: "Index-Translate-2B",
   visionModel: "Index-Translate-35B-A3B",
-  key: "bili",
   target: "中文"
 };
 
+// chrome.storage.local: the API key stays on this device and is not synced to the browser account.
 const LOCAL_DEFAULTS = {
-  glossary: ""
+  glossary: "",
+  key: "bili"
 };
 
 const TEST_TEXT = "The quick brown fox jumps over the lazy dog.";
@@ -170,7 +171,7 @@ function fillForm(s, localCfg) {
   $("customErrorPath").value = s.customErrorPath || "";
   $("customPreset").value = "";
   $("proxy").value = s.proxy;
-  $("key").value = s.key;
+  $("key").value = String((localCfg && localCfg.key) ?? "");
   $("target").value = s.target;
   ensureSelectValue($("model"), s.model || DEFAULTS.model);
   ensureSelectValue($("immersiveModel"), s.immersiveModel || DEFAULTS.immersiveModel);
@@ -195,11 +196,11 @@ function readForm() {
       model: $("model").value,
       immersiveModel: $("immersiveModel").value,
       visionModel: $("visionModel").value,
-      key: $("key").value.trim(),
       target: $("target").value.trim() || DEFAULTS.target
     },
     local: {
-      glossary: $("glossary").value.replace(/\r\n/g, "\n").trim()
+      glossary: $("glossary").value.replace(/\r\n/g, "\n").trim(),
+      key: $("key").value.trim()
     }
   };
 }
@@ -225,7 +226,9 @@ async function save() {
     return null;
   }
   // The background worker owns the template rules; ask it instead of repeating them here.
-  const check = await chrome.runtime.sendMessage({ type: "BILI_CHECK_API_CONFIG", settings: s }).catch(() => null);
+  const check = await chrome.runtime
+    .sendMessage({ type: "BILI_CHECK_API_CONFIG", settings: { ...s, key: l.key } })
+    .catch(() => null);
   if (check && check.ok === false) {
     setStatus(check.error, true);
     return null;
@@ -271,6 +274,9 @@ async function test() {
 }
 
 document.addEventListener("DOMContentLoaded", async () => {
+  // A key left in chrome.storage.sync by an older version is moved by the background worker; wait for
+  // that before reading. If the worker cannot be reached, it moves the key on its next request instead.
+  await chrome.runtime.sendMessage({ type: "BILI_MIGRATE_SETTINGS" }).catch(() => null);
   const syncCfg = await chrome.storage.sync.get(DEFAULTS);
   const localCfg = chrome.storage.local ? await chrome.storage.local.get(LOCAL_DEFAULTS) : LOCAL_DEFAULTS;
   fillForm(syncCfg, localCfg);

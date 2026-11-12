@@ -13,14 +13,15 @@ public partial class SettingsWindow : Window
     private readonly AppSettings _original;
     private readonly ObservableCollection<string> _excluded;
     private readonly Func<AppSettings, CancellationToken, Task<(bool Ok, string Message)>> _tester;
-    private readonly Action<AppSettings> _save;
+    /// <summary>Applies and stores the settings; returns why they could not be written to disk, or null.</summary>
+    private readonly Func<AppSettings, string?> _save;
     private readonly string _settingsPath;
     private CancellationTokenSource? _testCts;
     private bool _keyRevealed;
 
     public SettingsWindow(AppSettings current, string settingsPath,
         Func<AppSettings, CancellationToken, Task<(bool Ok, string Message)>> tester,
-        Action<AppSettings> save)
+        Func<AppSettings, string?> save)
     {
         InitializeComponent();
         _original = current.Clone();
@@ -150,7 +151,8 @@ public partial class SettingsWindow : Window
     {
         var s = ReadForm(out var error);
         if (s is null) { ShowStatus(error!, isError: true); return; }
-        _save(s);
+        // The window stays open when the file could not be written, so that the reason is seen.
+        if (_save(s) is { } saveError) { ShowStatus(saveError, isError: true); return; }
         Close();
     }
 
@@ -158,16 +160,17 @@ public partial class SettingsWindow : Window
     {
         var s = ReadForm(out var error);
         if (s is null) { ShowStatus(error!, isError: true); return; }
-        _save(s);
+        var saveError = _save(s);
 
         _testCts?.Cancel();
         _testCts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
         SaveTestButton.IsEnabled = false;
-        ShowStatus("Saved. Testing the connection…", isError: false);
+        ShowStatus(saveError is null ? "Saved. Testing the connection…" : "Not saved. Testing the connection…", isError: saveError is not null);
         try
         {
             var (ok, message) = await _tester(s, _testCts.Token);
-            ShowStatus(message, isError: !ok);
+            if (saveError is null) ShowStatus(message, isError: !ok);
+            else ShowStatus($"{saveError} Connection test: {message}", isError: true);
         }
         catch (OperationCanceledException) { ShowStatus("Test cancelled.", isError: true); }
         catch (Exception ex) { ShowStatus($"Test failed: {ex.GetType().Name}", isError: true); }

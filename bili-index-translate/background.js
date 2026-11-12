@@ -14,12 +14,14 @@ const DEFAULTS = {
   model: "Index-Translate-9B",
   immersiveModel: "Index-Translate-2B",
   visionModel: "Index-Translate-35B-A3B",
-  key: "bili",
   target: "中文"
 };
 
+// Kept in chrome.storage.local: the glossary because of its size, the API key so that it stays on
+// this device instead of being uploaded to the browser account by chrome.storage.sync.
 const LOCAL_DEFAULTS = {
-  glossary: ""
+  glossary: "",
+  key: "bili"
 };
 
 const MENU_ID = "bili-translate-selection";
@@ -87,14 +89,25 @@ function stripSlashes(url) {
   return String(url || "").trim().replace(/\/+$/, "");
 }
 
-async function getSettings() {
-  const syncCfg = await chrome.storage.sync.get(DEFAULTS);
-  let glossary = "";
-  if (chrome.storage.local) {
-    const localCfg = await chrome.storage.local.get(LOCAL_DEFAULTS);
-    glossary = String(localCfg.glossary || "");
+// Versions up to 1.4.1 stored the API key in chrome.storage.sync. Move it to chrome.storage.local and
+// delete the synced copy. A key already saved on this device wins over the synced one. Runs before
+// every settings read, so a key synced in later by an older install is moved as well.
+async function migrateKeyToLocal() {
+  const synced = await chrome.storage.sync.get("key");
+  if (!Object.prototype.hasOwnProperty.call(synced, "key")) return false;
+  const local = await chrome.storage.local.get("key");
+  if (!Object.prototype.hasOwnProperty.call(local, "key")) {
+    await chrome.storage.local.set({ key: String(synced.key ?? "") });
   }
-  return { ...syncCfg, glossary };
+  await chrome.storage.sync.remove("key");
+  return true;
+}
+
+async function getSettings() {
+  await migrateKeyToLocal();
+  const syncCfg = await chrome.storage.sync.get(DEFAULTS);
+  const localCfg = await chrome.storage.local.get(LOCAL_DEFAULTS);
+  return { ...syncCfg, glossary: String(localCfg.glossary || ""), key: String(localCfg.key ?? "") };
 }
 
 function isIndexModelOrHost(model, baseUrl) {
@@ -1482,20 +1495,63 @@ function textOnlyUnsupported(feature, engine) {
   };
 }
 
-async function fetchImageAsDataUrl(srcUrl) {
+// Reads a response body but stops as soon as it grows past maxBytes, so an oversized download is
+// dropped instead of being buffered in full. Returns null when the limit is exceeded.
+async function readBodyCapped(res, maxBytes) {
+  if (!res.body) return new Uint8Array(await res.arrayBuffer());
+  const reader = res.body.getReader();
+  const chunks = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > maxBytes) {
+      await reader.cancel().catch(() => {});
+      return null;
+    }
+    chunks.push(value);
+  }
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return bytes;
+}
+
+async function fetchImageAsDataUrl(srcUrl, timeoutMs = TIMEOUT_MS) {
   const url = String(srcUrl || "").trim();
   if (!url) throw new Error("Empty image URL.");
   if (url.startsWith("data:image/")) return url;
 
-  const res = await fetch(url, { credentials: "omit" });
-  if (!res.ok) throw new Error("Failed to fetch image (HTTP " + res.status + ").");
-  const buf = await res.arrayBuffer();
-  if (buf.byteLength === 0) throw new Error("Image is empty.");
-  if (buf.byteLength > MAX_IMAGE_BYTES) throw new Error("Image exceeds 8 MB limit; use Alt+S region snip instead.");
+  const tooLarge = "Image exceeds 8 MB limit; use Alt+S region snip instead.";
+  const controller = new AbortController();
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeoutMs);
+  try {
+    const res = await fetch(url, { credentials: "omit", signal: controller.signal });
+    if (!res.ok) throw new Error("Failed to fetch image (HTTP " + res.status + ").");
+    // Content-Length can be missing or wrong, so it only allows an early refusal; the capped read is the limit.
+    if (Number(res.headers.get("content-length")) > MAX_IMAGE_BYTES) throw new Error(tooLarge);
+    const bytes = await readBodyCapped(res, MAX_IMAGE_BYTES);
+    if (!bytes) throw new Error(tooLarge);
+    if (bytes.byteLength === 0) throw new Error("Image is empty.");
 
-  const rawType = (res.headers.get("content-type") || "image/png").split(";")[0].trim().toLowerCase();
-  const mime = rawType.startsWith("image/") ? rawType : "image/png";
-  return "data:" + mime + ";base64," + arrayBufferToBase64(buf);
+    const rawType = (res.headers.get("content-type") || "image/png").split(";")[0].trim().toLowerCase();
+    const mime = rawType.startsWith("image/") ? rawType : "image/png";
+    return "data:" + mime + ";base64," + arrayBufferToBase64(bytes);
+  } catch (err) {
+    if (timedOut) throw new Error("Image download timed out after " + timeoutMs / 1000 + " s.");
+    throw err;
+  } finally {
+    clearTimeout(timer);
+    controller.abort(); // ends a download that was refused before its body was read
+  }
 }
 
 async function callChatCompletion(messages, s, temperature = 0.0, activeModel = "", maxTokens = undefined) {
@@ -2014,6 +2070,15 @@ if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.onMessage)
       return false;
     }
 
+    // The options page reads storage itself; it asks for this first so that it never shows a stale key.
+    if (msg.type === "BILI_MIGRATE_SETTINGS") {
+      migrateKeyToLocal().then(
+        () => sendResponse({ ok: true }),
+        (err) => sendResponse({ ok: false, error: String((err && err.message) || err) })
+      );
+      return true;
+    }
+
     if (msg.type === "BILI_PURGE_VOLATILE") {
       volatileTranslateCache.clear();
       volatileStudyCache.clear();
@@ -2182,6 +2247,7 @@ if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.onMessage)
       );
     });
     chrome.storage.sync.get(DEFAULTS).then((s) => chrome.storage.sync.set(s));
+    migrateKeyToLocal().catch((err) => console.warn("[Bili Index Translate] API key migration failed:", err));
   });
 
   async function sendToFrame(tabId, frameId, msg) {
@@ -2289,6 +2355,9 @@ if (typeof module !== "undefined" && module.exports) {
     buildCustomRequest,
     parseCustomResponse,
     checkApiConfig,
+    migrateKeyToLocal,
+    getSettings,
+    fetchImageAsDataUrl,
     callChatCompletion,
     readChatContent,
     streamTranslation,

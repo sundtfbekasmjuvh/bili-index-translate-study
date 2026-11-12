@@ -130,6 +130,8 @@ function pngChunk(type, data) {
   return Buffer.concat([len, typed, crc]);
 }
 
+const HUGE_IMAGE_BYTES = 32 * 1024 * 1024;
+
 // Small RGB PNG with horizontal stripes, served as the right-click image fixture.
 function samplePng(width = 64, height = 32) {
   const rows = [];
@@ -160,6 +162,7 @@ function pngSize(dataUrl) {
 
 async function startMockUpstream(options = {}) {
   const requests = [];
+  const downloads = [];
   const overrides = [];
   const delayMs = options.delayMs ?? 25;
   const png = samplePng();
@@ -184,6 +187,35 @@ async function startMockUpstream(options = {}) {
     if (req.method === "GET" && url.pathname === "/sample.png") {
       res.writeHead(200, { "Content-Type": "image/png", "Cache-Control": "no-store" });
       res.end(png);
+      return;
+    }
+    // A download far beyond the extension's 8 MB image limit. With ?declared=1 the size is announced
+    // in Content-Length; without it the body is chunked and the size only shows while downloading.
+    if (req.method === "GET" && url.pathname === "/huge.png") {
+      const entry = { path: url.pathname + url.search, sent: 0, total: HUGE_IMAGE_BYTES, closedEarly: false };
+      downloads.push(entry);
+      const headers = { "Content-Type": "image/png", "Cache-Control": "no-store" };
+      if (url.searchParams.get("declared")) headers["Content-Length"] = String(entry.total);
+      res.writeHead(200, headers);
+      res.on("close", () => {
+        if (!res.writableEnded) entry.closedEarly = true;
+      });
+      const chunk = Buffer.alloc(64 * 1024, 0x5a);
+      while (entry.sent < entry.total && !res.destroyed) {
+        entry.sent += chunk.length;
+        if (!res.write(chunk)) {
+          await new Promise((resolve) => {
+            const resume = () => {
+              res.off("drain", resume);
+              res.off("close", resume);
+              resolve();
+            };
+            res.on("drain", resume);
+            res.on("close", resume);
+          });
+        }
+      }
+      if (!res.destroyed) res.end();
       return;
     }
     if (req.method === "GET" && url.pathname.endsWith(".html")) {
@@ -272,6 +304,8 @@ async function startMockUpstream(options = {}) {
     origin,
     base: origin + "/v1",
     requests,
+    // One entry per /huge.png download: bytes written so far and whether the client hung up early.
+    downloads,
     // Applies to the next request of this kind (optionally filtered by match). Supports
     // { status, body } for HTTP errors, { reply } for custom text, and { hold } to pause the
     // stream after its first chunk until the promise resolves.
@@ -286,6 +320,7 @@ async function startMockUpstream(options = {}) {
     },
     reset() {
       requests.length = 0;
+      downloads.length = 0;
       overrides.length = 0;
     },
     close() {

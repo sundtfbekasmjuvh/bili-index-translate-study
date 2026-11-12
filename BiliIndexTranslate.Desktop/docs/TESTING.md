@@ -57,9 +57,31 @@ tests only).
 
 The same build started from `src\BiliIndexTranslate.App\bin\Release\net8.0-windows` translated
 correctly, but on this machine neither `settings.json` nor `diagnostics.log` was written; from the
-publish output both were. The cause was not investigated further; it matches the note below about
-security software interfering with programs in `bin\`. Use the publish output (`tools\build.cmd`)
-when settings do not persist with `tools\run.cmd`.
+publish output both were. See the next section for the cause.
+
+### Settings that cannot be written (2026-11-12)
+
+Cause of the note above, found on this machine: the directory that holds the checkout carries a
+Low mandatory integrity label that every file below it inherits
+(`icacls <dir>` prints `Mandatory Label\Low Mandatory Level:(OI)(CI)(NW)`). Windows starts an
+executable with such a label at low integrity, and a low-integrity process may not write to
+`%LocalAppData%`. Measured: the app started from `bin\Release` ran at integrity level `0x1000`
+(Low) while the shell that started it ran at `0x2000` (Medium); a copy of `whoami.exe` placed in
+`bin\` reported `Low Mandatory Level`, the original `Medium Mandatory Level`. The publish output
+used in the walkthroughs was outside that directory. Security software was not involved.
+
+The app used to log such a failure and nothing else. Now:
+
+| # | Step | Result |
+|---|---|---|
+| 1 | Start from `bin\Release` (low integrity), open Settings, **Save** | ✅ the window stays open and shows `Settings were not saved (UnauthorizedAccessException: Access to the path '…\settings.json.tmp' is denied.). They stay in effect until the app exits.`; `settings.json` is unchanged (same SHA-256) and no `.tmp` file is left behind |
+
+Not exercised live: the tray notice shown when a background save fails (text size or the
+auto-translate toggle), and **Save and test** in this state (it reports the save failure together
+with the result of the connection test).
+
+If settings do not persist with `tools\run.cmd`, check the label with `icacls` and either build
+to a directory without it (`dotnet publish … -o <dir>`) or move the checkout.
 
 ### Custom API template through the Settings window (2026-11-12)
 
@@ -102,7 +124,10 @@ parameters, not results. The Diagnostics window reports p50/p95 per category whi
 runs — the categories are `Detect`, `Probe`, `Cache`, `Render`, `Http` and `Refresh`.
 
 If `dotnet test` aborts on Windows with `Win32Exception (5): Access is denied` while the test host
-looks up its parent process, security software is blocking the test host in `bin\`. Point the
+looks up its parent process, check the checkout for the Low integrity label described under
+"Settings that cannot be written": `testhost.exe` in `bin\` is then started at low integrity and
+may not open the medium-integrity `dotnet` process that started it. On this machine the abort
+reproduces with the default output directory and all tests pass with the output elsewhere. Point the
 output somewhere else, for example `dotnet test … -o %TEMP%\bit-tests`.
 
 ## Scenarios
