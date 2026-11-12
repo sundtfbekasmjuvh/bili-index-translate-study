@@ -10,6 +10,12 @@ const PORT = Number(process.env.PORT) || 3001;
 const HOST = process.env.HOST || "127.0.0.1";
 const EXT_DIR = path.resolve(__dirname, "../bili-index-translate");
 const DEMO_HTML = path.join(__dirname, "index.html");
+const EXT_FILES = {
+  "/ext/content.css": { name: "content.css", type: "text/css; charset=utf-8" },
+  "/ext/i18n.js": { name: "i18n.js", type: "application/javascript; charset=utf-8" },
+  "/ext/content.js": { name: "content.js", type: "application/javascript; charset=utf-8" },
+  "/ext/icons/icon32.png": { name: "icons/icon32.png", type: "image/png" }
+};
 
 const DEFAULT_BASE = "https://index-translate.bilibili.com/v1";
 const DEFAULT_KEY = "bili";
@@ -129,15 +135,11 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
-    if (req.method === "GET" && url.pathname === "/ext/content.css") {
-      res.writeHead(200, { "Content-Type": "text/css; charset=utf-8", "Cache-Control": "no-store" });
-      res.end(fs.readFileSync(path.join(EXT_DIR, "content.css"), "utf8"));
-      return;
-    }
-
-    if (req.method === "GET" && url.pathname === "/ext/content.js") {
-      res.writeHead(200, { "Content-Type": "application/javascript; charset=utf-8", "Cache-Control": "no-store" });
-      res.end(fs.readFileSync(path.join(EXT_DIR, "content.js"), "utf8"));
+    // The extension files the demo page uses: the content script, its stylesheet, the interface text it needs and the icon.
+    const extFile = req.method === "GET" ? EXT_FILES[url.pathname] : undefined;
+    if (extFile) {
+      res.writeHead(200, { "Content-Type": extFile.type, "Cache-Control": "no-store" });
+      res.end(fs.readFileSync(path.join(EXT_DIR, extFile.name)));
       return;
     }
 

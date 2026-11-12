@@ -4,6 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Bili Index Translate · 极简流式双浮窗语言私教</title>
+  <link rel="icon" type="image/png" href="ext/icons/icon32.png" />
   <link rel="stylesheet" href="ext/content.css" />
   <style>
     :root {
@@ -387,6 +388,8 @@ Sovereign Scheduler => 主权调度器</textarea>
       }
 
       window.chrome = {
+        // The content script follows the browser's interface language; a plain page only knows navigator.language.
+        i18n: { getUILanguage: () => navigator.language },
         runtime: {
           lastError: null,
           onMessage: { addListener() {} },
@@ -583,6 +586,7 @@ Sovereign Scheduler => 主权调度器</textarea>
       });
     })();
   </script>
+  <script src="ext/i18n.js"></script>
   <script src="ext/content.js"></script>
 </body>
 </html>

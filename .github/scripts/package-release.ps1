@@ -92,8 +92,9 @@ foreach ($variant in $variants) {
   New-ExeZip (Join-Path $OutDir $variant.Zip) $exe
 }
 
-$actualExt = @(Get-ZipEntries $extZip | Sort-Object)
-$expectedExt = @(@("bili-index-translate/") + $tracked | Sort-Object)
+# git archive also writes an entry for every folder; only the files are compared.
+$actualExt = @(Get-ZipEntries $extZip | Where-Object { -not $_.EndsWith("/") } | Sort-Object)
+$expectedExt = @($tracked | Sort-Object)
 if (Compare-Object $actualExt $expectedExt) { throw "Extension ZIP entries differ from the committed files" }
 foreach ($variant in $variants) {
   $entries = @(Get-ZipEntries (Join-Path $OutDir $variant.Zip))
