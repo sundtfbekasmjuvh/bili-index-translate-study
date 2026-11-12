@@ -5,6 +5,12 @@ const DEFAULTS = {
   base: "https://index-translate.bilibili.com/v1",
   proxy: "",
   apiType: "openai",
+  customName: "",
+  customMethod: "POST",
+  customHeaders: "",
+  customBody: "",
+  customResultPath: "",
+  customErrorPath: "",
   model: "Index-Translate-9B",
   immersiveModel: "Index-Translate-2B",
   visionModel: "Index-Translate-35B-A3B",
@@ -28,6 +34,10 @@ const MAX_ERROR_BODY = 4000;
 // apiType "deeplx": Base URL is a DeepLX-style translate endpoint instead of an OpenAI-compatible root.
 const API_TYPE_DEEPLX = "deeplx";
 const DEEPLX_LABEL = "DeepLX";
+
+// apiType "custom": the request and the place of the translation in the reply come from a template.
+const API_TYPE_CUSTOM = "custom";
+const CUSTOM_LABEL = "Custom API";
 
 // Strictly volatile in-RAM session LRU micro-cache (never persisted to chrome.storage or disk).
 const MEM_CACHE_LIMIT = 64;
@@ -882,7 +892,8 @@ function extractPartialStudyDeck(partialRaw, sourceText) {
 
 // ---- API & Streaming --------------------------------------------------------------------
 
-async function postJson(url, headers, body, externalSignal) {
+// One HTTP request with the shared timeout and caller-abort handling. bodyText is sent as is.
+async function sendRequest(url, method, headers, bodyText, externalSignal) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
   const onAbort = () => controller.abort();
@@ -892,9 +903,9 @@ async function postJson(url, headers, body, externalSignal) {
   }
   try {
     const res = await fetch(url, {
-      method: "POST",
+      method: method,
       headers: headers,
-      body: JSON.stringify(body),
+      body: bodyText,
       signal: controller.signal
     });
     const raw = await res.text();
@@ -908,6 +919,10 @@ async function postJson(url, headers, body, externalSignal) {
     clearTimeout(timer);
     if (externalSignal) externalSignal.removeEventListener("abort", onAbort);
   }
+}
+
+async function postJson(url, headers, body, externalSignal) {
+  return sendRequest(url, "POST", headers, JSON.stringify(body), externalSignal);
 }
 
 async function postChat(prefix, key, body, externalSignal) {
@@ -1029,13 +1044,18 @@ function parseDeeplxResponse(raw, httpStatus) {
   return { ok: true, text: text };
 }
 
-function deeplxCacheKey(s, text) {
-  return DEEPLX_LABEL + "|" + s.target + "|" + stripSlashes(s.base) + "||" + text;
-}
+// ---- Text-only engines: DeepLX and custom JSON APIs -----------------------------------------
+// Both translate plain text with one request and one final result. Neither has a prompt, so the
+// glossary is not applied and Study Cards and image translation are refused. They share the cache,
+// the Alt+A batch handling and the error shape; an engine only says how to send text and read the reply.
 
 // studyCard: false tells the page not to advertise the Study Card next to this translation.
-function deeplxEntry(text, via) {
-  return { text: text, model: DEEPLX_LABEL, via: via, glossaryHits: 0, studyCard: false };
+function engineEntry(engine, text, via) {
+  return { text: text, model: engine.label, via: via, glossaryHits: 0, studyCard: false };
+}
+
+function engineCacheKey(engine, s, text) {
+  return engine.cachePrefix + "|" + s.target + "|" + stripSlashes(s.base) + "||" + text;
 }
 
 // One request, one final text: DeepLX does not stream. As with the chat paths, a relay replaces the
@@ -1060,28 +1080,304 @@ async function deeplxRequest(s, text, externalSignal) {
   return { ...parseDeeplxResponse(r.raw, r.status), via: via };
 }
 
-async function deeplxTranslate(s, text, externalSignal) {
-  const cacheKey = deeplxCacheKey(s, text);
+// lineBatch: a DeepLX service translates line by line, so paragraphs can share one request.
+function deeplxEngine(s) {
+  return {
+    label: DEEPLX_LABEL,
+    cachePrefix: DEEPLX_LABEL,
+    lineBatch: true,
+    request: (text, signal) => deeplxRequest(s, text, signal)
+  };
+}
+
+// ---- Custom JSON API template ----------------------------------------------------------------
+// The request is described in the options instead of in code: URL, method, headers and body are
+// templates, and a path says where the translation is in the JSON reply. Placeholders:
+//   {text}        the text to translate
+//   {texts}       every text of the request as a JSON array (body only); one request per Alt+A batch
+//   {apiKey}      the API Key field
+//   {target}      the Target language field exactly as entered
+//   {targetLang}  the target as a DeepL-style code (ZH, EN, PT-BR); {targetLangLower} in lower case
+// Values are escaped for where they land: URL-encoded in the URL and in form bodies, JSON-escaped in
+// JSON bodies (write "{text}" inside the quotes of a string), stripped of line breaks in headers.
+
+const CUSTOM_PLACEHOLDER =
+  /\{\{(texts|text|apiKey|targetLangLower|targetLang|target)\}\}|\{(texts|text|apiKey|targetLangLower|targetLang|target)\}/gi;
+
+function fillCustomTemplate(template, values, encode) {
+  return String(template).replace(CUSTOM_PLACEHOLDER, (_, a, b) => encode(values[(a || b).toLowerCase()]));
+}
+
+function encodeRaw(v) {
+  return Array.isArray(v) ? JSON.stringify(v) : String(v);
+}
+
+function encodeForUrl(v) {
+  return encodeURIComponent(encodeRaw(v));
+}
+
+function encodeForHeader(v) {
+  return encodeRaw(v).replace(/[\r\n]+/g, " ");
+}
+
+// Inside a JSON string: the escaped characters without the surrounding quotes. {texts} is a whole array literal.
+function encodeForJson(v) {
+  return Array.isArray(v) ? JSON.stringify(v) : JSON.stringify(String(v)).slice(1, -1);
+}
+
+// Paths like data.translations[0].text. A key is a string token, [n] a number, and [*] (null) collects
+// every element of an array. Returns null when the path is empty or malformed.
+function parseJsonPath(path) {
+  const src = String(path || "").trim().replace(/^\$\.?/, "");
+  if (!/^(?:[^.\[\]\s]+|\[(?:\d+|\*)\])(?:\.[^.\[\]\s]+|\[(?:\d+|\*)\])*$/.test(src)) return null;
+  const tokens = [];
+  const re = /\[(\d+|\*)\]|[^.\[\]]+/g;
+  let m;
+  while ((m = re.exec(src)) !== null) {
+    tokens.push(m[1] === undefined ? m[0] : m[1] === "*" ? null : Number(m[1]));
+  }
+  return tokens;
+}
+
+// Every value the path reaches: at most one without [*], any number with it.
+function readJsonPath(data, tokens) {
+  let nodes = [data];
+  for (const t of tokens) {
+    const next = [];
+    for (const n of nodes) {
+      if (t === null) {
+        if (Array.isArray(n)) next.push(...n);
+      } else if (typeof t === "number") {
+        if (Array.isArray(n) && t < n.length) next.push(n[t]);
+      } else if (n && typeof n === "object" && !Array.isArray(n) && Object.prototype.hasOwnProperty.call(n, t)) {
+        next.push(n[t]);
+      }
+    }
+    nodes = next;
+  }
+  return nodes;
+}
+
+function customConfigError(message) {
+  return { ok: false, error: "Custom API: " + message };
+}
+
+function parseCustomTemplate(s) {
+  const method = String(s.customMethod || "").trim().toUpperCase() === "GET" ? "GET" : "POST";
+  const bodyTemplate = method === "GET" ? "" : String(s.customBody || "").trim();
+
+  const headers = [];
+  let contentType = "";
+  for (const rawLine of String(s.customHeaders || "").split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith("#")) continue;
+    const m = /^([A-Za-z0-9_-]+)\s*:\s*(.*)$/.exec(line);
+    if (!m) return customConfigError('the header line "' + line.slice(0, 80) + '" is not in the form "Name: value".');
+    headers.push([m[1], m[2]]);
+    if (m[1].toLowerCase() === "content-type") contentType = m[2];
+  }
+  if (bodyTemplate && !contentType) {
+    contentType = "application/json";
+    headers.push(["Content-Type", contentType]);
+  }
+
+  const resultPathText = String(s.customResultPath || "").trim();
+  const resultPath = parseJsonPath(resultPathText);
+  if (!resultPath) {
+    return customConfigError(
+      resultPathText
+        ? 'the result path "' + resultPathText + '" is not valid. Use a path like translations[0].text or data.'
+        : "the result path is empty. It says where the translation is in the JSON reply, for example translations[0].text."
+    );
+  }
+  const errorPathText = String(s.customErrorPath || "").trim();
+  const errorPath = errorPathText ? parseJsonPath(errorPathText) : null;
+  if (errorPathText && !errorPath) return customConfigError('the error path "' + errorPathText + '" is not valid.');
+
+  const endpoint = stripSlashes(s.proxy) || stripSlashes(s.base);
+  const batch = /\{\{?texts\}?\}/i.test(bodyTemplate);
+  if (!batch && !/\{\{?text\}?\}/i.test(endpoint + "\n" + bodyTemplate)) {
+    return customConfigError("the template never sends the text. Put {text} in the URL or the body, or {texts} in the body.");
+  }
+
+  return {
+    ok: true,
+    method: method,
+    headers: headers,
+    bodyTemplate: bodyTemplate,
+    form: /x-www-form-urlencoded/i.test(contentType),
+    json: /json/i.test(contentType),
+    resultPath: resultPath,
+    resultPathText: resultPathText,
+    errorPath: errorPath,
+    batch: batch
+  };
+}
+
+function buildCustomRequest(tpl, endpoint, key, texts, target) {
+  const t = String(target || DEFAULTS.target).trim();
+  const lang = deeplxTargetLang(t);
+  const values = {
+    text: texts[0],
+    texts: texts,
+    apikey: String(key || "").trim(),
+    target: t,
+    targetlang: lang,
+    targetlanglower: lang.toLowerCase()
+  };
+
+  const headers = {};
+  for (const [name, value] of tpl.headers) headers[name] = fillCustomTemplate(value, values, encodeForHeader);
+  const request = { url: fillCustomTemplate(stripSlashes(endpoint), values, encodeForUrl), headers: headers, body: undefined };
+
+  if (tpl.bodyTemplate) {
+    const encode = tpl.form ? encodeForUrl : tpl.json ? encodeForJson : encodeRaw;
+    request.body = fillCustomTemplate(tpl.bodyTemplate, values, encode);
+    if (tpl.json) {
+      try {
+        JSON.parse(request.body);
+      } catch (_) {
+        return {
+          error:
+            "Custom API: the request body is not valid JSON once the placeholders are filled in. Write {text} inside the quotes of a string and {texts} without quotes."
+        };
+      }
+    }
+  }
+  return request;
+}
+
+// Reads the translations at the result path. A batch template ({texts}) must return one translation per
+// text; otherwise everything the path reaches is one translation (some services split it into pieces).
+function parseCustomResponse(raw, httpStatus, httpOk, tpl, expected) {
+  let data;
+  let isJson = true;
+  try {
+    data = JSON.parse(raw);
+  } catch (_) {
+    isJson = false;
+  }
+
+  let errorText = "";
+  if (isJson && tpl.errorPath) {
+    const found = readJsonPath(data, tpl.errorPath).find((v) => typeof v === "string" && v.trim());
+    if (found) errorText = found.trim();
+  }
+  const snippet = String(raw).slice(0, MAX_ERROR_BODY);
+
+  if (!httpOk) return { ok: false, status: httpStatus, body: errorText ? errorText.slice(0, MAX_ERROR_BODY) : snippet };
+  if (!isJson) return { ok: false, status: httpStatus, body: "Response is not JSON: " + snippet };
+
+  const texts = [];
+  let valid = true;
+  for (const v of readJsonPath(data, tpl.resultPath)) {
+    if (typeof v === "string") texts.push(v);
+    else if (Array.isArray(v) && v.every((x) => typeof x === "string")) texts.push(...v);
+    else valid = false;
+  }
+  const missing = {
+    ok: false,
+    status: httpStatus,
+    body: errorText || 'No translation at "' + tpl.resultPathText + '" in: ' + snippet
+  };
+  if (!valid || texts.length === 0) return missing;
+
+  if (tpl.batch) {
+    const out = texts.map((x) => x.trim());
+    if (out.length !== expected || !out.every(Boolean)) {
+      return {
+        ok: false,
+        status: httpStatus,
+        mismatch: true,
+        body: "Expected " + expected + ' translation(s) at "' + tpl.resultPathText + '" but found ' + out.filter(Boolean).length + "."
+      };
+    }
+    return { ok: true, texts: out };
+  }
+
+  const text = texts.join("").trim();
+  return text ? { ok: true, texts: [text] } : missing;
+}
+
+// Same rules as the other paths: a relay replaces the URL only when it is configured, one request,
+// no retry on another route. A template that cannot work is reported without sending anything.
+async function customRequest(s, tpl, texts, externalSignal) {
+  if (!tpl.ok) return { ok: false, status: 0, body: tpl.error };
+  const relay = stripSlashes(s.proxy);
+  const via = relay ? "relay" : "direct";
+  const req = buildCustomRequest(tpl, relay || s.base, s.key, texts, s.target);
+  if (req.error) return { ok: false, status: 0, body: req.error };
+
+  let r;
+  try {
+    r = await sendRequest(req.url, tpl.method, req.headers, req.body, externalSignal);
+  } catch (err) {
+    if (externalSignal && externalSignal.aborted) {
+      return { ok: false, cancelled: true, status: 0, body: "Cancelled" };
+    }
+    return { ok: false, status: 0, body: String((err && err.message) || err) };
+  }
+  return { ...parseCustomResponse(r.raw, r.status, r.ok, tpl, texts.length), via: via };
+}
+
+function customEngine(s) {
+  const label = String(s.customName || "").trim() || CUSTOM_LABEL;
+  const tpl = parseCustomTemplate(s);
+  const send = (texts, signal) => customRequest(s, tpl, texts, signal);
+  const engine = {
+    label: label,
+    cachePrefix: "custom:" + label,
+    lineBatch: false,
+    request: async (text, signal) => {
+      const r = await send([text], signal);
+      if (r.ok) return { ok: true, text: r.texts[0], via: r.via };
+      const { mismatch, ...error } = r;
+      return error;
+    }
+  };
+  if (tpl.ok && tpl.batch) engine.requestMany = send;
+  return engine;
+}
+
+// Used by the options page before saving, so a template that cannot work is reported there.
+function checkApiConfig(s) {
+  if (String((s && s.apiType) || "").trim().toLowerCase() !== API_TYPE_CUSTOM) return { ok: true };
+  const tpl = parseCustomTemplate(s);
+  if (!tpl.ok) return { ok: false, error: tpl.error };
+  const req = buildCustomRequest(tpl, stripSlashes(s.proxy) || s.base, s.key, ["sample"], s.target);
+  return req.error ? { ok: false, error: req.error } : { ok: true };
+}
+
+// null for the OpenAI-compatible format, which goes through the chat paths.
+function textEngine(s) {
+  if (isDeeplx(s)) return deeplxEngine(s);
+  if (String((s && s.apiType) || "").trim().toLowerCase() === API_TYPE_CUSTOM) return customEngine(s);
+  return null;
+}
+
+async function engineTranslate(engine, s, text, externalSignal) {
+  const cacheKey = engineCacheKey(engine, s, text);
   const hit = lruGet(volatileTranslateCache, cacheKey);
   if (hit) return { ok: true, ...hit, cached: true };
 
-  const r = await deeplxRequest(s, text, externalSignal);
+  const r = await engine.request(text, externalSignal);
   if (!r.ok) return r;
-  const out = deeplxEntry(r.text, r.via);
+  const out = engineEntry(engine, r.text, r.via);
   lruSet(volatileTranslateCache, cacheKey, out);
   return { ok: true, ...out };
 }
 
-// Endpoints whose reply did not keep one line per paragraph; Alt+A no longer merges paragraphs for them.
-const deeplxNoLineBatch = new Set();
+// Endpoints whose reply to a merged request did not give one translation per paragraph; Alt+A no
+// longer merges paragraphs for them.
+const noMergedBatch = new Set();
 
-// Alt+A batch. Paragraphs that are single lines go out as one request, one paragraph per line: a
-// DeepLX service translates line by line, so the reply splits back by line and a batch costs one
-// request instead of one per paragraph. When a reply does not have exactly one line per paragraph,
-// the endpoint is remembered as not line-preserving and its paragraphs are sent one by one, as are
-// paragraphs that contain line breaks themselves. A failed paragraph is left out of the result; the
-// batch itself fails only when it produced no translation at all.
-async function deeplxImmersiveBatch(s, items, onProgress, externalSignal) {
+// Alt+A batch. Where the engine allows it, the uncached paragraphs go out as one request: a batch
+// template ({texts}) sends them as an array, and a line-based service (DeepLX) gets one single-line
+// paragraph per line and the reply is split back by line. When the reply does not have exactly one
+// translation per paragraph, the endpoint is remembered and its paragraphs are sent one by one, as
+// are paragraphs an engine cannot merge. A failed paragraph is left out of the result; the batch
+// itself fails only when it produced no translation at all.
+async function engineImmersiveBatch(engine, s, items, onProgress, externalSignal) {
   const segments = {};
   let pending = [];
   let translated = 0;
@@ -1092,7 +1388,7 @@ async function deeplxImmersiveBatch(s, items, onProgress, externalSignal) {
       segments[i] = "";
       continue;
     }
-    const hit = lruGet(volatileTranslateCache, deeplxCacheKey(s, txt));
+    const hit = lruGet(volatileTranslateCache, engineCacheKey(engine, s, txt));
     if (hit) {
       segments[i] = hit.text;
       translated++;
@@ -1102,12 +1398,12 @@ async function deeplxImmersiveBatch(s, items, onProgress, externalSignal) {
   }
 
   if (pending.length === 0) {
-    return { ok: true, segments: segments, model: DEEPLX_LABEL, via: "direct", cached: true };
+    return { ok: true, segments: segments, model: engine.label, via: "direct", cached: true };
   }
 
   const report = (via) => {
     if (typeof onProgress === "function") {
-      onProgress({ segments: { ...segments }, model: DEEPLX_LABEL, via: via });
+      onProgress({ segments: { ...segments }, model: engine.label, via: via });
     }
   };
   if (translated > 0) report("cache");
@@ -1115,32 +1411,46 @@ async function deeplxImmersiveBatch(s, items, onProgress, externalSignal) {
   const commit = (i, text, via) => {
     segments[i] = text;
     translated++;
-    lruSet(volatileTranslateCache, deeplxCacheKey(s, items[i]), deeplxEntry(text, via));
+    lruSet(volatileTranslateCache, engineCacheKey(engine, s, items[i]), engineEntry(engine, text, via));
   };
 
   let firstError = null;
-  const endpoint = stripSlashes(s.proxy) || stripSlashes(s.base);
-  if (pending.length > 1 && !deeplxNoLineBatch.has(endpoint) && pending.every((i) => !/[\r\n]/.test(items[i]))) {
-    const r = await deeplxRequest(s, pending.map((i) => items[i]).join("\n"), externalSignal);
-    if (r.cancelled) return r;
-    if (!r.ok) {
-      // Sending the same paragraphs one by one would fail the same way; do not multiply the failure.
-      firstError = r;
-      pending = [];
-    } else {
-      const lines = r.text.split(/\r?\n/).map((line) => line.trim());
-      if (lines.length === pending.length && lines.every(Boolean)) {
-        pending.forEach((i, k) => commit(i, lines[k], r.via));
-        report(r.via);
-        pending = [];
+  const endpoint = engine.cachePrefix + "|" + (stripSlashes(s.proxy) || stripSlashes(s.base));
+  if (pending.length > 1 && !noMergedBatch.has(endpoint)) {
+    let merged = null;
+    if (engine.requestMany) {
+      merged = await engine.requestMany(pending.map((i) => items[i]), externalSignal);
+    } else if (engine.lineBatch && pending.every((i) => !/[\r\n]/.test(items[i]))) {
+      const r = await engine.request(pending.map((i) => items[i]).join("\n"), externalSignal);
+      if (r.ok) {
+        const lines = r.text.split(/\r?\n/).map((line) => line.trim());
+        merged =
+          lines.length === pending.length && lines.every(Boolean)
+            ? { ok: true, texts: lines, via: r.via }
+            : { ok: false, mismatch: true };
       } else {
-        deeplxNoLineBatch.add(endpoint);
+        merged = r;
+      }
+    }
+
+    if (merged) {
+      if (merged.cancelled) return merged;
+      if (merged.ok) {
+        pending.forEach((i, k) => commit(i, merged.texts[k], merged.via));
+        report(merged.via);
+        pending = [];
+      } else if (merged.mismatch) {
+        noMergedBatch.add(endpoint);
+      } else {
+        // Sending the same paragraphs one by one would fail the same way; do not multiply the failure.
+        firstError = merged;
+        pending = [];
       }
     }
   }
 
   for (const i of pending) {
-    const r = await deeplxRequest(s, items[i], externalSignal);
+    const r = await engine.request(items[i], externalSignal);
     if (r.cancelled) return r;
     if (!r.ok) {
       if (!firstError) firstError = r;
@@ -1154,19 +1464,21 @@ async function deeplxImmersiveBatch(s, items, onProgress, externalSignal) {
   return {
     ok: true,
     segments: segments,
-    model: DEEPLX_LABEL,
+    model: engine.label,
     via: stripSlashes(s.proxy) ? "relay" : "direct",
     glossaryHits: 0
   };
 }
 
-function deeplxUnsupported(feature) {
+function textOnlyUnsupported(feature, engine) {
   return {
     ok: false,
     status: 0,
     body:
       feature +
-      " needs an OpenAI-compatible chat model. The DeepLX API format only translates text; change the API format in the extension options to use it."
+      " needs an OpenAI-compatible chat model. The " +
+      (engine.label === DEEPLX_LABEL ? "DeepLX" : "custom") +
+      " API format only translates text; change the API format in the extension options to use it."
   };
 }
 
@@ -1324,7 +1636,8 @@ async function streamTranslation(text, onDelta, externalSignal) {
   if (text.length > MAX_LEN) return { ok: false, status: 0, body: "Selection is longer than " + MAX_LEN + " characters." };
 
   const s = await getSettings();
-  if (isDeeplx(s)) return deeplxTranslate(s, text, externalSignal);
+  const textOnly = textEngine(s);
+  if (textOnly) return engineTranslate(textOnly, s, text, externalSignal);
   const activeModel = String(s.model || DEFAULTS.model).trim();
   const base = stripSlashes(s.base);
   const hits = matchGlossaryHits(s.glossary, text);
@@ -1370,7 +1683,8 @@ async function streamVisionTranslation(imageDataUrl, modelOverride, onDelta, ext
   }
 
   const s = await getSettings();
-  if (isDeeplx(s)) return deeplxUnsupported("Image translation");
+  const textOnly = textEngine(s);
+  if (textOnly) return textOnlyUnsupported("Image translation", textOnly);
   const activeModel = resolveVisionModel(s.visionModel, modelOverride);
   const base = stripSlashes(s.base);
   const cacheKey = activeModel + "|" + s.target + "|" + base + "|" + (await sha256Hex(s.glossary)) + "|" + (await sha256Hex(dataUrl));
@@ -1430,7 +1744,8 @@ async function streamImmersiveBatch(rawItems, modelOverride, onProgress, externa
   if (items.length === 0) return { ok: false, status: 0, body: "Empty batch." };
 
   const s = await getSettings();
-  if (isDeeplx(s)) return deeplxImmersiveBatch(s, items, onProgress, externalSignal);
+  const textOnly = textEngine(s);
+  if (textOnly) return engineImmersiveBatch(textOnly, s, items, onProgress, externalSignal);
   const activeModel = String(modelOverride || s.immersiveModel || DEFAULTS.immersiveModel || s.model).trim();
   const base = stripSlashes(s.base);
   const parsedEntries = parseGlossary(s.glossary);
@@ -1540,7 +1855,8 @@ async function streamStudyCard(text, modelOverride, onPartial, externalSignal) {
   if (text.length > MAX_LEN) return { ok: false, status: 0, body: "Selection is longer than " + MAX_LEN + " characters." };
 
   const s = await getSettings();
-  if (isDeeplx(s)) return deeplxUnsupported("Study Card");
+  const textOnly = textEngine(s);
+  if (textOnly) return textOnlyUnsupported("Study Card", textOnly);
   const base = stripSlashes(s.base);
   const activeModel = resolveStudyModel(s.model, modelOverride);
   const hits = matchGlossaryHits(s.glossary, text);
@@ -1598,7 +1914,8 @@ async function translate(text) {
   if (text.length > MAX_LEN) return { ok: false, status: 0, body: "Selection is longer than " + MAX_LEN + " characters." };
 
   const s = await getSettings();
-  if (isDeeplx(s)) return deeplxTranslate(s, text);
+  const textOnly = textEngine(s);
+  if (textOnly) return engineTranslate(textOnly, s, text);
   const activeModel = String(s.model || DEFAULTS.model).trim();
   const base = stripSlashes(s.base);
   const hits = matchGlossaryHits(s.glossary, text);
@@ -1625,7 +1942,8 @@ async function generateStudyCard(text, modelOverride) {
   if (text.length > MAX_LEN) return { ok: false, status: 0, body: "Selection is longer than " + MAX_LEN + " characters." };
 
   const s = await getSettings();
-  if (isDeeplx(s)) return deeplxUnsupported("Study Card");
+  const textOnly = textEngine(s);
+  if (textOnly) return textOnlyUnsupported("Study Card", textOnly);
   const base = stripSlashes(s.base);
   const activeModel = resolveStudyModel(s.model, modelOverride);
   const hits = matchGlossaryHits(s.glossary, text);
@@ -1678,16 +1996,22 @@ if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.onMessage)
 
     if (msg.type === "BILI_GET_IMMERSIVE_PREFS") {
       getSettings()
-        .then((s) =>
+        .then((s) => {
+          const textOnly = textEngine(s);
           sendResponse({
             ok: true,
-            immersiveModel: isDeeplx(s) ? DEEPLX_LABEL : s.immersiveModel || DEFAULTS.immersiveModel,
-            modelSwitch: !isDeeplx(s),
+            immersiveModel: textOnly ? textOnly.label : s.immersiveModel || DEFAULTS.immersiveModel,
+            modelSwitch: !textOnly,
             target: s.target || DEFAULTS.target
-          })
-        )
+          });
+        })
         .catch(() => sendResponse({ ok: false }));
       return true;
+    }
+
+    if (msg.type === "BILI_CHECK_API_CONFIG") {
+      sendResponse(checkApiConfig(msg.settings || {}));
+      return false;
     }
 
     if (msg.type === "BILI_PURGE_VOLATILE") {
@@ -1814,7 +2138,7 @@ if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.onMessage)
   }
 
   chrome.storage.onChanged.addListener(() => {
-    deeplxNoLineBatch.clear();
+    noMergedBatch.clear();
     cachedGlossaryRaw = null;
     cachedGlossaryEntries = [];
     volatileTranslateCache.clear();
@@ -1959,6 +2283,12 @@ if (typeof module !== "undefined" && module.exports) {
     deeplxTargetLang,
     buildDeeplxRequest,
     parseDeeplxResponse,
+    parseJsonPath,
+    readJsonPath,
+    parseCustomTemplate,
+    buildCustomRequest,
+    parseCustomResponse,
+    checkApiConfig,
     callChatCompletion,
     readChatContent,
     streamTranslation,

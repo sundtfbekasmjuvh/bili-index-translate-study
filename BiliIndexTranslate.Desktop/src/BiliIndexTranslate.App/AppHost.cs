@@ -511,7 +511,7 @@ internal sealed class AppHost : IDisposable
     private TranslationRequest BuildRequest(string text, AppSettings s)
     {
         var lang = s.ResolvedTargetLanguage;
-        return new TranslationRequest(text.Trim(), lang.Code, lang.PromptName, s.SourceLanguage, s.Model, s.BaseUrl, s.UseRelay, s.RelayPrefix, s.ApiKey, s.GlossaryText, s.ApiFormat);
+        return new TranslationRequest(text.Trim(), lang.Code, lang.PromptName, s.SourceLanguage, s.Model, s.BaseUrl, s.UseRelay, s.RelayPrefix, s.ApiKey, s.GlossaryText, s.ApiFormat, s.CustomTemplate);
     }
 
     private void StartTranslation(long requestId, SelectionSnapshot snapshot)
@@ -810,7 +810,7 @@ internal sealed class AppHost : IDisposable
         var serviceChanged = previous.BaseUrl != _settings.BaseUrl || previous.UseRelay != _settings.UseRelay || previous.RelayPrefix != _settings.RelayPrefix
                              || previous.Model != _settings.Model || previous.VisionModel != _settings.VisionModel || previous.GlossaryText != _settings.GlossaryText
                              || previous.TargetLanguage != _settings.TargetLanguage || previous.ApiKey != _settings.ApiKey
-                             || previous.ApiFormat != _settings.ApiFormat;
+                             || previous.ApiFormat != _settings.ApiFormat || previous.CustomTemplate != _settings.CustomTemplate;
         if (serviceChanged)
         {
             _studyService.ClearVolatileCache();
@@ -819,6 +819,14 @@ internal sealed class AppHost : IDisposable
         }
         if (notifySession) Dispatch(new SessionEvent.SettingsChanged());
     }
+
+    /// <summary>What answers the requests: the model, or the name of a format that has no model.</summary>
+    private static string ServiceLabel(AppSettings s) => s.ApiFormat switch
+    {
+        ApiFormat.Deeplx => DeeplxProtocol.ModelLabel,
+        ApiFormat.Custom => s.CustomTemplate.Label,
+        _ => s.Model,
+    };
 
     private static string HostOf(AppSettings s)
         => EndpointResolver.TryResolve(s.ApiFormat, s.BaseUrl, s.UseRelay, s.RelayPrefix, s.ApiKey, out var ep, out _) ? ep!.DisplayHost : "(invalid)";
@@ -946,7 +954,7 @@ internal sealed class AppHost : IDisposable
         sb.Append($"v{typeof(AppHost).Assembly.GetName().Version} · {Environment.OSVersion.Version} · .NET {Environment.Version} · ");
         sb.Append($"session {_session.State} · hooks {(_hooks.HooksInstalled ? "ok" : "MISSING")} · uia {(_observer.IsAlive ? "ok" : "stopped")} · ");
         sb.Append($"cache {_cache.Count} entries, {_cache.Hits} hits / {_cache.Misses} misses · in-flight {_coordinator.ActiveCount} · ");
-        sb.Append($"target {_settings.TargetLanguage} · {(_settings.ApiFormat == ApiFormat.Deeplx ? DeeplxProtocol.ModelLabel : _settings.Model)} · {HostOf(_settings)} · relay {(_settings.UseRelay ? "on" : "off")} · auto {(_settings.AutoTranslate ? "on" : "off")} · delay {_settings.StabilizationDelayMs} ms");
+        sb.Append($"target {_settings.TargetLanguage} · {ServiceLabel(_settings)} · {HostOf(_settings)} · relay {(_settings.UseRelay ? "on" : "off")} · auto {(_settings.AutoTranslate ? "on" : "off")} · delay {_settings.StabilizationDelayMs} ms");
         try
         {
             var monitors = new List<string>();

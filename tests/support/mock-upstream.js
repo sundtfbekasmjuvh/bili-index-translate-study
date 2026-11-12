@@ -3,6 +3,8 @@
 // Local stand-in for the OpenAI-compatible upstream used by the sandbox and extension tests.
 // Replies are deterministic and derived from the prompt, so tests can assert exact output.
 // POST .../translate is a DeepLX-style endpoint: { text, source_lang, target_lang } -> { code, data }.
+// POST .../custom-api has a made-up shape for the custom template: { q: [...], to } with an X-Api-Key
+// header -> { result: { items: [{ out }] } }.
 const http = require("http");
 const fs = require("fs");
 const path = require("path");
@@ -193,7 +195,8 @@ async function startMockUpstream(options = {}) {
       }
     }
     const isDeeplx = url.pathname.endsWith("/translate");
-    if (req.method !== "POST" || !(isDeeplx || url.pathname.endsWith("/chat/completions"))) {
+    const isCustom = url.pathname.endsWith("/custom-api");
+    if (req.method !== "POST" || !(isDeeplx || isCustom || url.pathname.endsWith("/chat/completions"))) {
       res.writeHead(404, { "Content-Type": "text/plain" });
       res.end("not found");
       return;
@@ -202,14 +205,16 @@ async function startMockUpstream(options = {}) {
     let raw = "";
     for await (const chunk of req) raw += chunk;
     const body = JSON.parse(raw || "{}");
-    const kind = isDeeplx ? "deeplx" : classify(body);
+    const customItems = isCustom ? [].concat(body.q || []).map(String) : [];
+    const kind = isDeeplx ? "deeplx" : isCustom ? "custom" : classify(body);
     const entry = {
       kind,
       path: url.pathname,
       token: url.searchParams.get("token") || "",
       body,
-      source: isDeeplx ? String(body.text || "") : sourceText(kind, body),
+      source: isDeeplx ? String(body.text || "") : isCustom ? customItems.join("\n") : sourceText(kind, body),
       authorization: req.headers.authorization || "",
+      apiKeyHeader: req.headers["x-api-key"] || "",
       aborted: false,
       completed: false
     };
@@ -224,6 +229,15 @@ async function startMockUpstream(options = {}) {
     if (override && override.status) {
       res.writeHead(override.status, { "Content-Type": override.contentType || "text/html; charset=utf-8" });
       res.end(override.body || "");
+      return;
+    }
+
+    if (isCustom) {
+      await sleep(delayMs);
+      if (res.destroyed) return;
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ result: { items: customItems.map((q) => ({ out: translationOf(q) })) } }));
+      entry.completed = true;
       return;
     }
 

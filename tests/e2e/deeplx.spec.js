@@ -65,7 +65,7 @@ test.describe("DeepLX 接口格式", () => {
 
     await options.locator("#base").fill(endpoint(upstream));
     await options.locator("#save").click();
-    await expect(status).toContainText("only the DeepLX API format fills in");
+    await expect(status).toContainText("which the OpenAI-compatible format does not fill in");
     await expect(status).toHaveClass("err");
     expect(await serviceWorker.evaluate(() => chrome.storage.sync.get(["apiType", "base"]))).toEqual({ base: upstream.base });
 

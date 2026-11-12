@@ -89,8 +89,8 @@ public static class DeeplxProtocol
     }
 
     /// <summary>Error for features that need a chat model. Raised before any request is sent.</summary>
-    public static TranslationError Unsupported(string feature, RequestRoute route)
+    public static TranslationError Unsupported(string feature, RequestRoute route, ApiFormat format = ApiFormat.Deeplx)
         => new(TranslationErrorKind.Configuration,
-            $"{feature} needs an OpenAI-compatible chat model; the DeepLX API format only translates text.",
+            $"{feature} needs an OpenAI-compatible chat model; the {(format == ApiFormat.Custom ? "custom" : "DeepLX")} API format only translates text.",
             route);
 }

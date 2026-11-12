@@ -8,7 +8,7 @@ namespace BiliIndexTranslate.Core.Translation;
 /// Single long-lived <see cref="HttpClient"/> with pooled connections. Timeouts are enforced per request
 /// through a linked token so a stalled provider never ties up the client. Response bodies are capped.
 /// </summary>
-public sealed class HttpTranslationTransport : ISseTranslationTransport, IDisposable
+public sealed class HttpTranslationTransport : ISseTranslationTransport, IRawTranslationTransport, IDisposable
 {
     private const int MaxBodyBytes = 2 * 1024 * 1024;
     private readonly HttpClient _client;
@@ -48,6 +48,51 @@ public sealed class HttpTranslationTransport : ISseTranslationTransport, IDispos
                 body = await ReadCappedAsync(stream, cts.Token).ConfigureAwait(false);
             }
             return new TransportResponse((int)response.StatusCode, body, contentType);
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            throw new TimeoutException();
+        }
+    }
+
+    public async Task<TransportResponse> SendAsync(
+        string method,
+        Uri url,
+        IReadOnlyList<KeyValuePair<string, string>> headers,
+        string? body,
+        TimeSpan timeout,
+        CancellationToken ct)
+    {
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        cts.CancelAfter(timeout);
+
+        using var request = new HttpRequestMessage(new HttpMethod(method), url);
+        if (body is not null)
+        {
+            var contentType = headers.LastOrDefault(h => h.Key.Equals("Content-Type", StringComparison.OrdinalIgnoreCase)).Value;
+            var content = new StringContent(body, Encoding.UTF8);
+            content.Headers.Remove("Content-Type");
+            content.Headers.TryAddWithoutValidation("Content-Type", string.IsNullOrWhiteSpace(contentType) ? "application/json" : contentType);
+            request.Content = content;
+        }
+        foreach (var header in headers)
+        {
+            if (header.Key.Equals("Content-Type", StringComparison.OrdinalIgnoreCase)) continue;
+            // Entity headers such as Content-Language belong to the content; everything else to the request.
+            if (!request.Headers.TryAddWithoutValidation(header.Key, header.Value))
+                request.Content?.Headers.TryAddWithoutValidation(header.Key, header.Value);
+        }
+
+        try
+        {
+            using var response = await _client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cts.Token).ConfigureAwait(false);
+            var responseType = response.Content.Headers.ContentType?.MediaType;
+            string responseBody;
+            await using (var stream = await response.Content.ReadAsStreamAsync(cts.Token).ConfigureAwait(false))
+            {
+                responseBody = await ReadCappedAsync(stream, cts.Token).ConfigureAwait(false);
+            }
+            return new TransportResponse((int)response.StatusCode, responseBody, responseType);
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {

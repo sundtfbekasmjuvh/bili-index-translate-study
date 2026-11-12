@@ -73,14 +73,58 @@
             <ColumnDefinition Width="*" />
           </Grid.ColumnDefinitions>
           <TextBlock Style="{StaticResource FieldLabel}" Text="API format" />
-          <ComboBox x:Name="ApiFormatBox" Grid.Column="1" HorizontalAlignment="Left" MinWidth="260">
+          <ComboBox x:Name="ApiFormatBox" Grid.Column="1" HorizontalAlignment="Left" MinWidth="260" SelectionChanged="OnApiFormatChanged">
             <ComboBoxItem Content="OpenAI-compatible (/chat/completions)" />
             <ComboBoxItem Content="DeepLX-compatible (/translate)" />
+            <ComboBoxItem Content="Custom JSON API (template)" />
           </ComboBox>
         </Grid>
         <TextBlock Style="{StaticResource FieldLabel}" Text="Endpoint" Margin="0,0,0,3" />
         <TextBox x:Name="EndpointBox" />
-        <TextBlock Style="{StaticResource HintText}" Text="OpenAI-compatible: base URL or full /chat/completions URL. DeepLX: the complete translate URL, used as entered, e.g. https://host/translate?token={apiKey} ({apiKey} is replaced with the API key; without it the key is sent as a Bearer token; leave the key empty if the endpoint needs none). DeepLX only translates selected text: Study Card, screen snip, the glossary and the model choices need an OpenAI-compatible endpoint." />
+        <TextBlock Style="{StaticResource HintText}" Text="OpenAI-compatible: base URL or full /chat/completions URL. DeepLX: the complete translate URL, used as entered, e.g. https://host/translate?token={apiKey} ({apiKey} is replaced with the API key; without it the key is sent as a Bearer token; leave the key empty if the endpoint needs none). DeepLX only translates selected text: Study Card, screen snip, the glossary and the model choices need an OpenAI-compatible endpoint. Custom: any service that answers with JSON, described by the template below." />
+
+        <!-- Custom JSON API template -->
+        <StackPanel x:Name="CustomPanel" Visibility="Collapsed" Margin="0,8,0,0">
+          <Grid>
+            <Grid.ColumnDefinitions>
+              <ColumnDefinition Width="120" />
+              <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+            <Grid.RowDefinitions>
+              <RowDefinition Height="Auto" />
+              <RowDefinition Height="Auto" />
+              <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+            <TextBlock Grid.Row="0" Style="{StaticResource FieldLabel}" Text="Preset" />
+            <ComboBox x:Name="CustomPresetBox" Grid.Row="0" Grid.Column="1" HorizontalAlignment="Left" MinWidth="260" Margin="0,3" SelectionChanged="OnCustomPresetChanged" />
+            <TextBlock Grid.Row="1" Style="{StaticResource FieldLabel}" Text="Display name" />
+            <TextBox x:Name="CustomNameBox" Grid.Row="1" Grid.Column="1" Width="260" HorizontalAlignment="Left" Margin="0,3" />
+            <TextBlock Grid.Row="2" Style="{StaticResource FieldLabel}" Text="Method" />
+            <ComboBox x:Name="CustomMethodBox" Grid.Row="2" Grid.Column="1" HorizontalAlignment="Left" MinWidth="90" Margin="0,3">
+              <ComboBoxItem Content="POST" />
+              <ComboBoxItem Content="GET" />
+            </ComboBox>
+          </Grid>
+          <TextBlock Style="{StaticResource FieldLabel}" Text="Request headers (one Name: value per line)" Margin="0,6,0,3" />
+          <TextBox x:Name="CustomHeadersBox" AcceptsReturn="True" VerticalScrollBarVisibility="Auto" TextWrapping="Wrap" Height="44" FontFamily="Consolas" FontSize="12" />
+          <TextBlock Style="{StaticResource FieldLabel}" Text="Request body (sent as application/json unless a Content-Type header is given)" Margin="0,6,0,3" />
+          <TextBox x:Name="CustomBodyBox" AcceptsReturn="True" VerticalScrollBarVisibility="Auto" TextWrapping="Wrap" Height="58" FontFamily="Consolas" FontSize="12" />
+          <Grid Margin="0,6,0,0">
+            <Grid.ColumnDefinitions>
+              <ColumnDefinition Width="120" />
+              <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+            <Grid.RowDefinitions>
+              <RowDefinition Height="Auto" />
+              <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+            <TextBlock Grid.Row="0" Style="{StaticResource FieldLabel}" Text="Result path" />
+            <TextBox x:Name="CustomResultPathBox" Grid.Row="0" Grid.Column="1" Margin="0,3" FontFamily="Consolas" FontSize="12" />
+            <TextBlock Grid.Row="1" Style="{StaticResource FieldLabel}" Text="Error path" />
+            <TextBox x:Name="CustomErrorPathBox" Grid.Row="1" Grid.Column="1" Margin="0,3" FontFamily="Consolas" FontSize="12" />
+          </Grid>
+          <TextBlock Style="{StaticResource HintText}" Text="Placeholders for the endpoint, headers and body: {text} the selected text, {texts} the same as a JSON array (body only), {apiKey}, {target} the target language code (zh-Hans, en), {targetLang} / {targetLangLower} the same as ZH / zh. In a JSON body write &quot;{text}&quot; inside the quotes and {texts} without quotes. The result path says where the translation is in the JSON reply, for example data or translations[0].text; the optional error path where the service puts its error message. Like DeepLX, a custom API only translates selected text." />
+        </StackPanel>
         <Grid Margin="0,8,0,0">
           <Grid.ColumnDefinitions>
             <ColumnDefinition Width="*" />

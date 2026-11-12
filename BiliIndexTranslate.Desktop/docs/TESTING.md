@@ -7,7 +7,7 @@ Windows 11 Pro for Workstations (build 26200), .NET SDK 8.0.427, from the v1.4.0
 | Check | Result |
 |---|---|
 | `dotnet build BiliIndexTranslate.sln -c Release` | 0 errors, 0 warnings |
-| `dotnet test tests/BiliIndexTranslate.Core.Tests -c Release` | **170 passed, 0 failed** (session state machine, placement/anchoring, endpoint resolution, DeepLX format, response parsing, SSE transport, vision dual output, study cards, cache, coordinator races, settings load/migrate) |
+| `dotnet test tests/BiliIndexTranslate.Core.Tests -c Release` | **225 passed, 0 failed** (session state machine, placement/anchoring, endpoint resolution, DeepLX format, custom API templates, response parsing, SSE transport, vision dual output, study cards, cache, coordinator races, settings load/migrate) |
 | `dotnet publish … -r win-x64 --self-contained false` | `BiliIndexTranslate.exe` — PE32+ x64 GUI, version 1.4.0 embedded (864 KB folder) |
 | `dotnet publish … --self-contained true -p:PublishSingleFile=true` | single 139 MB exe produced |
 | Icon | `tools/make-icon.py` output inspected at 256 px |
@@ -50,7 +50,7 @@ local DeepLX-style mock on `127.0.0.1` (`tests/support/mock-upstream.js`). The u
 | 2 | Select DeepLX, endpoint `http://127.0.0.1:<port>/translate?token={apiKey}`, a test key, **Save and test** | ✅ `OK · 135 ms via direct · “译文：Hello, world.”`; the mock received one `POST /translate` with the key in the `token` query parameter, no `Authorization` header and the body `{"text":"Hello, world.","source_lang":"auto","target_lang":"ZH"}` |
 | 3 | Saved file | ✅ `"apiFormat": "Deeplx"`, the endpoint with its `{apiKey}` placeholder, the key as a DPAPI blob (`apiKeyScheme: dpapi-user`); the test key does not appear in plain text |
 | 4 | Restart, reopen Settings, **Save and test** | ✅ DeepLX still selected, endpoint kept, `OK · 131 ms via direct`; the mock received the same token again, so the key was read back from the file |
-| 5 | Switch to OpenAI-compatible while the endpoint still contains `{apiKey}`, **Save and test** | ✅ rejected with `The endpoint contains {apiKey}, which only the DeepLX API format fills in. …`; the settings file is unchanged |
+| 5 | Switch to OpenAI-compatible while the endpoint still contains `{apiKey}`, **Save and test** | ✅ rejected with `The endpoint contains {apiKey}, which the OpenAI-compatible format does not fill in. …`; the settings file is unchanged (message as of the custom-format build) |
 
 Not exercised live with the DeepLX format: the selection popup, Study Card and screen snip (unit
 tests only).
@@ -60,6 +60,27 @@ correctly, but on this machine neither `settings.json` nor `diagnostics.log` was
 publish output both were. The cause was not investigated further; it matches the note below about
 security software interfering with programs in `bin\`. Use the publish output (`tools\build.cmd`)
 when settings do not persist with `tools\run.cmd`.
+
+### Custom API template through the Settings window (2026-11-12)
+
+Same setup as the DeepLX walkthrough above (publish output, UI Automation, the user's
+`settings.json` backed up and restored with the same SHA-256), against the mock's `/custom-api`
+endpoint, whose made-up shape (`{ q: [...], to }` with an `X-Api-Key` header →
+`{ result: { items: [{ out }] } }`) can only be described by a template.
+
+| # | Step | Result |
+|---|---|---|
+| 1 | Open Settings | ✅ `API format` lists three entries; the template fields are not shown |
+| 2 | Select `Custom JSON API (template)` | ✅ the template fields appear |
+| 3 | Preset `DeepL API Free` | ✅ endpoint `https://api-free.deepl.com/v2/translate`, headers `Authorization: DeepL-Auth-Key {apiKey}`, body `{"text": {texts}, "target_lang": "{targetLang}"}`, result path `translations[*].text`; status `Preset loaded: DeepL. …`; the settings file is unchanged |
+| 4 | Custom with an empty result path, then with the body `{"q": {text}}`, **Save and test** | ✅ rejected with `The result path is empty. …` and `The request body is not valid JSON once the placeholders are filled in. …`; the settings file is unchanged both times |
+| 5 | Fill in the mock's template and a test key, **Save and test** | ✅ `OK · … via direct · “译文：Hello, world.”`; the mock received `POST /custom-api` with `X-Api-Key` set to the key, no `Authorization` header and the body `{"q":["Hello, world."],"to":"zh"}` |
+| 6 | Saved file | ✅ `"apiFormat": "Custom"` and the six `custom…` fields; the key as a DPAPI blob, not in plain text |
+| 7 | Restart, reopen Settings, **Save and test** | ✅ Custom still selected, the template fields shown with the saved values, `OK · 134 ms via direct` |
+
+The very first request of step 5 took 10.6 s; the six requests after it, including the first
+request of the restarted process, took 28–134 ms. The cause was not found: proxy auto-detection is
+off on this machine and `127.*` is in the proxy bypass list. It did not happen again.
 
 ### Resource behaviour over 200 selections
 

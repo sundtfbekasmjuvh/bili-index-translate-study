@@ -58,6 +58,12 @@ public partial class SettingsWindow : Window
         ShowOriginalBox.IsChecked = s.ShowOriginalByDefault;
 
         ApiFormatBox.SelectedIndex = (int)s.ApiFormat;
+        CustomPresetBox.Items.Add(new ComboBoxItem { Content = "Load a preset…" });
+        foreach (var preset in CustomApiPreset.All)
+            CustomPresetBox.Items.Add(new ComboBoxItem { Content = preset.DisplayName, Tag = preset.Id });
+        CustomPresetBox.SelectedIndex = 0;
+        ShowTemplate(s.CustomTemplate);
+        SyncCustomPanel();
         EndpointBox.Text = s.BaseUrl;
         ApiKeyBox.Password = s.ApiKey;
         foreach (var m in AppSettings.KnownModels) ModelBox.Items.Add(m);
@@ -96,6 +102,12 @@ public partial class SettingsWindow : Window
         s.ShowOriginalByDefault = ShowOriginalBox.IsChecked == true;
 
         s.ApiFormat = (ApiFormat)Math.Max(0, ApiFormatBox.SelectedIndex);
+        s.CustomName = CustomNameBox.Text.Trim();
+        s.CustomMethod = CustomMethodBox.SelectedIndex == 1 ? "GET" : "POST";
+        s.CustomHeaders = CustomHeadersBox.Text;
+        s.CustomBody = CustomBodyBox.Text;
+        s.CustomResultPath = CustomResultPathBox.Text.Trim();
+        s.CustomErrorPath = CustomErrorPathBox.Text.Trim();
         s.BaseUrl = EndpointBox.Text.Trim();
         s.ApiKey = _keyRevealed ? ApiKeyPlainBox.Text : ApiKeyBox.Password;
         s.Model = ModelBox.Text.Trim();
@@ -113,9 +125,17 @@ public partial class SettingsWindow : Window
         s.UseUiaSelectionEvents = UiaEventsBox.IsChecked == true;
         s.DiagnosticsFileLogging = FileLoggingBox.IsChecked == true;
 
-        if (!EndpointResolver.TryResolve(s.ApiFormat, s.BaseUrl, s.UseRelay, s.RelayPrefix, s.ApiKey, out _, out var epError))
+        if (!EndpointResolver.TryResolve(s.ApiFormat, s.BaseUrl, s.UseRelay, s.RelayPrefix, s.ApiKey, out var endpoint, out var epError))
         {
             error = epError;
+            return null;
+        }
+        // A template that cannot work is reported here instead of on the first translation.
+        if (s.ApiFormat == ApiFormat.Custom
+            && (!CustomApiProtocol.TryParseTemplate(s.CustomTemplate, endpoint!.NormalizedBase, out var template, out var templateError)
+                || !CustomApiProtocol.TryBuildRequest(template!, endpoint.NormalizedBase, s.ApiKey, ["sample"], s.TargetLanguage, out _, out templateError)))
+        {
+            error = templateError;
             return null;
         }
         if (string.IsNullOrWhiteSpace(s.Model)) { error = "Choose a model."; return null; }
@@ -172,6 +192,37 @@ public partial class SettingsWindow : Window
     private void OnDelayChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
     {
         if (DelayLabel is not null) DelayLabel.Text = $"{(int)e.NewValue} ms";
+    }
+
+    private void OnApiFormatChanged(object sender, SelectionChangedEventArgs e) => SyncCustomPanel();
+
+    /// <summary>The template fields only apply to the custom format.</summary>
+    private void SyncCustomPanel()
+    {
+        if (CustomPanel is null) return;
+        CustomPanel.Visibility = ApiFormatBox.SelectedIndex == (int)ApiFormat.Custom ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private void ShowTemplate(CustomApiTemplate template)
+    {
+        CustomNameBox.Text = template.Name;
+        CustomMethodBox.SelectedIndex = string.Equals(template.Method, "GET", StringComparison.OrdinalIgnoreCase) ? 1 : 0;
+        CustomHeadersBox.Text = template.Headers;
+        CustomBodyBox.Text = template.Body;
+        CustomResultPathBox.Text = template.ResultPath;
+        CustomErrorPathBox.Text = template.ErrorPath;
+    }
+
+    /// <summary>A preset fills in the form only; nothing is saved until the user saves.</summary>
+    private void OnCustomPresetChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if ((CustomPresetBox.SelectedItem as ComboBoxItem)?.Tag is not string id) return;
+        var preset = CustomApiPreset.All.FirstOrDefault(p => p.Id == id);
+        if (preset is null) return;
+        EndpointBox.Text = preset.BaseUrl;
+        ShowTemplate(preset.Template);
+        CustomPresetBox.SelectedIndex = 0;
+        ShowStatus($"Preset loaded: {preset.Template.Label}. Check the endpoint, enter your API key, then save and test.", isError: false);
     }
 
     private void OnRelayToggled(object sender, RoutedEventArgs e)

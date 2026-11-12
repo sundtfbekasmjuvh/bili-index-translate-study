@@ -58,6 +58,17 @@ public sealed class AppSettings
 
     // Service
     public ApiFormat ApiFormat { get; set; } = ApiFormat.OpenAi;
+
+    // Template of the custom API format (see CustomApiProtocol); unused by the other formats.
+    public string CustomName { get; set; } = string.Empty;
+    public string CustomMethod { get; set; } = "POST";
+    public string CustomHeaders { get; set; } = string.Empty;
+    public string CustomBody { get; set; } = string.Empty;
+    public string CustomResultPath { get; set; } = string.Empty;
+    public string CustomErrorPath { get; set; } = string.Empty;
+
+    [JsonIgnore]
+    public CustomApiTemplate CustomTemplate => new(CustomName, CustomMethod, CustomHeaders, CustomBody, CustomResultPath, CustomErrorPath);
     public string BaseUrl { get; set; } = DefaultBaseUrl;
     public string Model { get; set; } = DefaultModel;
     public string VisionModel { get; set; } = DefaultVisionModel;
@@ -116,6 +127,12 @@ public sealed class AppSettings
             .ToList();
 
         if (!Enum.IsDefined(ApiFormat)) ApiFormat = ApiFormat.OpenAi;
+        CustomName = (CustomName ?? string.Empty).Trim();
+        CustomMethod = string.Equals(CustomMethod?.Trim(), "GET", StringComparison.OrdinalIgnoreCase) ? "GET" : "POST";
+        CustomHeaders = (CustomHeaders ?? string.Empty).Replace("\r\n", "\n").Trim();
+        CustomBody = (CustomBody ?? string.Empty).Replace("\r\n", "\n").Trim();
+        CustomResultPath = (CustomResultPath ?? string.Empty).Trim();
+        CustomErrorPath = (CustomErrorPath ?? string.Empty).Trim();
         BaseUrl = string.IsNullOrWhiteSpace(BaseUrl) ? DefaultBaseUrl : BaseUrl.Trim();
         Model = string.IsNullOrWhiteSpace(Model) ? DefaultModel : Model.Trim();
         VisionModel = string.IsNullOrWhiteSpace(VisionModel) ? DefaultVisionModel : VisionModel.Trim();
@@ -123,8 +140,8 @@ public sealed class AppSettings
         GlossaryText = string.IsNullOrWhiteSpace(GlossaryText)
             ? string.Empty
             : (GlossaryText.Length > 64000 ? GlossaryText[..64000] : GlossaryText).Replace("\r\n", "\n").Trim();
-        // The built-in key belongs to the default service; a DeepLX endpoint that needs no token gets no key at all.
-        if (string.IsNullOrWhiteSpace(ApiKey)) ApiKey = ApiFormat == ApiFormat.Deeplx ? string.Empty : DefaultApiKey;
+        // The built-in key belongs to the default service; a DeepLX or custom endpoint that needs no token gets no key at all.
+        if (string.IsNullOrWhiteSpace(ApiKey)) ApiKey = ApiFormat == ApiFormat.OpenAi ? DefaultApiKey : string.Empty;
         Hotkey = string.IsNullOrWhiteSpace(Hotkey) ? "Alt+Q" : Hotkey.Trim();
         SnipHotkey = string.IsNullOrWhiteSpace(SnipHotkey) ? "Alt+Shift+S" : SnipHotkey.Trim();
 

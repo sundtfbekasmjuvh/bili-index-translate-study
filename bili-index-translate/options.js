@@ -5,6 +5,12 @@ const DEFAULTS = {
   base: "https://index-translate.bilibili.com/v1",
   proxy: "",
   apiType: "openai",
+  customName: "",
+  customMethod: "POST",
+  customHeaders: "",
+  customBody: "",
+  customResultPath: "",
+  customErrorPath: "",
   model: "Index-Translate-9B",
   immersiveModel: "Index-Translate-2B",
   visionModel: "Index-Translate-35B-A3B",
@@ -65,16 +71,71 @@ function ensureSelectValue(select, val) {
   select.value = val;
 }
 
-// The model choices and the glossary only apply to chat models; a DeepLX endpoint ignores them.
+// Starting points for the custom format, taken from each service's API reference. They fill in the
+// form only; nothing is saved until the user presses Save.
+const CUSTOM_PRESETS = {
+  "deepl-free": {
+    base: "https://api-free.deepl.com/v2/translate",
+    customName: "DeepL",
+    customMethod: "POST",
+    customHeaders: "Authorization: DeepL-Auth-Key {apiKey}",
+    customBody: '{"text": {texts}, "target_lang": "{targetLang}"}',
+    customResultPath: "translations[*].text",
+    customErrorPath: ""
+  },
+  "deepl-pro": {
+    base: "https://api.deepl.com/v2/translate",
+    customName: "DeepL",
+    customMethod: "POST",
+    customHeaders: "Authorization: DeepL-Auth-Key {apiKey}",
+    customBody: '{"text": {texts}, "target_lang": "{targetLang}"}',
+    customResultPath: "translations[*].text",
+    customErrorPath: ""
+  },
+  libretranslate: {
+    base: "https://libretranslate.com/translate",
+    customName: "LibreTranslate",
+    customMethod: "POST",
+    customHeaders: "",
+    customBody: '{"q": {texts}, "source": "auto", "target": "{targetLangLower}", "format": "text", "api_key": "{apiKey}"}',
+    customResultPath: "translatedText",
+    customErrorPath: "error"
+  }
+};
+
+const CUSTOM_FIELDS = ["customName", "customMethod", "customHeaders", "customBody", "customResultPath", "customErrorPath"];
+
+function normalizeApiType(value) {
+  return value === "deeplx" || value === "custom" ? value : "openai";
+}
+
+// The model choices and the glossary only apply to chat models; the text-only formats ignore them.
 function syncApiTypeUi() {
-  const deeplx = $("apiType").value === "deeplx";
-  for (const id of ["model", "immersiveModel", "visionModel", "glossary"]) $(id).disabled = deeplx;
-  $("base").placeholder = deeplx ? "https://host/translate?token={apiKey}" : DEFAULTS.base;
+  const type = $("apiType").value;
+  for (const id of ["model", "immersiveModel", "visionModel", "glossary"]) $(id).disabled = type !== "openai";
+  $("customFields").hidden = type !== "custom";
+  $("customBody").disabled = $("customMethod").value === "GET";
+  $("base").placeholder =
+    type === "deeplx"
+      ? "https://host/translate?token={apiKey}"
+      : type === "custom"
+      ? "https://api.example.com/translate"
+      : DEFAULTS.base;
+}
+
+function applyCustomPreset(name) {
+  const preset = CUSTOM_PRESETS[name];
+  if (!preset) return;
+  $("base").value = preset.base;
+  for (const id of CUSTOM_FIELDS) $(id).value = preset[id];
+  syncApiTypeUi();
+  setStatus("Preset loaded: " + preset.customName + ". Check the URL, enter your API key, then press Save & test.");
 }
 
 // Catches an endpoint entered under the wrong API format. "blocking" marks a combination that cannot
 // work; the others are hints, because an unusual URL may still be what the user means.
 function endpointFormatMismatch(s) {
+  if (s.apiType === "custom") return null; // the template decides what the URL looks like
   let path = "";
   try {
     path = new URL(s.proxy || s.base).pathname.replace(/\/+$/, "");
@@ -90,7 +151,7 @@ function endpointFormatMismatch(s) {
   if (/\{\{?apiKey\}?\}/i.test(s.base + " " + s.proxy)) {
     return {
       blocking: true,
-      text: "The URL contains {apiKey}, which only the DeepLX API format fills in. Choose DeepLX-compatible or remove the placeholder."
+      text: "The URL contains {apiKey}, which the OpenAI-compatible format does not fill in. Choose DeepLX-compatible or Custom JSON API, or remove the placeholder."
     };
   }
   return /\/translate$/i.test(path)
@@ -100,7 +161,14 @@ function endpointFormatMismatch(s) {
 
 function fillForm(s, localCfg) {
   $("base").value = s.base;
-  $("apiType").value = s.apiType === "deeplx" ? "deeplx" : "openai";
+  $("apiType").value = normalizeApiType(s.apiType);
+  $("customName").value = s.customName || "";
+  $("customMethod").value = s.customMethod === "GET" ? "GET" : "POST";
+  $("customHeaders").value = s.customHeaders || "";
+  $("customBody").value = s.customBody || "";
+  $("customResultPath").value = s.customResultPath || "";
+  $("customErrorPath").value = s.customErrorPath || "";
+  $("customPreset").value = "";
   $("proxy").value = s.proxy;
   $("key").value = s.key;
   $("target").value = s.target;
@@ -116,7 +184,13 @@ function readForm() {
   return {
     sync: {
       base: stripSlashes($("base").value),
-      apiType: $("apiType").value === "deeplx" ? "deeplx" : "openai",
+      apiType: normalizeApiType($("apiType").value),
+      customName: $("customName").value.trim(),
+      customMethod: $("customMethod").value === "GET" ? "GET" : "POST",
+      customHeaders: $("customHeaders").value.replace(/\r\n/g, "\n").trim(),
+      customBody: $("customBody").value.replace(/\r\n/g, "\n").trim(),
+      customResultPath: $("customResultPath").value.trim(),
+      customErrorPath: $("customErrorPath").value.trim(),
       proxy: stripSlashes($("proxy").value),
       model: $("model").value,
       immersiveModel: $("immersiveModel").value,
@@ -150,6 +224,12 @@ async function save() {
     setStatus(mismatch.text, true);
     return null;
   }
+  // The background worker owns the template rules; ask it instead of repeating them here.
+  const check = await chrome.runtime.sendMessage({ type: "BILI_CHECK_API_CONFIG", settings: s }).catch(() => null);
+  if (check && check.ok === false) {
+    setStatus(check.error, true);
+    return null;
+  }
 
   const granted = await requestHostAccess([s.base, s.proxy]);
   await chrome.storage.sync.set(s);
@@ -159,7 +239,7 @@ async function save() {
   syncGlossaryBadge();
 
   if (granted) {
-    const rules = s.apiType === "deeplx" ? 0 : countGlossaryRules(l.glossary);
+    const rules = s.apiType === "openai" ? countGlossaryRules(l.glossary) : 0;
     const saved = "Saved" + (rules > 0 ? " (" + rules + " glossary rules active)." : ".");
     if (mismatch) setStatus(saved + "\n" + mismatch.text, true);
     else setStatus(saved);
@@ -173,7 +253,8 @@ async function test() {
   const s = await save();
   if (!s) return;
 
-  setStatus("Testing " + (s.apiType === "deeplx" ? "DeepLX" : s.model) + " ...");
+  const label = s.apiType === "deeplx" ? "DeepLX" : s.apiType === "custom" ? s.customName || "Custom API" : s.model;
+  setStatus("Testing " + label + " ...");
   let res;
   try {
     res = await chrome.runtime.sendMessage({ type: "BILI_TRANSLATE", text: TEST_TEXT });
@@ -196,6 +277,8 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   $("glossary").addEventListener("input", syncGlossaryBadge);
   $("apiType").addEventListener("change", syncApiTypeUi);
+  $("customMethod").addEventListener("change", syncApiTypeUi);
+  $("customPreset").addEventListener("change", () => applyCustomPreset($("customPreset").value));
   $("form").addEventListener("submit", (e) => {
     e.preventDefault();
     save();

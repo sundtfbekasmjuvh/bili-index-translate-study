@@ -80,6 +80,15 @@
       resize: vertical;
       min-height: 116px;
     }
+    textarea.compact { min-height: 62px; }
+    .template {
+      margin-top: 14px;
+      padding: 2px 16px 14px;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: var(--accent-soft);
+    }
+    .template input, .template select, .template textarea { background: var(--card); }
     input:focus, select:focus, textarea:focus {
       border-color: var(--accent);
       box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.14);
@@ -138,8 +147,53 @@
         <select id="apiType">
           <option value="openai">OpenAI-compatible (/chat/completions)</option>
           <option value="deeplx">DeepLX-compatible (/translate)</option>
+          <option value="custom">Custom JSON API (template)</option>
         </select>
         <small>DeepLX: the Base URL is used as entered, e.g. <code>https://host/translate?token={apiKey}</code>. <code>{apiKey}</code> is replaced with the API Key; without it the key is sent as a <code>Bearer</code> token, and an empty key sends none. A relay prefix, if set, must be the complete relayed endpoint. This format translates selections and <kbd>Alt+A</kbd> pages only (a batch of paragraphs goes out as one request, one paragraph per line): Study Card, image translation, the glossary and the model selectors need an OpenAI-compatible endpoint. Target language accepts language names or DeepL codes (<code>ZH</code>, <code>EN</code>, <code>PT-BR</code>).</small>
+
+        <div id="customFields" class="template" hidden>
+          <label for="customPreset"><span>Custom API template</span><span class="badge">Any JSON API</span></label>
+          <select id="customPreset">
+            <option value="">Load a preset…</option>
+            <option value="deepl-free">DeepL API Free (api-free.deepl.com)</option>
+            <option value="deepl-pro">DeepL API Pro (api.deepl.com)</option>
+            <option value="libretranslate">LibreTranslate (replace the host with your instance)</option>
+          </select>
+          <small>A preset fills in the Base URL and the fields below; nothing is saved until you press Save. Any service that answers with JSON can be described here.</small>
+
+          <div class="grid-2">
+            <div>
+              <label for="customName"><span>Display name</span></label>
+              <input id="customName" type="text" placeholder="Custom API">
+            </div>
+            <div>
+              <label for="customMethod"><span>Method</span></label>
+              <select id="customMethod">
+                <option value="POST">POST</option>
+                <option value="GET">GET</option>
+              </select>
+            </div>
+          </div>
+
+          <label for="customHeaders"><span>Request headers</span></label>
+          <textarea id="customHeaders" class="compact" spellcheck="false" placeholder="Authorization: Bearer {apiKey}"></textarea>
+          <small>One <code>Name: value</code> per line. A body is sent as <code>application/json</code> unless a <code>Content-Type</code> is given here.</small>
+
+          <label for="customBody"><span>Request body</span></label>
+          <textarea id="customBody" class="compact" spellcheck="false" placeholder='{"text": "{text}", "target_lang": "{targetLang}"}'></textarea>
+
+          <div class="grid-2">
+            <div>
+              <label for="customResultPath"><span>Result path</span></label>
+              <input id="customResultPath" type="text" spellcheck="false" placeholder="translations[0].text">
+            </div>
+            <div>
+              <label for="customErrorPath"><span>Error path (optional)</span></label>
+              <input id="customErrorPath" type="text" spellcheck="false" placeholder="error.message">
+            </div>
+          </div>
+          <small>Placeholders for the Base URL, headers and body: <code>{text}</code> the text to translate · <code>{texts}</code> every text of a request as a JSON array (body only; an <kbd>Alt+A</kbd> batch then needs one request) · <code>{apiKey}</code> · <code>{target}</code> the Target language as entered · <code>{targetLang}</code> / <code>{targetLangLower}</code> its code, such as <code>ZH</code> / <code>zh</code>. In a JSON body write <code>"{text}"</code> inside the quotes and <code>{texts}</code> without quotes. The result path says where the translation is in the JSON reply, for example <code>data</code>, <code>translations[0].text</code>, or <code>translations[*].text</code> together with <code>{texts}</code>. Like DeepLX, this format translates selections and <kbd>Alt+A</kbd> pages only.</small>
+        </div>
 
         <label for="proxy"><span>Relay prefix (optional)</span></label>
         <input id="proxy" type="text" placeholder="Leave empty for direct Bilibili connection (MV3 DNR enabled)">
