@@ -10,6 +10,9 @@ public enum ApiFormat
 
     /// <summary>DeepLX-style translate endpoint; the URL is used as entered (see <see cref="DeeplxProtocol"/>).</summary>
     Deeplx,
+
+    /// <summary>Any JSON API described by a template; the URL is a template too (see <see cref="CustomApiProtocol"/>).</summary>
+    Custom,
 }
 
 /// <param name="ChatCompletionsUrl">The exact URL to POST. In the DeepLX format this is the translate endpoint.</param>
@@ -36,13 +39,15 @@ public static class EndpointResolver
     {
         if (format == ApiFormat.Deeplx)
             return TryResolveDeeplx(baseUrl, useRelay, relayPrefix, apiKey, out endpoint, out error);
+        if (format == ApiFormat.Custom)
+            return TryResolveCustom(baseUrl, useRelay, relayPrefix, apiKey, out endpoint, out error);
 
-        // Only the DeepLX format fills in "{apiKey}". Under the OpenAI rules the query string is dropped,
-        // so the request would go out without the token; report the mismatch instead.
+        // The OpenAI format does not fill in "{apiKey}", and its rules drop the query string, so the
+        // request would go out without the token; report the mismatch instead.
         if (((useRelay ? relayPrefix : baseUrl) ?? string.Empty).Contains("{apiKey}", StringComparison.OrdinalIgnoreCase))
         {
             endpoint = null;
-            error = "The endpoint contains {apiKey}, which only the DeepLX API format fills in. Choose DeepLX-compatible or remove the placeholder.";
+            error = "The endpoint contains {apiKey}, which the OpenAI-compatible format does not fill in. Choose DeepLX-compatible or Custom JSON API, or remove the placeholder.";
             return false;
         }
 
@@ -108,6 +113,34 @@ public static class EndpointResolver
 
         var keyInUrl = template.Contains("{apiKey}", StringComparison.OrdinalIgnoreCase);
         endpoint = new ResolvedEndpoint(uri, template, useRelay ? RequestRoute.Relay : RequestRoute.Direct, keyInUrl);
+        return true;
+    }
+
+    /// <summary>
+    /// Custom endpoints are URL templates: <see cref="ResolvedEndpoint.NormalizedBase"/> is the template as entered,
+    /// which <see cref="CustomApiProtocol"/> fills in per request. The URL returned here has sample values and
+    /// only serves to validate the template and to show the host. With the relay enabled, the relay URL is the template.
+    /// </summary>
+    public static bool TryResolveCustom(string? baseUrl, bool useRelay, string? relayPrefix, string? apiKey, out ResolvedEndpoint? endpoint, out string? error)
+    {
+        endpoint = null;
+        error = null;
+
+        var template = (useRelay ? relayPrefix : baseUrl)?.Trim().TrimEnd('/');
+        if (string.IsNullOrEmpty(template))
+        {
+            error = useRelay ? "Relay is enabled but the relay URL is empty." : "Endpoint is empty.";
+            return false;
+        }
+
+        var sample = CustomApiProtocol.FillUrl(template, apiKey, ["text"], "en");
+        if (!Uri.TryCreate(sample, UriKind.Absolute, out var uri) || (uri.Scheme != Uri.UriSchemeHttps && uri.Scheme != Uri.UriSchemeHttp))
+        {
+            error = "Endpoint must be an absolute http(s) URL.";
+            return false;
+        }
+
+        endpoint = new ResolvedEndpoint(uri, template, useRelay ? RequestRoute.Relay : RequestRoute.Direct, template.Contains("{apiKey}", StringComparison.OrdinalIgnoreCase));
         return true;
     }
 

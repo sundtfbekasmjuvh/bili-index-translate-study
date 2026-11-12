@@ -20,6 +20,10 @@ const test = base.test.extend({
     { scope: "worker" }
   ],
 
+  // Interface language the extension is set to. The browser's own language differs between machines
+  // (zh-CN on a Chinese desktop, en-US on CI), so every test pins it; override with test.use({ uiLang }).
+  uiLang: ["zh-CN", { option: true }],
+
   externalRequests: [
     async ({}, use) => {
       await use([]);
@@ -79,14 +83,17 @@ const test = base.test.extend({
 
   // Auto so that tests which only open extension pages also start from known settings and an empty request log.
   settings: [
-    async ({ serviceWorker, upstream }, use) => {
+    async ({ serviceWorker, upstream, uiLang }, use) => {
       const apply = async (overrides = {}) => {
         await serviceWorker.evaluate(
           async ({ sync, local }) => {
-            await chrome.storage.sync.clear();
-            await chrome.storage.local.clear();
-            await chrome.storage.sync.set(sync);
-            await chrome.storage.local.set(local);
+            // Write the new values before removing leftovers, so that no setting (the interface
+            // language in particular) is briefly missing and seen at its default by an open page.
+            for (const [area, values] of [[chrome.storage.sync, sync], [chrome.storage.local, local]]) {
+              const stale = Object.keys(await area.get(null)).filter((key) => !(key in values));
+              await area.set(values);
+              if (stale.length) await area.remove(stale);
+            }
             volatileTranslateCache.clear();
             volatileStudyCache.clear();
             volatileVisionCache.clear();
@@ -95,14 +102,15 @@ const test = base.test.extend({
             sync: {
               base: upstream.base,
               proxy: "",
-              key: "e2e-key",
               target: "中文",
               model: "Index-Translate-9B",
               immersiveModel: "Index-Translate-2B",
               visionModel: "Index-Translate-35B-A3B",
+              uiLang: uiLang,
               ...(overrides.sync || {})
             },
-            local: { glossary: "", ...(overrides.local || {}) }
+            // The API key lives in chrome.storage.local, not in the synced area.
+            local: { glossary: "", key: "e2e-key", ...(overrides.local || {}) }
           }
         );
       };
@@ -132,7 +140,8 @@ async function contentScriptLoaded(serviceWorker, url) {
     try {
       const [res] = await chrome.scripting.executeScript({
         target: { tabId: tab.id },
-        func: () => window.__biliIndexTranslateLoaded === true
+        // The language marker appears once the content script has read the saved interface language.
+        func: () => window.__biliIndexTranslateLoaded === true && typeof window.__biliIndexTranslateLang === "string"
       });
       return Boolean(res && res.result);
     } catch (_) {

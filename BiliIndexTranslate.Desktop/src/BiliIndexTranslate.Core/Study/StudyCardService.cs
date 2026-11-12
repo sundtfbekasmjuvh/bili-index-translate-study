@@ -41,8 +41,8 @@ public sealed class StudyCardService
         CancellationToken ct,
         Action<StudyDeckResult>? onPartial = null)
     {
-        if (request.Format == ApiFormat.Deeplx)
-            throw new TranslationException(DeeplxProtocol.Unsupported("Study Card", request.UseRelay ? RequestRoute.Relay : RequestRoute.Direct));
+        if (request.Format != ApiFormat.OpenAi)
+            throw new TranslationException(DeeplxProtocol.Unsupported("Study Card", request.UseRelay ? RequestRoute.Relay : RequestRoute.Direct, request.Format));
 
         if (!EndpointResolver.TryResolve(request.BaseUrl, request.UseRelay, request.RelayPrefix, out var endpoint, out var cfgError))
             throw new TranslationException(new TranslationError(TranslationErrorKind.Configuration, cfgError ?? "Invalid endpoint.", request.UseRelay ? RequestRoute.Relay : RequestRoute.Direct));

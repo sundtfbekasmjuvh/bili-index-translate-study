@@ -3,6 +3,8 @@
 // Local stand-in for the OpenAI-compatible upstream used by the sandbox and extension tests.
 // Replies are deterministic and derived from the prompt, so tests can assert exact output.
 // POST .../translate is a DeepLX-style endpoint: { text, source_lang, target_lang } -> { code, data }.
+// POST .../custom-api has a made-up shape for the custom template: { q: [...], to } with an X-Api-Key
+// header -> { result: { items: [{ out }] } }.
 const http = require("http");
 const fs = require("fs");
 const path = require("path");
@@ -128,6 +130,8 @@ function pngChunk(type, data) {
   return Buffer.concat([len, typed, crc]);
 }
 
+const HUGE_IMAGE_BYTES = 32 * 1024 * 1024;
+
 // Small RGB PNG with horizontal stripes, served as the right-click image fixture.
 function samplePng(width = 64, height = 32) {
   const rows = [];
@@ -158,6 +162,7 @@ function pngSize(dataUrl) {
 
 async function startMockUpstream(options = {}) {
   const requests = [];
+  const downloads = [];
   const overrides = [];
   const delayMs = options.delayMs ?? 25;
   const png = samplePng();
@@ -184,6 +189,35 @@ async function startMockUpstream(options = {}) {
       res.end(png);
       return;
     }
+    // A download far beyond the extension's 8 MB image limit. With ?declared=1 the size is announced
+    // in Content-Length; without it the body is chunked and the size only shows while downloading.
+    if (req.method === "GET" && url.pathname === "/huge.png") {
+      const entry = { path: url.pathname + url.search, sent: 0, total: HUGE_IMAGE_BYTES, closedEarly: false };
+      downloads.push(entry);
+      const headers = { "Content-Type": "image/png", "Cache-Control": "no-store" };
+      if (url.searchParams.get("declared")) headers["Content-Length"] = String(entry.total);
+      res.writeHead(200, headers);
+      res.on("close", () => {
+        if (!res.writableEnded) entry.closedEarly = true;
+      });
+      const chunk = Buffer.alloc(64 * 1024, 0x5a);
+      while (entry.sent < entry.total && !res.destroyed) {
+        entry.sent += chunk.length;
+        if (!res.write(chunk)) {
+          await new Promise((resolve) => {
+            const resume = () => {
+              res.off("drain", resume);
+              res.off("close", resume);
+              resolve();
+            };
+            res.on("drain", resume);
+            res.on("close", resume);
+          });
+        }
+      }
+      if (!res.destroyed) res.end();
+      return;
+    }
     if (req.method === "GET" && url.pathname.endsWith(".html")) {
       const file = path.join(FIXTURE_DIR, path.basename(url.pathname));
       if (fs.existsSync(file)) {
@@ -193,7 +227,8 @@ async function startMockUpstream(options = {}) {
       }
     }
     const isDeeplx = url.pathname.endsWith("/translate");
-    if (req.method !== "POST" || !(isDeeplx || url.pathname.endsWith("/chat/completions"))) {
+    const isCustom = url.pathname.endsWith("/custom-api");
+    if (req.method !== "POST" || !(isDeeplx || isCustom || url.pathname.endsWith("/chat/completions"))) {
       res.writeHead(404, { "Content-Type": "text/plain" });
       res.end("not found");
       return;
@@ -202,14 +237,16 @@ async function startMockUpstream(options = {}) {
     let raw = "";
     for await (const chunk of req) raw += chunk;
     const body = JSON.parse(raw || "{}");
-    const kind = isDeeplx ? "deeplx" : classify(body);
+    const customItems = isCustom ? [].concat(body.q || []).map(String) : [];
+    const kind = isDeeplx ? "deeplx" : isCustom ? "custom" : classify(body);
     const entry = {
       kind,
       path: url.pathname,
       token: url.searchParams.get("token") || "",
       body,
-      source: isDeeplx ? String(body.text || "") : sourceText(kind, body),
+      source: isDeeplx ? String(body.text || "") : isCustom ? customItems.join("\n") : sourceText(kind, body),
       authorization: req.headers.authorization || "",
+      apiKeyHeader: req.headers["x-api-key"] || "",
       aborted: false,
       completed: false
     };
@@ -224,6 +261,15 @@ async function startMockUpstream(options = {}) {
     if (override && override.status) {
       res.writeHead(override.status, { "Content-Type": override.contentType || "text/html; charset=utf-8" });
       res.end(override.body || "");
+      return;
+    }
+
+    if (isCustom) {
+      await sleep(delayMs);
+      if (res.destroyed) return;
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ result: { items: customItems.map((q) => ({ out: translationOf(q) })) } }));
+      entry.completed = true;
       return;
     }
 
@@ -258,6 +304,8 @@ async function startMockUpstream(options = {}) {
     origin,
     base: origin + "/v1",
     requests,
+    // One entry per /huge.png download: bytes written so far and whether the client hung up early.
+    downloads,
     // Applies to the next request of this kind (optionally filtered by match). Supports
     // { status, body } for HTTP errors, { reply } for custom text, and { hold } to pause the
     // stream after its first chunk until the promise resolves.
@@ -272,6 +320,7 @@ async function startMockUpstream(options = {}) {
     },
     reset() {
       requests.length = 0;
+      downloads.length = 0;
       overrides.length = 0;
     },
     close() {

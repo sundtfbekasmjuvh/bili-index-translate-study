@@ -9,9 +9,10 @@
 | Source-app tracking | `App/Tracking/SourceWindowTracker` | WinEvents filtered to the source pid (location, move/size, scrolling, minimize) + global foreground hook + 200 ms sanity tick. |
 | Selection geometry | `Core/Selection/SelectionAnchor`, `Core/Selection/PopupPlacer`, `Core/Geometry/*` | Physical pixels end to end; per-monitor scale only for gap/margins/limits. Pure functions, unit-tested. |
 | Popup lifecycle | `Core/Session/ReadingSession` (decides) + `App/AppHost` (executes) + `App/Popup/PopupPresenter` (window) | Event → effects state machine; every async thing carries an id. |
-| Translation requests | `Core/Translation/*` | `EndpointResolver`, `PromptBuilder`, `DeeplxProtocol`, `OpenAiCompatibleTranslator`, `HttpTranslationTransport`, `TranslationCoordinator`. |
+| Translation requests | `Core/Translation/*` | `EndpointResolver`, `PromptBuilder`, `DeeplxProtocol`, `CustomApiProtocol`, `OpenAiCompatibleTranslator`, `HttpTranslationTransport`, `TranslationCoordinator`. |
 | Caching | `Core/Translation/TranslationCache` | LRU 500 / TTL 24 h, in-memory only. Key = text + target + model + effective endpoint + prompt version + source language. In the DeepLX format the model and the glossary are not part of the key, and the endpoint part is the URL as entered (the key is never in it). |
 | Settings | `Core/Settings/*`, `App/Native/DpapiSecretProtector`, `App/Settings/SettingsWindow` | JSON + DPAPI blob, tolerant load, clamped ranges, schema migration. |
+| Interface language | `Core/Localization/UiText`, `Core/Localization/InterfaceLanguage`, `App/Localization/Loc` | Text of both languages in one table with the same keys. XAML reads it through `{loc:Tr Key}`, a binding to `Loc`'s indexer, so open windows follow a language change; code uses `Loc.T` / `Loc.Bind`. A unit test checks that every key the app uses exists and that every key is used. |
 | Diagnostics | `Core/Diagnostics/*`, `App/Diagnostics/DiagnosticsWindow` | 300-entry ring buffer, p50/p95 per timing category, per-app compatibility registry. |
 | Tray / lifetime | `App/Tray/TrayIcon`, `App/Program`, `App/AppHost` | Single instance (mutex + named event), explicit shutdown, ordered disposal. |
 
@@ -91,3 +92,12 @@ translation is `data`. A non-200 `code` inside a 200 response is reported as tha
 is no prompt, so the glossary is not applied, and Study Card and image translation fail with a
 configuration error before any request is sent. Otherwise the same rules: one request, no retries,
 no route changes.
+
+Custom format (`apiFormat: Custom`): the request comes from a template in the settings
+(`customMethod`, `customHeaders`, `customBody`) and the endpoint is a template too.
+`CustomApiProtocol` fills in `{text}`, `{texts}`, `{apiKey}`, `{target}`, `{targetLang}` and
+`{targetLangLower}`, escaping each value for where it lands, and reads the translation at
+`customResultPath` (keys, `[n]`, `[*]`). The template is validated completely before anything is
+sent; the request goes through `IRawTranslationTransport.SendAsync`, which adds no credential of
+its own. The cache key holds a hash of method, headers, body and result path instead of a model.
+Study Card and image translation are refused as for DeepLX.

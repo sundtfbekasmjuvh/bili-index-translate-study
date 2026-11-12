@@ -40,6 +40,14 @@
   let studyDragged = false;
   let textScale = 1;
 
+  // Interface language: the uiLang setting, or the browser's language while it is "auto".
+  const I18N = globalThis.BiliI18n;
+  let uiLang = I18N.resolveLang("auto");
+
+  function tr(key, ...args) {
+    return I18N.translate(uiLang, key, ...args);
+  }
+
   // Session-only UI preferences (volatile RAM only, never written to storage)
   let preferFlagshipStudyModel = false;
   let compactStudyMode = false;
@@ -156,20 +164,18 @@
         (card.reading ? " [" + card.reading + "]" : "") +
         (meta ? " (" + meta + ")" : "")
     );
-    if (card.meaning) lines.push("释义：" + card.meaning);
-    if (card.nuance) lines.push("辨析：" + card.nuance);
-    if (card.memoryAid) lines.push("助记：" + card.memoryAid);
+    if (card.meaning) lines.push(tr("study.md.meaning", card.meaning));
+    if (card.nuance) lines.push(tr("study.md.nuance", card.nuance));
+    if (card.memoryAid) lines.push(tr("study.md.memory", card.memoryAid));
     if (card.collocations && card.collocations.length > 0) {
-      lines.push("搭配：" + card.collocations.join(" / "));
+      lines.push(tr("study.md.colloc", card.collocations.join(" / ")));
     }
     if (card.example && card.example.source) {
       lines.push(
-        "例句：" +
-          card.example.source +
-          (card.example.target ? " — " + card.example.target : "")
+        tr("study.md.example", card.example.source + (card.example.target ? " — " + card.example.target : ""))
       );
     }
-    if (grammarNote) lines.push("句法：" + grammarNote);
+    if (grammarNote) lines.push(tr("study.md.grammar", grammarNote));
     return lines.join("\n");
   }
 
@@ -246,7 +252,7 @@
     panel = document.createElement("div");
     panel.id = PANEL_ID;
     panel.setAttribute("role", "dialog");
-    panel.setAttribute("aria-label", "Bili Index Translate");
+    panel.setAttribute("aria-label", tr("panel.aria"));
     panel.addEventListener("wheel", handleScaleWheel, { passive: false });
 
     const header = document.createElement("div");
@@ -267,7 +273,7 @@
     mainSpeakBtn = document.createElement("button");
     mainSpeakBtn.className = "bit-icon-btn";
     mainSpeakBtn.type = "button";
-    mainSpeakBtn.title = "朗读选中原文";
+    mainSpeakBtn.title = tr("panel.speak");
     mainSpeakBtn.appendChild(makeIcon("speaker"));
     mainSpeakBtn.addEventListener("click", (e) => {
       e.stopPropagation();
@@ -277,7 +283,7 @@
     mainCopyBtn = document.createElement("button");
     mainCopyBtn.className = "bit-icon-btn";
     mainCopyBtn.type = "button";
-    mainCopyBtn.title = "复制译文（快捷键 C）";
+    mainCopyBtn.title = tr("panel.copy");
     mainCopyBtn.appendChild(makeIcon("copy"));
     mainCopyBtn.addEventListener("click", (e) => {
       e.stopPropagation();
@@ -287,11 +293,11 @@
     studyTriggerBtn = document.createElement("button");
     studyTriggerBtn.className = "bit-study-trigger";
     studyTriggerBtn.type = "button";
-    studyTriggerBtn.title = "展开/收起伴随语言学习卡片（快捷键 S）";
-    studyTriggerBtn.setAttribute("aria-label", "打开语言学习卡片");
+    studyTriggerBtn.title = tr("panel.studyToggle");
+    studyTriggerBtn.setAttribute("aria-label", tr("panel.studyOpen"));
     studyTriggerBtn.appendChild(makeIcon("book"));
     const studyLabel = document.createElement("span");
-    studyLabel.textContent = "\u5b66\u4e60\u5361\u7247";
+    studyLabel.textContent = tr("panel.studyLabel");
     studyTriggerBtn.appendChild(studyLabel);
 
     studyTriggerBtn.addEventListener("click", (e) => {
@@ -302,7 +308,7 @@
     const closeBtn = document.createElement("button");
     closeBtn.className = "bit-close";
     closeBtn.type = "button";
-    closeBtn.setAttribute("aria-label", "Close");
+    closeBtn.setAttribute("aria-label", tr("panel.close"));
     closeBtn.textContent = "\u00d7";
     closeBtn.addEventListener("click", hideAll);
 
@@ -345,7 +351,7 @@
     studyPanel = document.createElement("div");
     studyPanel.id = STUDY_PANEL_ID;
     studyPanel.setAttribute("role", "dialog");
-    studyPanel.setAttribute("aria-label", "Bili Language Study Card");
+    studyPanel.setAttribute("aria-label", tr("study.aria"));
     if (compactStudyMode) studyPanel.setAttribute("data-compact", "");
     studyPanel.addEventListener("wheel", handleScaleWheel, { passive: false });
 
@@ -356,7 +362,7 @@
     titleWrap.className = "bit-study-title";
     titleWrap.appendChild(makeIcon("book"));
     const titleText = document.createElement("span");
-    titleText.textContent = "\u8bed\u8a00\u5b66\u4e60\u5361\u7247";
+    titleText.textContent = tr("study.title");
     studyLangBadge = document.createElement("span");
     studyLangBadge.className = "bit-lang-badge";
     studyLangBadge.style.display = "none";
@@ -387,8 +393,8 @@
     studyQuizBtn = document.createElement("button");
     studyQuizBtn.className = "bit-pill-ctrl";
     studyQuizBtn.type = "button";
-    studyQuizBtn.title = "主动回忆自测翻转（快捷键 F）";
-    studyQuizBtn.textContent = "\u81ea\u6d4b";
+    studyQuizBtn.title = tr("study.quizTitle");
+    studyQuizBtn.textContent = tr("study.quiz");
     studyQuizBtn.style.display = "none";
     studyQuizBtn.addEventListener("click", (e) => {
       e.stopPropagation();
@@ -398,7 +404,7 @@
     studyCopyBtn = document.createElement("button");
     studyCopyBtn.className = "bit-icon-btn";
     studyCopyBtn.type = "button";
-    studyCopyBtn.title = "复制当前词卡笔记（快捷键 C）";
+    studyCopyBtn.title = tr("study.copyTitle");
     studyCopyBtn.appendChild(makeIcon("copy"));
     studyCopyBtn.addEventListener("click", (e) => {
       e.stopPropagation();
@@ -408,7 +414,7 @@
     const closeBtn = document.createElement("button");
     closeBtn.className = "bit-close";
     closeBtn.type = "button";
-    closeBtn.setAttribute("aria-label", "关闭学习卡片");
+    closeBtn.setAttribute("aria-label", tr("study.close"));
     closeBtn.textContent = "\u00d7";
     closeBtn.addEventListener("click", (e) => {
       e.stopPropagation();
@@ -455,12 +461,12 @@
     if (!studyCompactBtn) return;
     if (compactStudyMode) {
       studyCompactBtn.setAttribute("data-active", "");
-      studyCompactBtn.textContent = "\u7cbe\u7b80";
-      studyCompactBtn.title = "当前精简视图：仅显示释义与例句（点击或按 D 展开详尽辨析与助记）";
+      studyCompactBtn.textContent = tr("study.compact");
+      studyCompactBtn.title = tr("study.compactTitle");
     } else {
       studyCompactBtn.removeAttribute("data-active");
-      studyCompactBtn.textContent = "\u8be6\u5c3d";
-      studyCompactBtn.title = "当前详尽视图：显示辨析、助记与搭配（点击或按 D 切换精简视图）";
+      studyCompactBtn.textContent = tr("study.detailed");
+      studyCompactBtn.title = tr("study.detailedTitle");
     }
   }
 
@@ -479,11 +485,11 @@
     if (preferFlagshipStudyModel) {
       studySpeedBtn.setAttribute("data-active", "");
       studySpeedBtn.textContent = "35B";
-      studySpeedBtn.title = "当前 35B-A3B 旗舰模式（点击或按 M 切回 9B 均衡模式）";
+      studySpeedBtn.title = tr("study.flagshipTitle");
     } else {
       studySpeedBtn.removeAttribute("data-active");
       studySpeedBtn.textContent = "9B";
-      studySpeedBtn.title = "当前 9B 均衡模式（点击或按 M 切换 35B-A3B 旗舰精析）";
+      studySpeedBtn.title = tr("study.balancedTitle");
     }
   }
 
@@ -501,10 +507,10 @@
     studyState.revealedIndices = {};
     if (studyState.quizMode) {
       studyQuizBtn.setAttribute("data-active", "");
-      studyQuizBtn.textContent = "\u9000\u51fa\u81ea\u6d4b";
+      studyQuizBtn.textContent = tr("study.quizExit");
     } else {
       studyQuizBtn.removeAttribute("data-active");
-      studyQuizBtn.textContent = "\u81ea\u6d4b";
+      studyQuizBtn.textContent = tr("study.quiz");
     }
     renderStudyDeck(true);
   }
@@ -513,7 +519,7 @@
     if (!studyState || !studyState.deck || !studyState.deck.cards.length) return;
     const idx = Math.max(0, Math.min(studyState.cardIndex || 0, studyState.deck.cards.length - 1));
     const md = formatStudyCardMarkdown(studyState.deck.cards[idx], studyState.deck.grammarNote);
-    copyToClipboard(md, studyCopyBtn, "\u5df2\u590d\u5236\u8bcd\u5361");
+    copyToClipboard(md, studyCopyBtn, tr("study.copied"));
   }
 
   function enableDrag(handle, targetEl, onStartDrag) {
@@ -566,7 +572,7 @@
     if (!text) return;
     stopSpeech();
     if (!("speechSynthesis" in window) || typeof SpeechSynthesisUtterance === "undefined") {
-      flashStudyFoot("当前浏览器不支持语音合成");
+      flashStudyFoot(tr("study.noSpeech"));
       return;
     }
     try {
@@ -582,9 +588,9 @@
       }
       utter.rate = slow ? 0.68 : 0.96;
       window.speechSynthesis.speak(utter);
-      if (slow && isStudyOpen()) flashStudyFoot("0.7x 慢读跟读中…");
+      if (slow && isStudyOpen()) flashStudyFoot(tr("study.slowReading"));
     } catch (_) {
-      flashStudyFoot("语音播放受限");
+      flashStudyFoot(tr("study.speechBlocked"));
     }
   }
 
@@ -740,7 +746,7 @@
     bodyEl.innerHTML = "";
     const loading = document.createElement("div");
     loading.className = "bit-loading";
-    loading.textContent = isVision ? "\u8bc6\u56fe\u76f4\u8bd1\u4e2d\u2026" : "Translating\u2026";
+    loading.textContent = tr(isVision ? "panel.visionLoading" : "panel.translating");
     bodyEl.appendChild(loading);
     footEl.textContent = "";
     panel.setAttribute("data-open", "");
@@ -748,14 +754,11 @@
   }
 
   function formatError(res) {
-    if (!res) return "No response from background worker.";
-    const head = res.status ? "HTTP " + res.status : "Request failed";
+    if (!res) return tr("error.noResponse");
+    const head = res.status ? "HTTP " + res.status : tr("error.requestFailed");
     let hint = "";
     if (res.status === 412) {
-      hint =
-        res.via === "relay"
-          ? "\n(The relay was also rejected; check the Relay prefix, Base URL and API key in extension options.)"
-          : "\n(Upstream rejected the direct request. If you trust a relay, set the Relay prefix in extension options; nothing is switched automatically.)";
+      hint = "\n" + tr(res.via === "relay" ? "error.hint412Relay" : "error.hint412Direct");
     }
     return head + (res.body ? "\n" + res.body : "") + hint;
   }
@@ -767,7 +770,7 @@
       syncSourceButtons();
     }
     bodyEl.textContent = currentTranslatedText;
-    const streamLabel = deltaRes.vision ? " \u00b7 \u8bc6\u56fe\u6d41\u5f0f\u4e2d\u2026" : " \u00b7 \u6d41\u5f0f\u8f93\u51fa\u4e2d\u2026";
+    const streamLabel = " \u00b7 " + tr(deltaRes.vision ? "panel.visionStreaming" : "panel.streaming");
     footEl.textContent = (deltaRes.model || "") + streamLabel;
     if (!dragged) placePanel(anchor);
   }
@@ -793,7 +796,7 @@
         srcRow.className = "bit-vision-src";
         const tag = document.createElement("span");
         tag.className = "bit-vision-src-tag";
-        tag.textContent = "\u539f\u6587";
+        tag.textContent = tr("panel.sourceTag");
         const span = document.createElement("span");
         span.textContent = currentSourceText;
         srcRow.appendChild(tag);
@@ -801,19 +804,19 @@
         bodyEl.appendChild(srcRow);
       }
 
-      const visionTag = res.vision ? " \u00b7 \u8bc6\u56fe" : "";
+      const visionTag = res.vision ? " \u00b7 " + tr("panel.visionTag") : "";
       const glossaryTag =
-        res.glossaryHits && res.glossaryHits > 0 ? " \u00b7 \u672f\u8bed\u00d7" + res.glossaryHits : "";
+        res.glossaryHits && res.glossaryHits > 0 ? " \u00b7 " + tr("panel.glossaryHits", res.glossaryHits) : "";
       const left =
         (res.model || "") +
         visionTag +
         glossaryTag +
-        (res.cached ? " \u00b7 \u26a1\u77ac\u65f6" : res.via ? " \u00b7 " + res.via : "");
+        (res.cached ? " \u00b7 " + tr("panel.cached") : res.via ? " \u00b7 " + res.via : "");
       footEl.textContent = "";
       const lSpan = document.createElement("span");
       lSpan.textContent = left;
       const rSpan = document.createElement("span");
-      rSpan.textContent = currentSourceText && res.studyCard !== false ? "S \u8bcd\u5361" : "";
+      rSpan.textContent = currentSourceText && res.studyCard !== false ? tr("panel.studyHint") : "";
       footEl.appendChild(lSpan);
       footEl.appendChild(rSpan);
     } else {
@@ -859,14 +862,14 @@
     studyLangBadge.style.display = "none";
     studyQuizBtn.style.display = "none";
     studyQuizBtn.removeAttribute("data-active");
-    studyQuizBtn.textContent = "\u81ea\u6d4b";
+    studyQuizBtn.textContent = tr("study.quiz");
 
     studyBodyEl.textContent = "";
     studyBodyEl.appendChild(buildSkeletonLoader());
 
     setStudyFoot(
-      preferFlagshipStudyModel ? "35B \u65d7\u8230\u62c6\u89e3\u4e2d\u2026" : "9B \u6d41\u5f0f\u62c6\u89e3\u4e2d\u2026",
-      "\u96f6\u7559\u75d5"
+      tr(preferFlagshipStudyModel ? "study.loadingFlagship" : "study.loadingBalanced"),
+      tr("study.noTrace")
     );
     studyPanel.setAttribute("data-open", "");
     if (studyTriggerBtn) studyTriggerBtn.setAttribute("data-active", "");
@@ -884,7 +887,7 @@
     const retry = document.createElement("button");
     retry.className = "bit-retry-btn";
     retry.type = "button";
-    retry.textContent = "\u91cd\u8bd5";
+    retry.textContent = tr("study.retry");
     retry.addEventListener("click", () => {
       if (studyState && studyState.sourceText) {
         openStudyCard(studyState.sourceText, studyState.anchor, studyDragged);
@@ -936,14 +939,14 @@
     const prevBtn = document.createElement("button");
     prevBtn.className = "bit-step-btn";
     prevBtn.type = "button";
-    prevBtn.title = "上一个词 (←)";
+    prevBtn.title = tr("study.prev");
     prevBtn.textContent = "\u2039";
     prevBtn.addEventListener("click", () => stepCard(-1));
 
     const nextBtn = document.createElement("button");
     nextBtn.className = "bit-step-btn";
     nextBtn.type = "button";
-    nextBtn.title = "下一个词 (→)";
+    nextBtn.title = tr("study.next");
     nextBtn.textContent = "\u203a";
     nextBtn.addEventListener("click", () => stepCard(1));
 
@@ -986,11 +989,11 @@
     if (studyState.model) {
       leftParts.push(studyState.model.replace("Index-Translate-", ""));
     }
-    if (deck.streaming) leftParts.push("\u6b63\u5728\u52a0\u8f7d\u5176\u4f59\u8bcd\u5361\u2026");
-    else if (studyState.cached) leftParts.push("\u26a1\u77ac\u65f6");
+    if (deck.streaming) leftParts.push(tr("study.loadingMore"));
+    else if (studyState.cached) leftParts.push(tr("panel.cached"));
     else if (studyState.via) leftParts.push(studyState.via);
 
-    setStudyFoot(leftParts.join(" \u00b7 "), "Space\u6717\u8bfb \u00b7 F\u81ea\u6d4b \u00b7 D\u7cbe\u7b80");
+    setStudyFoot(leftParts.join(" \u00b7 "), tr("study.footKeys"));
   }
 
   // Surgical update when background SSE cards arrive while user is reading active card!
@@ -1040,7 +1043,7 @@
       gBox.className = "bit-grammar-box";
       const gLabel = document.createElement("span");
       gLabel.className = "bit-grammar-label";
-      gLabel.textContent = "\u53e5\u6cd5";
+      gLabel.textContent = tr("study.grammar");
       const gText = document.createElement("span");
       gText.textContent = deck.grammarNote;
       gBox.appendChild(gLabel);
@@ -1081,7 +1084,7 @@
     if (card.surface) {
       const surfEl = document.createElement("span");
       surfEl.className = "bit-surface-tag";
-      surfEl.textContent = "\u6587\u4e2d: " + card.surface;
+      surfEl.textContent = tr("study.inText", card.surface);
       termLine.appendChild(surfEl);
     }
     headMain.appendChild(termLine);
@@ -1116,17 +1119,17 @@
     const ttsBtn = document.createElement("button");
     ttsBtn.className = "bit-tts-btn";
     ttsBtn.type = "button";
-    ttsBtn.title = "常速朗读发音（快捷键 Space）";
+    ttsBtn.title = tr("study.speakTitle");
     ttsBtn.appendChild(makeIcon("speaker"));
     const ttsLabel = document.createElement("span");
-    ttsLabel.textContent = "\u53d1\u97f3";
+    ttsLabel.textContent = tr("study.speak");
     ttsBtn.appendChild(ttsLabel);
     ttsBtn.addEventListener("click", () => speakText(card.term, deck.sourceLang, false));
 
     const slowBtn = document.createElement("button");
     slowBtn.className = "bit-tts-slow";
     slowBtn.type = "button";
-    slowBtn.title = "0.7x 慢速清晰跟读（快捷键 Shift+Space）";
+    slowBtn.title = tr("study.slowTitle");
     slowBtn.textContent = "0.7x";
     slowBtn.addEventListener("click", () => speakText(card.term, deck.sourceLang, true));
 
@@ -1145,7 +1148,7 @@
         meanBox.setAttribute("data-masked", "");
         meanBox.appendChild(makeIcon("eye"));
         const maskText = document.createElement("span");
-        maskText.textContent = "\u70b9\u51fb\u6216\u6309 F \u63ed\u6653\u91ca\u4e49\u4e0e\u89e3\u6790";
+        maskText.textContent = tr("study.reveal");
         meanBox.appendChild(maskText);
         meanBox.addEventListener("click", () => {
           if (!studyState.revealedIndices) studyState.revealedIndices = {};
@@ -1164,10 +1167,10 @@
       insights.className = "bit-insights";
 
       if (card.nuance) {
-        insights.appendChild(makeEditorialRow("nuance", "\u8fa8\u6790", card.nuance));
+        insights.appendChild(makeEditorialRow("nuance", tr("study.nuance"), card.nuance));
       }
       if (card.memoryAid) {
-        insights.appendChild(makeEditorialRow("memory", "\u52a9\u8bb0", card.memoryAid));
+        insights.appendChild(makeEditorialRow("memory", tr("study.memory"), card.memoryAid));
       }
       if (card.collocations && card.collocations.length > 0) {
         const colList = document.createElement("div");
@@ -1176,14 +1179,14 @@
           const pill = document.createElement("button");
           pill.className = "bit-colloc-pill";
           pill.type = "button";
-          pill.title = "点击朗读该搭配短语";
+          pill.title = tr("study.collocSpeak");
           pill.textContent = item;
           pill.addEventListener("click", () => {
             speakText(extractForeignPhrase(item), deck.sourceLang, false);
           });
           colList.appendChild(pill);
         });
-        insights.appendChild(makeEditorialRow("colloc", "\u642d\u914d", colList));
+        insights.appendChild(makeEditorialRow("colloc", tr("study.colloc"), colList));
       }
       studyBodyEl.appendChild(insights);
     }
@@ -1208,14 +1211,14 @@
         const exTts = document.createElement("button");
         exTts.className = "bit-tts-mini";
         exTts.type = "button";
-        exTts.title = "常速朗读例句（快捷键 E）";
+        exTts.title = tr("study.exampleSpeak");
         exTts.appendChild(makeIcon("speaker"));
         exTts.addEventListener("click", () => speakText(card.example.source, deck.sourceLang, false));
 
         const exSlow = document.createElement("button");
         exSlow.className = "bit-tts-mini";
         exSlow.type = "button";
-        exSlow.title = "0.7x 慢读例句（快捷键 Shift+E）";
+        exSlow.title = tr("study.exampleSlow");
         exSlow.textContent = "0.7x";
         exSlow.addEventListener("click", () => speakText(card.example.source, deck.sourceLang, true));
 
@@ -1487,7 +1490,7 @@
           reject(err);
         }
       };
-      img.onerror = () => reject(new Error("Failed to decode captured viewport image."));
+      img.onerror = () => reject(new Error(tr("error.decodeCapture")));
       img.src = fullDataUrl;
     });
   }
@@ -1561,7 +1564,7 @@
       }
     }
 
-    showResult({ ok: false, status: 0, body: "Vision streaming port unavailable." }, anchor);
+    showResult({ ok: false, status: 0, body: tr("error.visionPort") }, anchor);
   }
 
   function cancelRegionSnip() {
@@ -1584,7 +1587,7 @@
 
     const hint = document.createElement("div");
     hint.className = "bit-snip-hint";
-    hint.textContent = "\u62d6\u62fd\u6846\u9009\u56fe\u7247 / \u6f2b\u753b / \u89c6\u9891\u5b57\u5e55\u533a\u57df\u76f4\u8bd1 \u00b7 Esc \u53d6\u6d88";
+    hint.textContent = tr("snip.hint");
 
     const box = document.createElement("div");
     box.className = "bit-snip-box";
@@ -1688,7 +1691,7 @@
                 triggerImageTranslate(fallbackUrl, anchor);
               } else {
                 showResult(
-                  { ok: false, status: 0, body: (res && res.body) || "Unable to capture tab region." },
+                  { ok: false, status: 0, body: (res && res.body) || tr("error.capture") },
                   anchor
                 );
               }
@@ -1757,12 +1760,12 @@
 
     immStatusEl = document.createElement("span");
     immStatusEl.className = "bit-imm-status";
-    immStatusEl.textContent = "\u53cc\u8bed\u5bf9\u7167";
+    immStatusEl.textContent = tr("imm.title");
 
     immModeBtn = document.createElement("button");
     immModeBtn.className = "bit-imm-btn";
     immModeBtn.type = "button";
-    immModeBtn.title = "切换「双语对照」与「仅显译文」排版";
+    immModeBtn.title = tr("imm.modeTitle");
     immModeBtn.addEventListener("click", (e) => {
       e.stopPropagation();
       immViewMode = immViewMode === "bilingual" ? "target-only" : "bilingual";
@@ -1772,7 +1775,7 @@
     immModelBtn = document.createElement("button");
     immModelBtn.className = "bit-imm-btn";
     immModelBtn.type = "button";
-    immModelBtn.title = "切换网页双语流式模型（2B 极速 / 9B 精译）";
+    immModelBtn.title = tr("imm.modelTitle");
     immModelBtn.addEventListener("click", (e) => {
       e.stopPropagation();
       const curIs9B = /9b/i.test(immModelOverride || immResolvedModel);
@@ -1788,7 +1791,7 @@
     const closeBtn = document.createElement("button");
     closeBtn.className = "bit-imm-close";
     closeBtn.type = "button";
-    closeBtn.title = "退出双语并无损还原原网页（快捷键 Alt+A）";
+    closeBtn.title = tr("imm.closeTitle");
     closeBtn.textContent = "\u00d7";
     closeBtn.addEventListener("click", (e) => {
       e.stopPropagation();
@@ -1815,13 +1818,13 @@
       document.documentElement.setAttribute("data-bit-imm-mode", "target-only");
       if (immModeBtn) {
         immModeBtn.setAttribute("data-active", "");
-        immModeBtn.textContent = "\u4ec5\u8bd1";
+        immModeBtn.textContent = tr("imm.targetOnly");
       }
     } else {
       document.documentElement.removeAttribute("data-bit-imm-mode");
       if (immModeBtn) {
         immModeBtn.removeAttribute("data-active");
-        immModeBtn.textContent = "\u53cc\u8bed";
+        immModeBtn.textContent = tr("imm.bilingual");
       }
     }
   }
@@ -1832,11 +1835,11 @@
     immBar.setAttribute("data-busy", busy ? "1" : "0");
     if (immStatusEl) {
       if (immTotalCount === 0) {
-        immStatusEl.textContent = "\u672a\u68c0\u6d4b\u5230\u5916\u6587\u6bb5\u843d";
+        immStatusEl.textContent = tr("imm.none");
       } else if (busy) {
-        immStatusEl.textContent = "\u6d41\u5f0f\u8bd1\u914d " + immDoneCount + "/" + immTotalCount;
+        immStatusEl.textContent = tr("imm.busy", immDoneCount, immTotalCount);
       } else {
-        immStatusEl.textContent = "\u53cc\u8bed\u5c31\u7eea " + immDoneCount + "/" + immTotalCount;
+        immStatusEl.textContent = tr("imm.ready", immDoneCount, immTotalCount);
       }
     }
     if (immModelBtn) {
@@ -2052,7 +2055,7 @@
         } else if (rec.span) {
           rec.span.removeAttribute("data-loading");
           rec.span.removeAttribute("data-streaming");
-          rec.span.textContent = res && res.status ? "[HTTP " + res.status + "]" : "[\u8bd1\u914d\u5931\u8d25]";
+          rec.span.textContent = res && res.status ? "[HTTP " + res.status + "]" : tr("imm.failed");
           rec.state = "done";
           immDoneCount++;
         }
@@ -2217,6 +2220,44 @@
   function toggleImmersivePage() {
     if (immActive) stopImmersivePage();
     else startImmersivePage();
+  }
+
+  // The panels and the bilingual bar are built once and reused, so a language change drops them;
+  // they are built again, in the new language, the next time they are needed.
+  function applyUiLang(setting) {
+    const next = I18N.resolveLang(setting);
+    if (next === uiLang) return;
+    uiLang = next;
+    cancelRegionSnip();
+    hideAll();
+    if (panel) panel.remove();
+    if (studyPanel) studyPanel.remove();
+    panel = null;
+    studyPanel = null;
+    if (immBar) {
+      immBar.remove();
+      immBar = null;
+      if (immActive) {
+        ensureImmBar();
+        immBar.setAttribute("data-open", "");
+      }
+    }
+  }
+
+  if (chrome && chrome.storage && chrome.storage.sync) {
+    try {
+      chrome.storage.sync.get({ uiLang: "auto" }, (cfg) => {
+        void (chrome.runtime && chrome.runtime.lastError);
+        applyUiLang(cfg && cfg.uiLang);
+        // Set once the saved language is in effect; the end-to-end tests wait for it.
+        window.__biliIndexTranslateLang = uiLang;
+      });
+      chrome.storage.onChanged.addListener((changes, area) => {
+        if (area !== "sync" || !changes.uiLang) return;
+        applyUiLang(changes.uiLang.newValue);
+        window.__biliIndexTranslateLang = uiLang;
+      });
+    } catch (_) {}
   }
 
   document.addEventListener("mouseup", (e) => {
@@ -2394,7 +2435,7 @@
         return;
       }
       if (msg.type === "BILI_CONTEXT_IMAGE_ERROR") {
-        showResult({ ok: false, status: 0, body: msg.body || "Failed to load image." }, resolveContextImageAnchor());
+        showResult({ ok: false, status: 0, body: msg.body || tr("error.imageLoad") }, resolveContextImageAnchor());
         return;
       }
       if (msg.type !== "BILI_CONTEXT_TRANSLATE" && msg.type !== "BILI_CONTEXT_STUDY") return;

@@ -83,7 +83,7 @@ test.describe("划词翻译", () => {
     const error = panel.locator(".bit-error");
     await expect(error).toContainText("HTTP 412");
     await expect(error).toContainText("precondition failed");
-    await expect(error).toContainText("nothing is switched automatically");
+    await expect(error).toContainText("扩展不会自动切换线路");
     await expect(panel.locator(".bit-foot")).toHaveText("via direct");
 
     await page.waitForTimeout(300);
@@ -101,7 +101,7 @@ test.describe("划词翻译", () => {
     upstream.override("translate", { status: 412, body: "relay says no" });
     await page.keyboard.press("Escape");
     await dragSelect(page, "#p-second");
-    await expect(panel.locator(".bit-error")).toContainText("The relay was also rejected");
+    await expect(panel.locator(".bit-error")).toContainText("中继也被拒绝");
     await expect(panel.locator(".bit-foot")).toHaveText("via relay");
     expect(upstream.requests.map((r) => r.path)).toEqual(["/relay/v1/chat/completions", "/relay/v1/chat/completions"]);
   });

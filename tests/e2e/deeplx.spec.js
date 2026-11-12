@@ -32,13 +32,13 @@ test.describe("DeepLX 接口格式", () => {
     await options.locator("#base").fill(endpoint(upstream));
     await options.locator("#save").click();
     const status = options.locator("#status");
-    await expect(status).toHaveText("Saved.");
+    await expect(status).toHaveText("已保存。");
     const stored = await serviceWorker.evaluate(() => chrome.storage.sync.get(["apiType", "base"]));
     expect(stored).toEqual({ apiType: "deeplx", base: endpoint(upstream) });
     expect(upstream.requests).toHaveLength(0);
 
     await options.locator("#test").click();
-    await expect(status).toHaveText("OK via direct (DeepLX):\n译文：" + TEST_TEXT);
+    await expect(status).toHaveText("测试通过，线路 direct（DeepLX）：\n译文：" + TEST_TEXT);
     await expect(status).toHaveClass("ok");
     expect(upstream.requests).toHaveLength(1);
     const [req] = requestsOf(upstream, "deeplx");
@@ -65,21 +65,21 @@ test.describe("DeepLX 接口格式", () => {
 
     await options.locator("#base").fill(endpoint(upstream));
     await options.locator("#save").click();
-    await expect(status).toContainText("only the DeepLX API format fills in");
+    await expect(status).toContainText("OpenAI 兼容格式不会填充它");
     await expect(status).toHaveClass("err");
     expect(await serviceWorker.evaluate(() => chrome.storage.sync.get(["apiType", "base"]))).toEqual({ base: upstream.base });
 
     await options.locator("#base").fill(upstream.origin + "/translate");
     await options.locator("#save").click();
     await expect(status).toHaveText(
-      "Saved.\nThis URL looks like a DeepLX endpoint. If requests fail, set API format to DeepLX-compatible."
+      "已保存。\n这个地址像是 DeepLX 接口。如果请求失败，请把接口格式改为 DeepLX 兼容。"
     );
 
     await options.locator("#apiType").selectOption("deeplx");
     await options.locator("#base").fill(upstream.base);
     await options.locator("#save").click();
-    await expect(status).toContainText("Saved.");
-    await expect(status).toContainText("looks like an OpenAI-compatible root");
+    await expect(status).toContainText("已保存。");
+    await expect(status).toContainText("像是 OpenAI 兼容接口的根地址");
     expect(upstream.requests).toHaveLength(0);
     await options.close();
   });
@@ -97,7 +97,7 @@ test.describe("DeepLX 接口格式", () => {
 
     await page.keyboard.press("s");
     const study = page.locator("#bili-index-study-panel");
-    await expect(study.locator(".bit-error")).toContainText("Study Card needs an OpenAI-compatible chat model");
+    await expect(study.locator(".bit-error")).toContainText("学习卡片需要 OpenAI 兼容的对话模型");
     expect(upstream.requests).toHaveLength(1);
   });
 

@@ -1,0 +1,14 @@
+{
+  "extDescription": {
+    "message": "Inline translation, Alt+A streaming bilingual page, Alt+S zero-OCR vision snip, instTrans glossary & Language Study Card."
+  },
+  "cmdImmersive": {
+    "message": "Toggle streaming bilingual webpage translation"
+  },
+  "cmdSnip": {
+    "message": "Snip webpage/video region for zero-OCR image translation & Study Card"
+  },
+  "actionTitle": {
+    "message": "Bili Index Translate — Settings"
+  }
+}

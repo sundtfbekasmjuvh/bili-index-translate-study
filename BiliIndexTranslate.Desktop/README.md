@@ -8,7 +8,7 @@ Built fresh in C# / .NET 8 (WPF for the card, UI Automation for reading selectio
 
 > **Status.** The code compiles cleanly on Windows (0 warnings) and the platform-independent core —
 > state machine, placement math, translation client, vision and study-card parsers, cache, settings —
-> is covered by 170 passing unit tests. CI builds and tests every push and pull request on
+> is covered by 253 passing unit tests. CI builds and tests every push and pull request on
 > `windows-latest`. On a Windows 11 desktop the app starts, registers its hotkeys, enforces a single
 > instance, opens Settings and exits cleanly from the tray. Selection reading, the popup card, the
 > error card, cache hits, foreground and minimize dismissal and the unsupported-control path have
@@ -27,6 +27,10 @@ Requirements: Windows 10 1809+ / Windows 11, [.NET 8 Desktop Runtime](https://do
 | Build a release folder | `tools\build.cmd` → `publish\` (runs the tests first) |
 | Self-contained single exe (no runtime install) | `tools\build-selfcontained.cmd` → `publish-sc\` (~139 MB) |
 | Unit tests | `tools\test.cmd` or `dotnet test` |
+
+If the settings file cannot be written, the Settings window says so and stays open, and a
+background save reports it once through a tray notice; [docs/TESTING.md](docs/TESTING.md) describes
+one cause (a checkout under a directory with a Low integrity label).
 
 The app lives in the notification area. Right-click the icon for: automatic translation on/off,
 "Don't translate in *app*", translate clipboard text, Settings, Diagnostics, Welcome, Exit.
@@ -55,8 +59,11 @@ translates the copied text. Automatic mode never touches the clipboard.
 
 * **Reading** – automatic translation, target language (简体中文 / 繁體中文 / English / 日本語 / 한국어),
   text size, light/dark/system theme, editable-field policy (default: skip single-line inputs such
-  as address bars; multi-line editors are translated), show original by default.
-* **Service** – API format (OpenAI-compatible by default, or DeepLX-compatible, see below),
+  as address bars; multi-line editors are translated), show original by default, interface language
+  (English or 简体中文; "Auto" follows the Windows display language). A change applies to open
+  windows and the tray menu as soon as it is saved. Error details from the translation core and
+  the diagnostics log stay in English.
+* **Service** – API format (OpenAI-compatible by default, DeepLX-compatible, or a custom JSON template, see below),
   endpoint (base URL *or* full `/chat/completions` URL; the suffix is never
   duplicated), API key (stored with DPAPI for your Windows account), model
   (`Index-Translate-2B` / `9B` / `35B-A3B`, default 9B, free text for other OpenAI-compatible
@@ -78,6 +85,17 @@ a non-200 `code` in the body is shown as an error. This format only translates s
 glossary and the model choices have no effect, and Study Card and screen snip report that they need
 an OpenAI-compatible endpoint without sending a request. With the relay enabled, the relay URL must
 be the complete relayed translate URL.
+
+**Custom format.** Any service that answers with JSON can be described by a template instead of by
+code: the endpoint (it may carry placeholders), the method (`POST` or `GET`), request headers (one
+`Name: value` per line), a request body, and a result path that says where the translation is in
+the reply (`data`, `translations[0].text`); an optional error path names where the service puts its
+error message. Placeholders: `{text}`, `{texts}` (the text as a JSON array, body only), `{apiKey}`,
+`{target}` (`zh-Hans`, `en`), `{targetLang}` / `{targetLangLower}` (`ZH` / `zh`). Values are
+URL-encoded in the endpoint and in form bodies, JSON-escaped in JSON bodies and stripped of line
+breaks in headers. Presets for the DeepL API (Free / Pro) and LibreTranslate fill in the form. A
+template that cannot work is rejected when saving. Like DeepLX, a custom API only translates
+selected text.
 
 Settings file: `%LocalAppData%\BiliIndexTranslate\settings.json`. Malformed files are backed up as
 `settings.json.bad` and replaced with defaults; older files with a plain-text key are migrated.

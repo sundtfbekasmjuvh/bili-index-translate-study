@@ -3,6 +3,7 @@
 // DeepLX 接口格式: 目标语言代码, 请求构造与响应解析, 以及划词, 双语对照, 学习卡和识图在该格式下的行为.
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const { storageArea } = require("../support/fake-storage");
 
 const ENDPOINT = "https://deeplx.example.test/translate?token={apiKey}";
 const REQUEST_URL = "https://deeplx.example.test/translate?token=tok%2F1";
@@ -13,12 +14,7 @@ const local = { glossary: "" };
 const calls = [];
 let respond;
 
-globalThis.chrome = {
-  storage: {
-    sync: { get: async (defaults) => ({ ...defaults, ...settings }) },
-    local: { get: async (defaults) => ({ ...defaults, ...local }) }
-  }
-};
+globalThis.chrome = { storage: { sync: storageArea(settings), local: storageArea(local) } };
 // 与真实 fetch 一致: 信号已中止时直接拒绝, 不算发出请求.
 globalThis.fetch = async (url, init) => {
   if (init.signal && init.signal.aborted) throw new DOMException("The operation was aborted.", "AbortError");
@@ -37,8 +33,9 @@ const tr = (text) => text.split("\n").map((line) => "译" + line).join("\n");
 function reset(overrides = {}) {
   calls.length = 0;
   for (const k of Object.keys(settings)) delete settings[k];
-  Object.assign(settings, { apiType: "deeplx", base: ENDPOINT, proxy: "", key: "tok/1", target: "中文" }, overrides);
+  Object.assign(settings, { apiType: "deeplx", base: ENDPOINT, proxy: "", target: "中文" }, overrides);
   local.glossary = "";
+  local.key = "tok/1";
   respond = (body) => deeplxOk(tr(body.text));
 }
 

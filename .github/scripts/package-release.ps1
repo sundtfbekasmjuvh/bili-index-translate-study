@@ -61,7 +61,10 @@ $tracked = @(git -C $root ls-tree -r --name-only HEAD -- "bili-index-translate")
 if ($LASTEXITCODE -ne 0 -or $tracked.Count -eq 0) { throw "git ls-tree returned no extension files" }
 $referenced = @($manifest.background.service_worker, $manifest.options_ui.page) +
   @($manifest.content_scripts | ForEach-Object { $_.js + $_.css }) +
-  @($manifest.declarative_net_request.rule_resources | ForEach-Object { $_.path })
+  @($manifest.declarative_net_request.rule_resources | ForEach-Object { $_.path }) +
+  @($manifest.icons.PSObject.Properties | ForEach-Object { $_.Value }) +
+  @($manifest.action.default_icon.PSObject.Properties | ForEach-Object { $_.Value }) +
+  @("_locales/$($manifest.default_locale)/messages.json")
 foreach ($file in $referenced) {
   if ($tracked -notcontains "bili-index-translate/$file") { throw "manifest.json references '$file', which is not committed" }
 }
@@ -89,8 +92,9 @@ foreach ($variant in $variants) {
   New-ExeZip (Join-Path $OutDir $variant.Zip) $exe
 }
 
-$actualExt = @(Get-ZipEntries $extZip | Sort-Object)
-$expectedExt = @(@("bili-index-translate/") + $tracked | Sort-Object)
+# git archive also writes an entry for every folder; only the files are compared.
+$actualExt = @(Get-ZipEntries $extZip | Where-Object { -not $_.EndsWith("/") } | Sort-Object)
+$expectedExt = @($tracked | Sort-Object)
 if (Compare-Object $actualExt $expectedExt) { throw "Extension ZIP entries differ from the committed files" }
 foreach ($variant in $variants) {
   $entries = @(Get-ZipEntries (Join-Path $OutDir $variant.Zip))

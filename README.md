@@ -1,3 +1,5 @@
+<img src="bili-index-translate/icons/icon128.png" width="72" height="72" alt="Bili Index Translate 图标">
+
 # Bili Index Translate · 极简流式划词 + Zero-OCR 多模态识图框选 + Alt+A 双语对照 + instTrans 术语表 + 伴随语言学习卡片
 
 基于 Bilibili OpenAI 兼容多模态与文本翻译接口（`Index-Translate-35B-A3B` / `9B` / `2B`）构建的**双平台极简翻译与按需语言学习私教**：
@@ -13,12 +15,12 @@
 | 目录 | 说明 | 状态 |
 |---|---|---|
 | [`bili-index-translate/`](bili-index-translate/) | **Chrome / Edge / Brave / Arc 浏览器扩展（Manifest V3）**：MV3 原生直连 + `Alt+S` 零 OCR 识图框选/右键图片直译 + `Alt+A` 视口流式双语对照 + `instTrans` 动态术语表 + 划词与伴随语言学习卡片 | 可直接加载未打包扩展或下载 Release ZIP |
-| [`BiliIndexTranslate.Desktop/`](BiliIndexTranslate.Desktop/) | **Windows 桌面全局划词与屏幕识图端（C# / .NET 8, WPF + UI Automation）**：跨应用非抢焦点浮窗翻译 + `Alt+Shift+S` 跨屏冻结框选识图直译/剪贴板截图直译 + `instTrans` 术语表 + 伴随学习卡片 | Windows 上 `0 warnings` 编译通过，`170/170` xUnit 核心单测通过（见 [`BiliIndexTranslate.Desktop/README.md`](BiliIndexTranslate.Desktop/README.md)） |
+| [`BiliIndexTranslate.Desktop/`](BiliIndexTranslate.Desktop/) | **Windows 桌面全局划词与屏幕识图端（C# / .NET 8, WPF + UI Automation）**：跨应用非抢焦点浮窗翻译 + `Alt+Shift+S` 跨屏冻结框选识图直译/剪贴板截图直译 + `instTrans` 术语表 + 伴随学习卡片 | Windows 上 `0 warnings` 编译通过，`253/253` xUnit 核心单测通过（见 [`BiliIndexTranslate.Desktop/README.md`](BiliIndexTranslate.Desktop/README.md)） |
 | [`bili-study-sandbox/`](bili-study-sandbox/) | **零依赖本地浏览器预览沙盒（Node.js 标准库）**：无需重载扩展即可在本地 `http://localhost:3001` 实时体验划词、学习卡片、`Alt+S` 画布框选识图、术语表与 `Alt+A` 双语对照 | 运行 `node bili-study-sandbox/server.js` 即可启动，默认只监听 `127.0.0.1` |
 
 ---
 
-## 核心特性（v1.4.1 多模态全能旗舰版）
+## 核心特性（v1.5.0 多模态全能旗舰版）
 
 ### 1. Zero-OCR 多模态识图框选直译 + 学习卡片全闭环（Chrome `Alt+S` / Windows `Alt+Shift+S`）
 - **突破不可选中像素边界**：无需外接任何第三方 OCR 引擎，直接调用 `Index-Translate-35B-A3B` 旗舰 MoE 视觉多模态能力，一气呵成读懂**生肉漫画气泡、论文扫描图、架构示意图、游戏外语 UI 以及 YouTube/B 站暂停视频硬字幕帧**。35B-A3B 首字比 2B/9B 慢，但译文和回填原文最完整（2B 不回填原文，2B 和 9B 在日文与多行样例中会重复句子），实测数据见下方「识图速度实测」。
@@ -54,14 +56,14 @@
 
 ## 快速安装指南
 
-1. **Chrome / Edge 浏览器扩展**：下载 Release 中的 `bili-index-translate-chrome-v1.4.1.zip` 解压 → 打开 `chrome://extensions` 开启右上角**开发者模式** → **加载已解压的扩展程序** 选择 `bili-index-translate/` 目录。
-2. **Windows 桌面端（.NET 8 WPF）**：下载 Release 中的 `BiliIndexTranslate-Desktop-win-x64-selfcontained-v1.4.1.zip`（自带运行时单文件免安装版）或 `BiliIndexTranslate-Desktop-win-x64-v1.4.1.zip`（轻量版），解压运行 `BiliIndexTranslate.exe`。
+1. **Chrome / Edge 浏览器扩展**：下载 Release 中的 `bili-index-translate-chrome-v1.5.0.zip` 解压 → 打开 `chrome://extensions` 开启右上角**开发者模式** → **加载已解压的扩展程序** 选择 `bili-index-translate/` 目录。
+2. **Windows 桌面端（.NET 8 WPF）**：下载 Release 中的 `BiliIndexTranslate-Desktop-win-x64-selfcontained-v1.5.0.zip`（自带运行时单文件免安装版）或 `BiliIndexTranslate-Desktop-win-x64-v1.5.0.zip`（轻量版），解压运行 `BiliIndexTranslate.exe`。
 3. **本地预览沙盒**：运行 `node bili-study-sandbox/server.js` 并访问 `http://localhost:3001`。
    沙盒默认只监听本机 `127.0.0.1`；确需局域网访问时设置环境变量 `HOST=0.0.0.0`，端口用 `PORT` 修改。
 
 ---
 
-## 接口格式（OpenAI 兼容 / DeepLX）
+## 接口格式（OpenAI 兼容 / DeepLX / 自定义模板）
 
 扩展选项页和桌面端 Settings → Service 里的「API format」决定请求格式，默认是 OpenAI 兼容，已有设置不受影响。
 
@@ -69,13 +71,45 @@
 |---|---|---|---|
 | OpenAI-compatible | 接口根地址，如 `https://index-translate.bilibili.com/v1`，自动追加 `/chat/completions` | `Authorization: Bearer <API Key>` | 全部 |
 | DeepLX-compatible | 完整的翻译地址，原样使用，如 `https://host/translate?token={apiKey}` 或 `http://localhost:1188/translate` | 地址里的 `{apiKey}` 会替换成 API Key；没有占位符时用 `Authorization: Bearer <API Key>`，Key 留空则不带鉴权头 | 划词翻译，以及扩展的 `Alt+A` 双语对照 |
+| Custom JSON API | 完整地址，可以带占位符，如 `https://host/translate?key={apiKey}` | 由模板决定：写在地址、请求头或请求体里 | 划词翻译，以及扩展的 `Alt+A` 双语对照 |
 
 - DeepLX 格式的请求体是 `{"text": 原文, "source_lang": "auto", "target_lang": 语言代码}`，译文取响应里的 `data`；HTTP 错误和响应里非 200 的 `code` 都会显示出来。
 - 这种接口没有提示词，所以术语表不生效；学习卡片和识图直译会直接提示需要 OpenAI 兼容接口，不发请求；模型选项对它无效，扩展选项页选中 DeepLX 后这些控件会置灰，译文面板也不再提示词卡。
 - 扩展的 Target language 会映射成 DeepL 语言代码（`中文` → `ZH`，`English` → `EN`，`日本語` → `JA`，以及 DeepL 支持的三十多种语言的中英文名称）；地区变体直接填代码，如 `PT-BR`。桌面端按所选目标语言映射：简体中文 → `ZH`，繁體中文 → `ZH-HANT`，English → `EN`，日本語 → `JA`，한국어 → `KO`。
 - `Alt+A` 把同一批的单行段落合并成一次请求（每段一行，译文按行拆回，一批最多 4 段），请求数明显少于段落数；接口的回复行数对不上时改为逐段请求，并在设置变更前不再对该接口合并。已译段落走内存缓存。扩展填了 Relay prefix、或桌面端勾选了中继时，中继地址必须是经过中继后的完整翻译地址。
-- 接口格式和地址明显不匹配时会拦下来：OpenAI 格式下地址里带 `{apiKey}` 会拒绝保存（扩展和桌面端都是，否则 key 会被悄悄丢掉）；地址形似另一种格式时，扩展在保存后给出提示。
-- 桌面端把这项设置存在 `settings.json` 的 `apiFormat` 字段（`OpenAi` / `Deeplx`）；API key 仍用 DPAPI 加密保存，替换进地址的 key 不会写入日志，也不进入缓存键。
+- 接口格式和地址明显不匹配时会拦下来：OpenAI 格式不填充占位符，地址里带 `{apiKey}` 会拒绝保存（扩展和桌面端都是，否则 key 会被悄悄丢掉）；地址形似另一种格式时，扩展在保存后给出提示。
+- 桌面端把这项设置存在 `settings.json` 的 `apiFormat` 字段（`OpenAi` / `Deeplx` / `Custom`）；API key 仍用 DPAPI 加密保存，替换进地址的 key 不会写入日志，也不进入缓存键。
+
+### 自定义接口模板（Custom JSON API）
+
+接口不是上面两种格式时，不用改源码：在「API format」里选 Custom JSON API，用模板描述请求，再用一个路径指出译文在 JSON 响应里的位置。扩展和桌面端的字段相同。
+
+| 字段 | 说明 |
+|---|---|
+| Base URL / Endpoint | 完整地址，可以带占位符 |
+| Method | `POST` 或 `GET`（`GET` 不发请求体，原文放在地址里） |
+| Request headers | 每行一条 `Name: value`，如 `Authorization: DeepL-Auth-Key {apiKey}` |
+| Request body | 请求体模板，默认按 `application/json` 发送；请求头里写了别的 `Content-Type` 就按它发 |
+| Result path | 译文在响应里的位置：`data`、`translations[0].text`、`translations[*].text` |
+| Error path | 可选，接口放错误信息的位置，如 `error.message` |
+
+占位符：`{text}` 原文；`{texts}` 一次请求里的全部原文（JSON 数组，只用在请求体里）；`{apiKey}`；`{target}` 目标语言（扩展里是你填写的原样，桌面端是 `zh-Hans` 这类代码）；`{targetLang}` / `{targetLangLower}` 是它对应的代码，如 `ZH` / `zh`。
+
+- 占位符按所在位置转义：地址和表单请求体里做 URL 编码，JSON 请求体里做 JSON 转义（`"{text}"` 写在引号里，`{texts}` 不加引号），请求头里去掉换行。
+- 请求体里用了 `{texts}` 时，扩展的 `Alt+A` 把一批段落放进一次请求，结果路径要返回同样数量的译文（用 `[*]`，或指向一个字符串数组）；数量对不上时改为逐段请求。只用 `{text}` 时每段请求一次。
+- 内置预设：DeepL 官方 API（Free / Pro）和 LibreTranslate，请求与响应格式取自各自的官方文档。预设只填表单，保存前可以改；这两个预设只在本地模拟服务上测过，没有连过真实服务。
+- 模板不能工作时（没有结果路径、请求头格式不对、没有发送原文、填完占位符后请求体不是合法 JSON）在保存时就报错，不会等到第一次翻译。
+- 和 DeepLX 一样，这种接口只做纯文本翻译：术语表不生效，学习卡片和识图直译会提示需要 OpenAI 兼容接口。
+
+---
+
+## 界面语言
+
+- 扩展界面有英文和简体中文两种：选项页、翻译面板、学习卡片、双语对照条、右键菜单，以及扩展自己产生的错误提示。在选项页的 `Interface language`（界面语言）里选择，默认「自动」：浏览器界面是中文（任何地区）时显示简体中文，其余显示英文。
+- 在选项页改选语言会立即预览，保存后才对其他界面生效；已打开的网页不需要刷新。
+- 扩展管理页里的描述、快捷键说明和工具栏按钮提示由浏览器按自身语言从 `_locales/` 读取，不受该设置影响。
+- 模型返回的译文和词卡内容、服务端返回的错误原文不翻译。文案集中在 `bili-index-translate/i18n.js`。
+- 桌面端同样有英文和简体中文：设置 → Reading（阅读）→ `Interface language`（界面语言），默认跟随 Windows 显示语言。保存后已打开的窗口和托盘菜单立即切换，不需要重启。翻译核心给出的错误详情和诊断日志保持英文。文案集中在 `BiliIndexTranslate.Core/Localization/UiText.cs`。
 
 ---
 
@@ -84,6 +118,8 @@
 - 扩展默认直连 `index-translate.bilibili.com`。官方接口对带扩展 `Origin` 头的请求返回 HTTP 412，扩展用 `dnr_rules.json` 在网络层去掉该头。
 - 中继（Relay prefix）只在选项页手动填写后使用。直连返回 412 时只显示错误和提示，不会自动改走任何第三方中继。中继会收到选中的文本、图片和 API key，只填写你信任的地址。
 - 桌面端同理：中继需要在设置里手动开启，应用不会自行切换线路。
+- 扩展的 API key 只存在本机的 `chrome.storage.local`，不随浏览器账号同步；其余设置仍在 `chrome.storage.sync`。1.4.1 及更早版本把 key 存在同步存储里，升级后第一次读取设置时会把它移到本机并删除同步副本。其他设备上的旧版本因此读不到同步的 key，需要在那台设备上重新填写一次。
+- 右键图片翻译最多下载 8 MB：响应头声明的大小超限时不读取响应体，没有声明时边下载边计数，超限即中断；下载超过 35 秒按超时处理。
 
 ---
 
@@ -125,7 +161,8 @@
 | 桌面端构建 | `dotnet build BiliIndexTranslate.Desktop/BiliIndexTranslate.sln -c Release` |
 | 桌面端单测 | `dotnet test BiliIndexTranslate.Desktop/tests/BiliIndexTranslate.Core.Tests -c Release` |
 
-- `tests/extension/` 覆盖术语表解析、提示词构造、识图双轨解析、段落锚点、学习卡 JSON 修复与流式解析，四条流式请求路径的分块、取消和 JSON 回退，并用模拟的 `fetch` 验证 412 时只发一次请求、不自动改走中继；`deeplx.test.js` 覆盖 DeepLX 格式的请求构造、响应解析和各条功能路径。
-- `tests/e2e/` 在无头 Chromium 里加载未打包的扩展，后端换成 `tests/support/mock-upstream.js`（本地 OpenAI 兼容模拟服务，按提示词返回确定的译文、词卡和识图结果）。用例覆盖划词流式与取消、术语表注入、412 与显式中继、学习卡片快捷键、`Alt+A` 双语对照（视口优先、跳过中文和代码、滚动续翻、仅译与模型切换、无损还原）、`Alt+S` 框选裁剪、右键图片、选项页和 DeepLX 接口格式（模拟服务的 `/translate` 端点）。每个用例结束时检查没有请求离开 `127.0.0.1`。右键菜单和扩展快捷键无法在 Playwright 里直接点击，用例在 service worker 里派发与 Chrome 相同的事件。
+- `tests/extension/` 覆盖术语表解析、提示词构造、识图双轨解析、段落锚点、学习卡 JSON 修复与流式解析，四条流式请求路径的分块、取消和 JSON 回退，并用模拟的 `fetch` 验证 412 时只发一次请求、不自动改走中继；`deeplx.test.js` 和 `custom.test.js` 覆盖 DeepLX 格式与自定义模板的请求构造、占位符转义、响应解析和各条功能路径；`settings.test.js` 覆盖 API key 从同步存储到本机存储的迁移；`image-fetch.test.js` 覆盖右键图片下载的 8 MB 上限和超时；`i18n.test.js` 检查两种界面语言的文案键、占位符和选项页标记一致，以及后台的菜单标题和错误文案跟随设置。单测在 Node 里没有浏览器语言，界面文案按英文断言。
+- `tests/e2e/` 在无头 Chromium 里加载未打包的扩展，后端换成 `tests/support/mock-upstream.js`（本地 OpenAI 兼容模拟服务，按提示词返回确定的译文、词卡和识图结果）。用例覆盖划词流式与取消、术语表注入、412 与显式中继、学习卡片快捷键、`Alt+A` 双语对照（视口优先、跳过中文和代码、滚动续翻、仅译与模型切换、无损还原）、`Alt+S` 框选裁剪、右键图片（含超过 8 MB 时中断下载）、选项页（含旧版本 API key 的迁移）、DeepLX 接口格式（模拟服务的 `/translate` 端点）和自定义模板（模拟服务里一个形状自拟的 `/custom-api` 端点）。每个用例结束时检查没有请求离开 `127.0.0.1`。`sandbox.spec.js` 在不装扩展的浏览器里打开预览沙盒，检查它引用的扩展文件都能加载、内容脚本运行无报错（不触发翻译，沙盒的翻译请求会发往真实接口）。夹具把界面语言固定为简体中文（浏览器自身语言随机器而不同），`i18n.spec.js` 另在英文和「自动」下走一遍面板、学习卡片、双语对照条和选项页，并检查设置改变后已打开的页面随之切换。右键菜单和扩展快捷键无法在 Playwright 里直接点击，用例在 service worker 里派发与 Chrome 相同的事件。
+- 图标：扩展的 `icons/icon16|32|48|128.png` 和桌面端的 `app.ico` 由同一个脚本 `BiliIndexTranslate.Desktop/tools/make-icon.py` 画出（只用 Python 标准库），改图标后重新运行它；`tests/extension/manifest.test.js` 检查 manifest 引用的文件和图标尺寸。
 - GitHub Actions（`.github/workflows/ci.yml`）在每次推送和 PR 上运行以上全部检查；端到端测试失败时上传 Playwright 报告和 trace，桌面端在 `windows-latest` 上构建、测试，并试打一次发布包。Dependabot（`.github/dependabot.yml`）每周检查 Actions、npm 和 NuGet 依赖。
 - 发布：先把 `bili-index-translate/manifest.json` 的 `version` 和 `BiliIndexTranslate.Desktop/Directory.Build.props` 的 `<Version>` 改成同一个版本号并合入 `main`，再推送 `vX.Y.Z` tag。`.github/workflows/release.yml` 会跑全部单测，用 `.github/scripts/package-release.ps1` 打出 3 个 ZIP 和 `SHA256SUMS.txt`，建成草稿 Release，核对说明后手动发布。tag 与两处版本号不一致或工作区有未提交改动时脚本直接失败。本地预演：`pwsh .github/scripts/package-release.ps1 -OutDir <空目录>`。

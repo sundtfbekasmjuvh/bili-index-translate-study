@@ -7,7 +7,7 @@ Windows 11 Pro for Workstations (build 26200), .NET SDK 8.0.427, from the v1.4.0
 | Check | Result |
 |---|---|
 | `dotnet build BiliIndexTranslate.sln -c Release` | 0 errors, 0 warnings |
-| `dotnet test tests/BiliIndexTranslate.Core.Tests -c Release` | **170 passed, 0 failed** (session state machine, placement/anchoring, endpoint resolution, DeepLX format, response parsing, SSE transport, vision dual output, study cards, cache, coordinator races, settings load/migrate) |
+| `dotnet test tests/BiliIndexTranslate.Core.Tests -c Release` | **253 passed, 0 failed** (session state machine, placement/anchoring, endpoint resolution, DeepLX format, custom API templates, response parsing, SSE transport, vision dual output, study cards, cache, coordinator races, settings load/migrate, interface text in both languages) |
 | `dotnet publish … -r win-x64 --self-contained false` | `BiliIndexTranslate.exe` — PE32+ x64 GUI, version 1.4.0 embedded (864 KB folder) |
 | `dotnet publish … --self-contained true -p:PublishSingleFile=true` | single 139 MB exe produced |
 | Icon | `tools/make-icon.py` output inspected at 256 px |
@@ -50,16 +50,79 @@ local DeepLX-style mock on `127.0.0.1` (`tests/support/mock-upstream.js`). The u
 | 2 | Select DeepLX, endpoint `http://127.0.0.1:<port>/translate?token={apiKey}`, a test key, **Save and test** | ✅ `OK · 135 ms via direct · “译文：Hello, world.”`; the mock received one `POST /translate` with the key in the `token` query parameter, no `Authorization` header and the body `{"text":"Hello, world.","source_lang":"auto","target_lang":"ZH"}` |
 | 3 | Saved file | ✅ `"apiFormat": "Deeplx"`, the endpoint with its `{apiKey}` placeholder, the key as a DPAPI blob (`apiKeyScheme: dpapi-user`); the test key does not appear in plain text |
 | 4 | Restart, reopen Settings, **Save and test** | ✅ DeepLX still selected, endpoint kept, `OK · 131 ms via direct`; the mock received the same token again, so the key was read back from the file |
-| 5 | Switch to OpenAI-compatible while the endpoint still contains `{apiKey}`, **Save and test** | ✅ rejected with `The endpoint contains {apiKey}, which only the DeepLX API format fills in. …`; the settings file is unchanged |
+| 5 | Switch to OpenAI-compatible while the endpoint still contains `{apiKey}`, **Save and test** | ✅ rejected with `The endpoint contains {apiKey}, which the OpenAI-compatible format does not fill in. …`; the settings file is unchanged (message as of the custom-format build) |
 
 Not exercised live with the DeepLX format: the selection popup, Study Card and screen snip (unit
 tests only).
 
 The same build started from `src\BiliIndexTranslate.App\bin\Release\net8.0-windows` translated
 correctly, but on this machine neither `settings.json` nor `diagnostics.log` was written; from the
-publish output both were. The cause was not investigated further; it matches the note below about
-security software interfering with programs in `bin\`. Use the publish output (`tools\build.cmd`)
-when settings do not persist with `tools\run.cmd`.
+publish output both were. See the next section for the cause.
+
+### Settings that cannot be written (2026-11-12)
+
+Cause of the note above, found on this machine: the directory that holds the checkout carries a
+Low mandatory integrity label that every file below it inherits
+(`icacls <dir>` prints `Mandatory Label\Low Mandatory Level:(OI)(CI)(NW)`). Windows starts an
+executable with such a label at low integrity, and a low-integrity process may not write to
+`%LocalAppData%`. Measured: the app started from `bin\Release` ran at integrity level `0x1000`
+(Low) while the shell that started it ran at `0x2000` (Medium); a copy of `whoami.exe` placed in
+`bin\` reported `Low Mandatory Level`, the original `Medium Mandatory Level`. The publish output
+used in the walkthroughs was outside that directory. Security software was not involved.
+
+The app used to log such a failure and nothing else. Now:
+
+| # | Step | Result |
+|---|---|---|
+| 1 | Start from `bin\Release` (low integrity), open Settings, **Save** | ✅ the window stays open and shows `Settings were not saved (UnauthorizedAccessException: Access to the path '…\settings.json.tmp' is denied.). They stay in effect until the app exits.`; `settings.json` is unchanged (same SHA-256) and no `.tmp` file is left behind |
+
+Not exercised live: the tray notice shown when a background save fails (text size or the
+auto-translate toggle), and **Save and test** in this state (it reports the save failure together
+with the result of the connection test).
+
+If settings do not persist with `tools\run.cmd`, check the label with `icacls` and either build
+to a directory without it (`dotnet publish … -o <dir>`) or move the checkout.
+
+### Custom API template through the Settings window (2026-11-12)
+
+Same setup as the DeepLX walkthrough above (publish output, UI Automation, the user's
+`settings.json` backed up and restored with the same SHA-256), against the mock's `/custom-api`
+endpoint, whose made-up shape (`{ q: [...], to }` with an `X-Api-Key` header →
+`{ result: { items: [{ out }] } }`) can only be described by a template.
+
+| # | Step | Result |
+|---|---|---|
+| 1 | Open Settings | ✅ `API format` lists three entries; the template fields are not shown |
+| 2 | Select `Custom JSON API (template)` | ✅ the template fields appear |
+| 3 | Preset `DeepL API Free` | ✅ endpoint `https://api-free.deepl.com/v2/translate`, headers `Authorization: DeepL-Auth-Key {apiKey}`, body `{"text": {texts}, "target_lang": "{targetLang}"}`, result path `translations[*].text`; status `Preset loaded: DeepL. …`; the settings file is unchanged |
+| 4 | Custom with an empty result path, then with the body `{"q": {text}}`, **Save and test** | ✅ rejected with `The result path is empty. …` and `The request body is not valid JSON once the placeholders are filled in. …`; the settings file is unchanged both times |
+| 5 | Fill in the mock's template and a test key, **Save and test** | ✅ `OK · … via direct · “译文：Hello, world.”`; the mock received `POST /custom-api` with `X-Api-Key` set to the key, no `Authorization` header and the body `{"q":["Hello, world."],"to":"zh"}` |
+| 6 | Saved file | ✅ `"apiFormat": "Custom"` and the six `custom…` fields; the key as a DPAPI blob, not in plain text |
+| 7 | Restart, reopen Settings, **Save and test** | ✅ Custom still selected, the template fields shown with the saved values, `OK · 134 ms via direct` |
+
+The very first request of step 5 took 10.6 s; the six requests after it, including the first
+request of the restarted process, took 28–134 ms. The cause was not found: proxy auto-detection is
+off on this machine and `127.*` is in the proxy bypass list. It did not happen again.
+
+### Interface language through the Settings window (2026-11-12)
+
+Same setup as the walkthroughs above (publish output outside the checkout, UI Automation, the
+user's `settings.json` backed up and restored with the same SHA-256). Windows display language
+`zh-CN`; the settings file had no `uiLanguage`. Started with `--welcome` so that a second window
+is open while the setting changes.
+
+| # | Step | Result |
+|---|---|---|
+| 1 | Start with a settings file that has no `uiLanguage` | ✅ Welcome window in Chinese (`安静的阅读伴侣`, buttons `设置…` / `开始阅读`): "Auto" follows the Windows language |
+| 2 | Open Settings | ✅ title `Bili Index Translate — 设置`, buttons `取消` / `保存` / `保存并测试`; `Interface language` lists `自动（跟随 Windows 语言）` (selected), `English`, `简体中文` |
+| 3 | Select English, **Save** | ✅ the file has `"uiLanguage": "en"`; the Welcome window, which stayed open, now reads `A quiet reading companion` / `Settings…` / `Start reading` |
+| 4 | Reopen Settings | ✅ title `Bili Index Translate — Settings`, `Cancel` / `Save` / `Save and test`, English selected, the shortcut help and the `Show` button in English; selecting another language changes nothing until it is saved |
+| 5 | Select 简体中文, **Save**, reopen Settings | ✅ `"uiLanguage": "zh-CN"`; Welcome and Settings in Chinese, including the help texts set from code (`在 UI Automation 读不到选中内容时使用…`) and the `显示` button |
+| 6 | Select Auto, **Save** | ✅ `"uiLanguage": "auto"`; Welcome stays Chinese |
+
+Not exercised live in either language: the tray menu, the translation popup, the Study Card, the
+screen-snip overlay and the Diagnostics window (their text goes through the same table and binding;
+the unit tests check that every key they use exists).
 
 ### Resource behaviour over 200 selections
 
@@ -81,7 +144,10 @@ parameters, not results. The Diagnostics window reports p50/p95 per category whi
 runs — the categories are `Detect`, `Probe`, `Cache`, `Render`, `Http` and `Refresh`.
 
 If `dotnet test` aborts on Windows with `Win32Exception (5): Access is denied` while the test host
-looks up its parent process, security software is blocking the test host in `bin\`. Point the
+looks up its parent process, check the checkout for the Low integrity label described under
+"Settings that cannot be written": `testhost.exe` in `bin\` is then started at low integrity and
+may not open the medium-integrity `dotnet` process that started it. On this machine the abort
+reproduces with the default output directory and all tests pass with the output elsewhere. Point the
 output somewhere else, for example `dotnet test … -o %TEMP%\bit-tests`.
 
 ## Scenarios

@@ -12,6 +12,7 @@ using BiliIndexTranslate.App.Native;
 using BiliIndexTranslate.Core.Geometry;
 using BiliIndexTranslate.Core.Study;
 using BiliIndexTranslate.Core.Translation;
+using BiliIndexTranslate.App.Localization;
 
 namespace BiliIndexTranslate.App.Popup;
 
@@ -115,12 +116,12 @@ public partial class StudyCardWindow : Window, IPopupSurface
         LangBadge.Visibility = Visibility.Collapsed;
         QuizButton.Visibility = Visibility.Collapsed;
         CopyCardButton.Visibility = Visibility.Collapsed;
-        QuizButton.Content = "自测";
+        Loc.Bind(QuizButton, ContentControl.ContentProperty, "Study_Quiz");
 
         LoadingPanel.Visibility = Visibility.Visible;
         ErrorPanel.Visibility = Visibility.Collapsed;
         DeckPanel.Visibility = Visibility.Collapsed;
-        Caption.Text = PreferFlagshipModel ? "35B 旗舰拆解中…" : "9B 流式拆解中…";
+        Caption.Text = Loc.T(PreferFlagshipModel ? "Study_LoadingFlagship" : "Study_LoadingBalanced");
         _captionBeforeFlash = null;
         StartLoadingPulse();
     }
@@ -174,10 +175,10 @@ public partial class StudyCardWindow : Window, IPopupSurface
 
         ErrorTitle.Text = error.Kind switch
         {
-            TranslationErrorKind.Timeout => "响应超时",
-            TranslationErrorKind.Network => "连接异常",
-            TranslationErrorKind.Configuration => "请检查服务配置",
-            _ => "学习卡片生成失败",
+            TranslationErrorKind.Timeout => Loc.T("Error_Timeout"),
+            TranslationErrorKind.Network => Loc.T("Error_Network"),
+            TranslationErrorKind.Configuration => Loc.T("Error_Configuration"),
+            _ => Loc.T("Study_Failed"),
         };
         ErrorMessage.Text = error.Message;
         ErrorHint.Text = error.Hint ?? string.Empty;
@@ -212,7 +213,7 @@ public partial class StudyCardWindow : Window, IPopupSurface
         var secondary = (Brush)FindResource("Popup.TextSecondary");
         var border = (Brush)FindResource("Popup.Border");
 
-        CompactButton.Content = _compactMode ? "精简" : "详尽";
+        Loc.Bind(CompactButton, ContentControl.ContentProperty, _compactMode ? "Study_Compact" : "Study_Detailed");
         CompactButton.Foreground = _compactMode ? accent : secondary;
         CompactButton.BorderBrush = _compactMode ? accent : border;
 
@@ -271,8 +272,8 @@ public partial class StudyCardWindow : Window, IPopupSurface
         var parts = new List<string>(4);
         if (_deck.Cards.Count > 1) parts.Add($"{_cardIndex + 1}/{_deck.Cards.Count}");
         if (!string.IsNullOrWhiteSpace(_model)) parts.Add(_model.Replace("Index-Translate-", string.Empty));
-        if (_deck.IsStreaming) parts.Add("加载其余词卡…");
-        else if (_isCached) parts.Add("⚡瞬时");
+        if (_deck.IsStreaming) parts.Add(Loc.T("Study_LoadingMore"));
+        else if (_isCached) parts.Add(Loc.T("Caption_Instant"));
         else if (_route is { } r) parts.Add(r == RequestRoute.Relay ? "relay" : "direct");
         Caption.Text = string.Join(" · ", parts);
         _captionBeforeFlash = null;
@@ -288,7 +289,7 @@ public partial class StudyCardWindow : Window, IPopupSurface
         if (!string.IsNullOrWhiteSpace(_deck.GrammarNote))
         {
             GrammarText.Inlines.Clear();
-            GrammarText.Inlines.Add(new Run("句法  ") { FontWeight = FontWeights.Bold, Foreground = (Brush)FindResource("Popup.Accent") });
+            GrammarText.Inlines.Add(new Run(Loc.T("Study_Grammar") + "  ") { FontWeight = FontWeights.Bold, Foreground = (Brush)FindResource("Popup.Accent") });
             GrammarText.Inlines.Add(new Run(_deck.GrammarNote));
             GrammarBorder.Visibility = Visibility.Visible;
         }
@@ -335,7 +336,7 @@ public partial class StudyCardWindow : Window, IPopupSurface
 
         if (!string.IsNullOrWhiteSpace(card.Surface))
         {
-            SurfaceText.Text = "文中: " + card.Surface;
+            SurfaceText.Text = Loc.T("Study_InText", card.Surface);
             SurfaceBadge.Visibility = Visibility.Visible;
         }
         else
@@ -427,7 +428,7 @@ public partial class StudyCardWindow : Window, IPopupSurface
                     Margin = new Thickness(0, 0, 5, 4),
                     FontSize = Math.Round(11.5 * _textScale),
                     FontWeight = FontWeights.Normal,
-                    ToolTip = "点击朗读该搭配短语",
+                    ToolTip = Loc.T("Study_CollocSpeak"),
                     Content = new TextBlock
                     {
                         Text = col,
@@ -438,7 +439,7 @@ public partial class StudyCardWindow : Window, IPopupSurface
                 btn.Click += (_, _) =>
                 {
                     if (!_speech.TrySpeak(phrase, _deck?.SourceLanguage))
-                        FlashCaption("系统未检测到可用语音引擎");
+                        FlashCaption(Loc.T("Study_NoVoice"));
                 };
                 CollocationPanel.Children.Add(btn);
             }
@@ -542,14 +543,14 @@ public partial class StudyCardWindow : Window, IPopupSurface
         if (!string.IsNullOrWhiteSpace(c.Reading)) sb.Append(" [").Append(c.Reading).Append(']');
         if (meta.Length > 0) sb.Append(" (").Append(meta).Append(')');
         sb.AppendLine();
-        if (!string.IsNullOrWhiteSpace(c.Meaning)) sb.AppendLine("释义：" + c.Meaning);
-        if (!string.IsNullOrWhiteSpace(c.Nuance)) sb.AppendLine("辨析：" + c.Nuance);
-        if (!string.IsNullOrWhiteSpace(c.MemoryAid)) sb.AppendLine("助记：" + c.MemoryAid);
-        if (c.Collocations.Count > 0) sb.AppendLine("搭配：" + string.Join(" / ", c.Collocations));
+        if (!string.IsNullOrWhiteSpace(c.Meaning)) sb.AppendLine(Loc.T("Study_Md_Meaning", c.Meaning));
+        if (!string.IsNullOrWhiteSpace(c.Nuance)) sb.AppendLine(Loc.T("Study_Md_Nuance", c.Nuance));
+        if (!string.IsNullOrWhiteSpace(c.MemoryAid)) sb.AppendLine(Loc.T("Study_Md_Memory", c.MemoryAid));
+        if (c.Collocations.Count > 0) sb.AppendLine(Loc.T("Study_Md_Colloc", string.Join(" / ", c.Collocations)));
         if (c.Example is { Source.Length: > 0 } ex)
-            sb.AppendLine("例句：" + ex.Source + (!string.IsNullOrWhiteSpace(ex.Target) ? " — " + ex.Target : string.Empty));
+            sb.AppendLine(Loc.T("Study_Md_Example", ex.Source + (!string.IsNullOrWhiteSpace(ex.Target) ? " — " + ex.Target : string.Empty)));
         if (!string.IsNullOrWhiteSpace(_deck.GrammarNote))
-            sb.Append("句法：" + _deck.GrammarNote);
+            sb.Append(Loc.T("Study_Md_Grammar", _deck.GrammarNote));
         return sb.ToString().Trim();
     }
 
@@ -626,7 +627,7 @@ public partial class StudyCardWindow : Window, IPopupSurface
         if (_deck is null) return;
         _quizMode = !_quizMode;
         _revealedIndices.Clear();
-        QuizButton.Content = _quizMode ? "退出" : "自测";
+        Loc.Bind(QuizButton, ContentControl.ContentProperty, _quizMode ? "Study_QuizExit" : "Study_Quiz");
         RenderCurrentCard(forceFullRebuild: true);
     }
 
@@ -645,7 +646,7 @@ public partial class StudyCardWindow : Window, IPopupSurface
         {
             Clipboard.SetDataObject(text, false);
             CopyCardButton.Content = "\uE73E";
-            FlashCaption("✓ 已复制词卡笔记");
+            FlashCaption(Loc.T("Study_Copied"));
             var timer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(1200) };
             timer.Tick += (_, _) =>
             {
@@ -656,7 +657,7 @@ public partial class StudyCardWindow : Window, IPopupSurface
         }
         catch
         {
-            FlashCaption("剪贴板正忙");
+            FlashCaption(Loc.T("Popup_ClipboardBusy"));
         }
     }
 
@@ -681,9 +682,9 @@ public partial class StudyCardWindow : Window, IPopupSurface
         if (_deck is null || _deck.Cards.Count == 0) return;
         var card = _deck.Cards[Math.Clamp(_cardIndex, 0, _deck.Cards.Count - 1)];
         if (!_speech.TrySpeak(card.Term, _deck.SourceLanguage, slow))
-            FlashCaption("系统未检测到可用语音引擎");
+            FlashCaption(Loc.T("Study_NoVoice"));
         else if (slow)
-            FlashCaption("0.7x 慢读跟读中…");
+            FlashCaption(Loc.T("Study_SlowReading"));
     }
 
     private void OnSpeakExampleClick(object sender, RoutedEventArgs e) => SpeakExample(slow: false);
@@ -695,9 +696,9 @@ public partial class StudyCardWindow : Window, IPopupSurface
         var card = _deck.Cards[Math.Clamp(_cardIndex, 0, _deck.Cards.Count - 1)];
         if (card.Example is not { } ex) return;
         if (!_speech.TrySpeak(ex.Source, _deck.SourceLanguage, slow))
-            FlashCaption("系统未检测到可用语音引擎");
+            FlashCaption(Loc.T("Study_NoVoice"));
         else if (slow)
-            FlashCaption("0.7x 慢读例句中…");
+            FlashCaption(Loc.T("Study_SlowExample"));
     }
 
     private void FlashCaption(string message)

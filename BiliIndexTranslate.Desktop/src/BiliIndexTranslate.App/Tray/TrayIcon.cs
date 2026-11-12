@@ -1,5 +1,6 @@
 using System.Drawing;
 using System.Windows.Forms;
+using BiliIndexTranslate.App.Localization;
 
 namespace BiliIndexTranslate.App.Tray;
 
@@ -23,22 +24,22 @@ internal sealed class TrayIcon : IDisposable
         _paused = LoadIcon("app-paused.ico");
 
         _menu = new ContextMenuStrip { ShowImageMargin = false, ShowCheckMargin = true };
-        _autoItem = new ToolStripMenuItem("Translate selections automatically") { CheckOnClick = true };
+        _autoItem = new ToolStripMenuItem(Loc.T("Tray_Auto")) { CheckOnClick = true };
         _autoItem.CheckedChanged += (_, _) => AutoTranslateToggled?.Invoke(_autoItem.Checked);
-        _appItem = new ToolStripMenuItem("Don't translate in this app") { CheckOnClick = true, Enabled = false };
+        _appItem = new ToolStripMenuItem(Loc.T("Tray_ExcludeThisApp")) { CheckOnClick = true, Enabled = false };
         _appItem.Click += (_, _) => { if (_appItem.Tag is string app) ExcludeAppToggled?.Invoke(app, _appItem.Checked); };
 
-        var snip = new ToolStripMenuItem("Snip & translate screen region (识图直译)");
+        var snip = new ToolStripMenuItem(Loc.T("Tray_Snip"));
         snip.Click += (_, _) => SnipRegionRequested?.Invoke();
-        var clipboard = new ToolStripMenuItem("Translate clipboard (text or image)");
+        var clipboard = new ToolStripMenuItem(Loc.T("Tray_Clipboard"));
         clipboard.Click += (_, _) => TranslateClipboardRequested?.Invoke();
-        var settings = new ToolStripMenuItem("Settings…");
+        var settings = new ToolStripMenuItem(Loc.T("Tray_Settings"));
         settings.Click += (_, _) => SettingsRequested?.Invoke();
-        var diagnostics = new ToolStripMenuItem("Diagnostics…");
+        var diagnostics = new ToolStripMenuItem(Loc.T("Tray_Diagnostics"));
         diagnostics.Click += (_, _) => DiagnosticsRequested?.Invoke();
-        var welcome = new ToolStripMenuItem("Welcome and demo…");
+        var welcome = new ToolStripMenuItem(Loc.T("Tray_Welcome"));
         welcome.Click += (_, _) => WelcomeRequested?.Invoke();
-        var exit = new ToolStripMenuItem("Exit");
+        var exit = new ToolStripMenuItem(Loc.T("Tray_Exit"));
         exit.Click += (_, _) => ExitRequested?.Invoke();
 
         _menu.Items.AddRange(new ToolStripItem[]
@@ -58,6 +59,21 @@ internal sealed class TrayIcon : IDisposable
             ContextMenuStrip = _menu,
         };
         _icon.DoubleClick += (_, _) => SettingsRequested?.Invoke();
+
+        // The menu is built once, so its text is set again when the interface language changes.
+        Loc.Instance.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName != nameof(Loc.Language)) return;
+            _autoItem.Text = Loc.T("Tray_Auto");
+            snip.Text = Loc.T("Tray_Snip");
+            clipboard.Text = Loc.T("Tray_Clipboard");
+            settings.Text = Loc.T("Tray_Settings");
+            diagnostics.Text = Loc.T("Tray_Diagnostics");
+            welcome.Text = Loc.T("Tray_Welcome");
+            exit.Text = Loc.T("Tray_Exit");
+            _icon.Text = _autoItem.Checked ? "Bili Index Translate" : Loc.T("Tray_Paused");
+            RefreshAppItem();
+        };
     }
 
     public event Action<bool>? AutoTranslateToggled;
@@ -78,7 +94,7 @@ internal sealed class TrayIcon : IDisposable
     {
         if (_autoItem.Checked != enabled) _autoItem.Checked = enabled;
         _icon.Icon = enabled ? _normal : _paused;
-        _icon.Text = enabled ? "Bili Index Translate" : "Bili Index Translate — paused";
+        _icon.Text = enabled ? "Bili Index Translate" : Loc.T("Tray_Paused");
     }
 
     public void ShowNotice(string title, string message, bool warning = false)
@@ -98,13 +114,13 @@ internal sealed class TrayIcon : IDisposable
         var app = _currentAppProvider?.Invoke();
         if (string.IsNullOrEmpty(app))
         {
-            _appItem.Text = "Don't translate in this app";
+            _appItem.Text = Loc.T("Tray_ExcludeThisApp");
             _appItem.Enabled = false;
             _appItem.Checked = false;
             _appItem.Tag = null;
             return;
         }
-        _appItem.Text = $"Don't translate in {app}";
+        _appItem.Text = Loc.T("Tray_ExcludeApp", app);
         _appItem.Enabled = true;
         _appItem.Tag = app;
         _appItem.Checked = IsAppExcluded?.Invoke(app) ?? false;

@@ -7,8 +7,8 @@ namespace BiliIndexTranslate.Core.Translation;
 /// <summary>
 /// One request → one result or one <see cref="TranslationError"/>. No retries, no route switching:
 /// if the direct endpoint answers 412 the error says so and points at the relay toggle.
-/// Speaks the OpenAI chat-completions format, or the DeepLX translate format when the request's
-/// <see cref="TranslationRequest.Format"/> asks for it; transport and error handling are shared.
+/// Speaks the OpenAI chat-completions format, the DeepLX translate format, or a custom template,
+/// as the request's <see cref="TranslationRequest.Format"/> asks; transport and error handling are shared.
 /// </summary>
 public sealed class OpenAiCompatibleTranslator
 {
@@ -23,33 +23,52 @@ public sealed class OpenAiCompatibleTranslator
 
     public async Task<TranslationResult> TranslateAsync(TranslationRequest request, CancellationToken ct)
     {
-        var deeplx = request.Format == ApiFormat.Deeplx;
-        if (!EndpointResolver.TryResolve(request.Format, request.BaseUrl, request.UseRelay, request.RelayPrefix, request.ApiKey, out var endpoint, out var cfgError))
+        var format = request.Format;
+        if (!EndpointResolver.TryResolve(format, request.BaseUrl, request.UseRelay, request.RelayPrefix, request.ApiKey, out var endpoint, out var cfgError))
             throw new TranslationException(new TranslationError(TranslationErrorKind.Configuration, cfgError ?? "Invalid endpoint.", request.UseRelay ? RequestRoute.Relay : RequestRoute.Direct));
 
         var route = endpoint!.Route;
-        if (!deeplx && string.IsNullOrWhiteSpace(request.Model))
+        if (format == ApiFormat.OpenAi && string.IsNullOrWhiteSpace(request.Model))
             throw new TranslationException(new TranslationError(TranslationErrorKind.Configuration, "No model selected.", route));
 
-        // DeepLX has no prompt that could carry glossary constraints, so it reports no hits.
-        var hitCount = deeplx ? 0 : GlossaryEngine.MatchHits(request.GlossaryText, request.Text).Count;
-        var body = deeplx
-            ? DeeplxProtocol.BuildRequestJson(request.Text, request.SourceLanguage, request.TargetLanguageCode)
-            : PromptBuilder.BuildRequestJson(
+        // A custom template is checked completely before anything is sent.
+        ParsedCustomTemplate? custom = null;
+        CustomApiRequest? customRequest = null;
+        if (format == ApiFormat.Custom)
+        {
+            string? templateError;
+            if (_transport is not IRawTranslationTransport)
+                templateError = "This transport cannot send custom API requests.";
+            else if (CustomApiProtocol.TryParseTemplate(request.Custom ?? new CustomApiTemplate(), endpoint.NormalizedBase, out custom, out templateError))
+                CustomApiProtocol.TryBuildRequest(custom!, endpoint.NormalizedBase, request.ApiKey, [request.Text], request.TargetLanguageCode, out customRequest, out templateError);
+            if (customRequest is null)
+                throw new TranslationException(new TranslationError(TranslationErrorKind.Configuration, templateError ?? "Invalid custom API template.", route));
+        }
+
+        // Only the chat format has a prompt that can carry glossary constraints.
+        var hitCount = format == ApiFormat.OpenAi ? GlossaryEngine.MatchHits(request.GlossaryText, request.Text).Count : 0;
+        var body = format switch
+        {
+            ApiFormat.Deeplx => DeeplxProtocol.BuildRequestJson(request.Text, request.SourceLanguage, request.TargetLanguageCode),
+            ApiFormat.OpenAi => PromptBuilder.BuildRequestJson(
                 request.Model,
                 request.Text,
                 request.TargetLanguagePromptName,
                 request.SourceLanguage,
                 stream: false,
                 baseUrl: request.BaseUrl,
-                glossaryText: request.GlossaryText);
+                glossaryText: request.GlossaryText),
+            _ => string.Empty,
+        };
         // A key that was substituted into the URL is not repeated as a Bearer header.
         var apiKey = endpoint.KeyInUrl ? string.Empty : request.ApiKey;
         var sw = Stopwatch.StartNew();
         TransportResponse response;
         try
         {
-            response = await _transport.PostJsonAsync(endpoint.ChatCompletionsUrl, apiKey, body, _timeout, ct).ConfigureAwait(false);
+            response = customRequest is not null
+                ? await ((IRawTranslationTransport)_transport).SendAsync(customRequest.Method, customRequest.Url, customRequest.Headers, customRequest.Body, _timeout, ct).ConfigureAwait(false)
+                : await _transport.PostJsonAsync(endpoint.ChatCompletionsUrl, apiKey, body, _timeout, ct).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -79,7 +98,12 @@ public sealed class OpenAiCompatibleTranslator
 
         if (response.StatusCode is < 200 or >= 300)
         {
-            var detail = deeplx ? DeeplxErrorDetail(response) : ExtractErrorDetail(response);
+            var detail = format switch
+            {
+                ApiFormat.Deeplx => DeeplxErrorDetail(response),
+                ApiFormat.Custom => CustomApiProtocol.ReadErrorText(custom!, response.Body),
+                _ => ExtractErrorDetail(response),
+            };
             var msg = HttpMessage(response.StatusCode);
             if (detail is not null) msg += " " + detail;
             throw new TranslationException(new TranslationError(TranslationErrorKind.Http, msg, route, response.StatusCode));
@@ -88,7 +112,7 @@ public sealed class OpenAiCompatibleTranslator
         bool parsed;
         string translation;
         string? parseError;
-        if (deeplx)
+        if (format == ApiFormat.Deeplx)
         {
             parsed = DeeplxProtocol.TryParse(response.Body, out translation, out parseError, out var serviceCode);
             if (!parsed && serviceCode is { } code)
@@ -98,6 +122,11 @@ public sealed class OpenAiCompatibleTranslator
                 if (parseError is not null) msg += " " + parseError;
                 throw new TranslationException(new TranslationError(TranslationErrorKind.Http, msg, route, code));
             }
+        }
+        else if (format == ApiFormat.Custom)
+        {
+            parsed = CustomApiProtocol.TryParseResult(custom!, response.Body, 1, out var translations, out parseError);
+            translation = parsed ? translations[0] : string.Empty;
         }
         else
         {
@@ -112,7 +141,13 @@ public sealed class OpenAiCompatibleTranslator
             throw new TranslationException(new TranslationError(kind, parseError ?? "Unreadable response.", route, response.StatusCode));
         }
 
-        return new TranslationResult(translation, route, sw.Elapsed.TotalMilliseconds, deeplx ? DeeplxProtocol.ModelLabel : request.Model, hitCount);
+        var label = format switch
+        {
+            ApiFormat.Deeplx => DeeplxProtocol.ModelLabel,
+            ApiFormat.Custom => (request.Custom ?? new CustomApiTemplate()).Label,
+            _ => request.Model,
+        };
+        return new TranslationResult(translation, route, sw.Elapsed.TotalMilliseconds, label, hitCount);
     }
 
     private static string HttpMessage(int status) => status switch
