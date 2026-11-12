@@ -13,7 +13,7 @@
 | 目录 | 说明 | 状态 |
 |---|---|---|
 | [`bili-index-translate/`](bili-index-translate/) | **Chrome / Edge / Brave / Arc 浏览器扩展（Manifest V3）**：MV3 原生直连 + `Alt+S` 零 OCR 识图框选/右键图片直译 + `Alt+A` 视口流式双语对照 + `instTrans` 动态术语表 + 划词与伴随语言学习卡片 | 可直接加载未打包扩展或下载 Release ZIP |
-| [`BiliIndexTranslate.Desktop/`](BiliIndexTranslate.Desktop/) | **Windows 桌面全局划词与屏幕识图端（C# / .NET 8, WPF + UI Automation）**：跨应用非抢焦点浮窗翻译 + `Alt+Shift+S` 跨屏冻结框选识图直译/剪贴板截图直译 + `instTrans` 术语表 + 伴随学习卡片 | Windows 上 `0 warnings` 编译通过，`124/124` xUnit 核心单测通过（见 [`BiliIndexTranslate.Desktop/README.md`](BiliIndexTranslate.Desktop/README.md)） |
+| [`BiliIndexTranslate.Desktop/`](BiliIndexTranslate.Desktop/) | **Windows 桌面全局划词与屏幕识图端（C# / .NET 8, WPF + UI Automation）**：跨应用非抢焦点浮窗翻译 + `Alt+Shift+S` 跨屏冻结框选识图直译/剪贴板截图直译 + `instTrans` 术语表 + 伴随学习卡片 | Windows 上 `0 warnings` 编译通过，`170/170` xUnit 核心单测通过（见 [`BiliIndexTranslate.Desktop/README.md`](BiliIndexTranslate.Desktop/README.md)） |
 | [`bili-study-sandbox/`](bili-study-sandbox/) | **零依赖本地浏览器预览沙盒（Node.js 标准库）**：无需重载扩展即可在本地 `http://localhost:3001` 实时体验划词、学习卡片、`Alt+S` 画布框选识图、术语表与 `Alt+A` 双语对照 | 运行 `node bili-study-sandbox/server.js` 即可启动，默认只监听 `127.0.0.1` |
 
 ---
@@ -58,6 +58,24 @@
 2. **Windows 桌面端（.NET 8 WPF）**：下载 Release 中的 `BiliIndexTranslate-Desktop-win-x64-selfcontained-v1.4.1.zip`（自带运行时单文件免安装版）或 `BiliIndexTranslate-Desktop-win-x64-v1.4.1.zip`（轻量版），解压运行 `BiliIndexTranslate.exe`。
 3. **本地预览沙盒**：运行 `node bili-study-sandbox/server.js` 并访问 `http://localhost:3001`。
    沙盒默认只监听本机 `127.0.0.1`；确需局域网访问时设置环境变量 `HOST=0.0.0.0`，端口用 `PORT` 修改。
+
+---
+
+## 接口格式（OpenAI 兼容 / DeepLX）
+
+扩展选项页和桌面端 Settings → Service 里的「API format」决定请求格式，默认是 OpenAI 兼容，已有设置不受影响。
+
+| 接口格式 | Base URL 填写 | 鉴权 | 可用功能 |
+|---|---|---|---|
+| OpenAI-compatible | 接口根地址，如 `https://index-translate.bilibili.com/v1`，自动追加 `/chat/completions` | `Authorization: Bearer <API Key>` | 全部 |
+| DeepLX-compatible | 完整的翻译地址，原样使用，如 `https://host/translate?token={apiKey}` 或 `http://localhost:1188/translate` | 地址里的 `{apiKey}` 会替换成 API Key；没有占位符时用 `Authorization: Bearer <API Key>`，Key 留空则不带鉴权头 | 划词翻译，以及扩展的 `Alt+A` 双语对照 |
+
+- DeepLX 格式的请求体是 `{"text": 原文, "source_lang": "auto", "target_lang": 语言代码}`，译文取响应里的 `data`；HTTP 错误和响应里非 200 的 `code` 都会显示出来。
+- 这种接口没有提示词，所以术语表不生效；学习卡片和识图直译会直接提示需要 OpenAI 兼容接口，不发请求；模型选项对它无效，扩展选项页选中 DeepLX 后这些控件会置灰，译文面板也不再提示词卡。
+- 扩展的 Target language 会映射成 DeepL 语言代码（`中文` → `ZH`，`English` → `EN`，`日本語` → `JA`，以及 DeepL 支持的三十多种语言的中英文名称）；地区变体直接填代码，如 `PT-BR`。桌面端按所选目标语言映射：简体中文 → `ZH`，繁體中文 → `ZH-HANT`，English → `EN`，日本語 → `JA`，한국어 → `KO`。
+- `Alt+A` 把同一批的单行段落合并成一次请求（每段一行，译文按行拆回，一批最多 4 段），请求数明显少于段落数；接口的回复行数对不上时改为逐段请求，并在设置变更前不再对该接口合并。已译段落走内存缓存。扩展填了 Relay prefix、或桌面端勾选了中继时，中继地址必须是经过中继后的完整翻译地址。
+- 接口格式和地址明显不匹配时会拦下来：OpenAI 格式下地址里带 `{apiKey}` 会拒绝保存（扩展和桌面端都是，否则 key 会被悄悄丢掉）；地址形似另一种格式时，扩展在保存后给出提示。
+- 桌面端把这项设置存在 `settings.json` 的 `apiFormat` 字段（`OpenAi` / `Deeplx`）；API key 仍用 DPAPI 加密保存，替换进地址的 key 不会写入日志，也不进入缓存键。
 
 ---
 
@@ -107,7 +125,7 @@
 | 桌面端构建 | `dotnet build BiliIndexTranslate.Desktop/BiliIndexTranslate.sln -c Release` |
 | 桌面端单测 | `dotnet test BiliIndexTranslate.Desktop/tests/BiliIndexTranslate.Core.Tests -c Release` |
 
-- `tests/extension/` 覆盖术语表解析、提示词构造、识图双轨解析、段落锚点、学习卡 JSON 修复与流式解析，四条流式请求路径的分块、取消和 JSON 回退，并用模拟的 `fetch` 验证 412 时只发一次请求、不自动改走中继。
-- `tests/e2e/` 在无头 Chromium 里加载未打包的扩展，后端换成 `tests/support/mock-upstream.js`（本地 OpenAI 兼容模拟服务，按提示词返回确定的译文、词卡和识图结果）。用例覆盖划词流式与取消、术语表注入、412 与显式中继、学习卡片快捷键、`Alt+A` 双语对照（视口优先、跳过中文和代码、滚动续翻、仅译与模型切换、无损还原）、`Alt+S` 框选裁剪、右键图片和选项页。每个用例结束时检查没有请求离开 `127.0.0.1`。右键菜单和扩展快捷键无法在 Playwright 里直接点击，用例在 service worker 里派发与 Chrome 相同的事件。
+- `tests/extension/` 覆盖术语表解析、提示词构造、识图双轨解析、段落锚点、学习卡 JSON 修复与流式解析，四条流式请求路径的分块、取消和 JSON 回退，并用模拟的 `fetch` 验证 412 时只发一次请求、不自动改走中继；`deeplx.test.js` 覆盖 DeepLX 格式的请求构造、响应解析和各条功能路径。
+- `tests/e2e/` 在无头 Chromium 里加载未打包的扩展，后端换成 `tests/support/mock-upstream.js`（本地 OpenAI 兼容模拟服务，按提示词返回确定的译文、词卡和识图结果）。用例覆盖划词流式与取消、术语表注入、412 与显式中继、学习卡片快捷键、`Alt+A` 双语对照（视口优先、跳过中文和代码、滚动续翻、仅译与模型切换、无损还原）、`Alt+S` 框选裁剪、右键图片、选项页和 DeepLX 接口格式（模拟服务的 `/translate` 端点）。每个用例结束时检查没有请求离开 `127.0.0.1`。右键菜单和扩展快捷键无法在 Playwright 里直接点击，用例在 service worker 里派发与 Chrome 相同的事件。
 - GitHub Actions（`.github/workflows/ci.yml`）在每次推送和 PR 上运行以上全部检查；端到端测试失败时上传 Playwright 报告和 trace，桌面端在 `windows-latest` 上构建、测试，并试打一次发布包。Dependabot（`.github/dependabot.yml`）每周检查 Actions、npm 和 NuGet 依赖。
 - 发布：先把 `bili-index-translate/manifest.json` 的 `version` 和 `BiliIndexTranslate.Desktop/Directory.Build.props` 的 `<Version>` 改成同一个版本号并合入 `main`，再推送 `vX.Y.Z` tag。`.github/workflows/release.yml` 会跑全部单测，用 `.github/scripts/package-release.ps1` 打出 3 个 ZIP 和 `SHA256SUMS.txt`，建成草稿 Release，核对说明后手动发布。tag 与两处版本号不一致或工作区有未提交改动时脚本直接失败。本地预演：`pwsh .github/scripts/package-release.ps1 -OutDir <空目录>`。

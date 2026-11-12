@@ -4,6 +4,7 @@ using System.Windows.Controls;
 using System.Windows.Media;
 using BiliIndexTranslate.App.Input;
 using BiliIndexTranslate.Core.Settings;
+using BiliIndexTranslate.Core.Translation;
 
 namespace BiliIndexTranslate.App.Settings;
 
@@ -56,6 +57,7 @@ public partial class SettingsWindow : Window
         EditablePolicyBox.SelectedIndex = (int)s.EditableFieldPolicy;
         ShowOriginalBox.IsChecked = s.ShowOriginalByDefault;
 
+        ApiFormatBox.SelectedIndex = (int)s.ApiFormat;
         EndpointBox.Text = s.BaseUrl;
         ApiKeyBox.Password = s.ApiKey;
         foreach (var m in AppSettings.KnownModels) ModelBox.Items.Add(m);
@@ -93,6 +95,7 @@ public partial class SettingsWindow : Window
         s.EditableFieldPolicy = (EditableFieldPolicy)Math.Max(0, EditablePolicyBox.SelectedIndex);
         s.ShowOriginalByDefault = ShowOriginalBox.IsChecked == true;
 
+        s.ApiFormat = (ApiFormat)Math.Max(0, ApiFormatBox.SelectedIndex);
         s.BaseUrl = EndpointBox.Text.Trim();
         s.ApiKey = _keyRevealed ? ApiKeyPlainBox.Text : ApiKeyBox.Password;
         s.Model = ModelBox.Text.Trim();
@@ -110,7 +113,7 @@ public partial class SettingsWindow : Window
         s.UseUiaSelectionEvents = UiaEventsBox.IsChecked == true;
         s.DiagnosticsFileLogging = FileLoggingBox.IsChecked == true;
 
-        if (!Core.Translation.EndpointResolver.TryResolve(s.BaseUrl, s.UseRelay, s.RelayPrefix, out _, out var epError))
+        if (!EndpointResolver.TryResolve(s.ApiFormat, s.BaseUrl, s.UseRelay, s.RelayPrefix, s.ApiKey, out _, out var epError))
         {
             error = epError;
             return null;

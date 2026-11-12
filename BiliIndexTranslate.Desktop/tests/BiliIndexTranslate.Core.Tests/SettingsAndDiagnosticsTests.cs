@@ -1,6 +1,7 @@
 using BiliIndexTranslate.Core.Diagnostics;
 using BiliIndexTranslate.Core.Selection;
 using BiliIndexTranslate.Core.Settings;
+using BiliIndexTranslate.Core.Translation;
 using Xunit;
 
 namespace BiliIndexTranslate.Core.Tests;
@@ -55,6 +56,56 @@ public class SettingsStoreTests : IDisposable
         Assert.Equal(1.2, r.Settings.TextScale);
         Assert.True(r.Settings.IsProcessExcluded("keepass"));
         Assert.False(r.WasMigrated);
+    }
+
+    [Fact]
+    public void ApiFormat_DefaultsToOpenAi_AndRoundTripsWithThePlaceholderUrl()
+    {
+        const string endpoint = "https://h.test/translate?token={apiKey}";
+        Assert.Equal(ApiFormat.OpenAi, new AppSettings().ApiFormat);
+
+        var store = new SettingsStore(File_, new ReversibleProtector());
+        store.Save(new AppSettings { ApiFormat = ApiFormat.Deeplx, BaseUrl = endpoint, ApiKey = "s3cret" });
+
+        var raw = File.ReadAllText(File_);
+        Assert.Contains("\"apiFormat\": \"Deeplx\"", raw);
+        Assert.DoesNotContain("s3cret", raw);
+
+        var r = store.Load();
+        Assert.Equal(ApiFormat.Deeplx, r.Settings.ApiFormat);
+        Assert.Equal(endpoint, r.Settings.BaseUrl);
+        Assert.Equal("s3cret", r.Settings.ApiKey);
+        Assert.False(r.WasMalformed);
+    }
+
+    [Fact]
+    public void EmptyKey_StaysEmptyForDeeplx_ButFallsBackToTheBuiltInKeyForOpenAi()
+    {
+        var store = new SettingsStore(File_, new ReversibleProtector());
+        store.Save(new AppSettings { ApiFormat = ApiFormat.Deeplx, BaseUrl = "http://localhost:1188/translate", ApiKey = "  " });
+        Assert.Contains("\"apiKeyProtected\": \"\"", File.ReadAllText(File_));
+
+        var deeplx = store.Load();
+        Assert.Equal(string.Empty, deeplx.Settings.ApiKey);
+        Assert.False(deeplx.SecretUnavailable);
+
+        deeplx.Settings.ApiFormat = ApiFormat.OpenAi;
+        store.Save(deeplx.Settings);
+        Assert.Equal(AppSettings.DefaultApiKey, store.Load().Settings.ApiKey);
+    }
+
+    [Fact]
+    public void FileWrittenBeforeTheApiFormatOption_StaysOpenAi_AndUndefinedFormatsAreReset()
+    {
+        Directory.CreateDirectory(_dir);
+        File.WriteAllText(File_, """{ "schemaVersion": 2, "baseUrl": "https://a.test/v1", "model": "gpt-4o" }""");
+        var r = new SettingsStore(File_, new ReversibleProtector()).Load();
+        Assert.Equal(ApiFormat.OpenAi, r.Settings.ApiFormat);
+        Assert.Equal("https://a.test/v1", r.Settings.BaseUrl);
+        Assert.False(r.WasMalformed);
+        Assert.False(r.WasMigrated);
+
+        Assert.Equal(ApiFormat.OpenAi, new AppSettings { ApiFormat = (ApiFormat)99 }.Normalize().ApiFormat);
     }
 
     [Fact]

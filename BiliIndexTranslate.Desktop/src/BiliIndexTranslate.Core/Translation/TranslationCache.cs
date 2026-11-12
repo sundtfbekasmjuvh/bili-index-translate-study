@@ -12,9 +12,13 @@ public readonly record struct CacheKey(
 {
     public static CacheKey For(TranslationRequest r)
     {
-        var endpoint = EndpointResolver.TryResolve(r.BaseUrl, r.UseRelay, r.RelayPrefix, out var ep, out _)
+        // NormalizedBase never contains the API key, also when the DeepLX format puts the key into the URL.
+        var endpoint = EndpointResolver.TryResolve(r.Format, r.BaseUrl, r.UseRelay, r.RelayPrefix, r.ApiKey, out var ep, out _)
             ? ep!.NormalizedBase
             : (r.BaseUrl ?? string.Empty);
+        // DeepLX has no model and no prompt: neither the model setting nor the glossary changes its result.
+        if (r.Format == ApiFormat.Deeplx)
+            return new CacheKey(r.Text, r.TargetLanguageCode, DeeplxProtocol.ModelLabel, endpoint, "deeplx", r.SourceLanguage);
         var gSig = GlossaryEngine.Signature(GlossaryEngine.MatchHits(r.GlossaryText, r.Text));
         return new CacheKey(r.Text, r.TargetLanguageCode, r.Model, endpoint, PromptBuilder.PromptVersion, r.SourceLanguage, gSig);
     }

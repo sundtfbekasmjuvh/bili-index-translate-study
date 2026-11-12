@@ -7,6 +7,8 @@ namespace BiliIndexTranslate.Core.Translation;
 /// <summary>
 /// One request → one result or one <see cref="TranslationError"/>. No retries, no route switching:
 /// if the direct endpoint answers 412 the error says so and points at the relay toggle.
+/// Speaks the OpenAI chat-completions format, or the DeepLX translate format when the request's
+/// <see cref="TranslationRequest.Format"/> asks for it; transport and error handling are shared.
 /// </summary>
 public sealed class OpenAiCompatibleTranslator
 {
@@ -21,27 +23,33 @@ public sealed class OpenAiCompatibleTranslator
 
     public async Task<TranslationResult> TranslateAsync(TranslationRequest request, CancellationToken ct)
     {
-        if (!EndpointResolver.TryResolve(request.BaseUrl, request.UseRelay, request.RelayPrefix, out var endpoint, out var cfgError))
+        var deeplx = request.Format == ApiFormat.Deeplx;
+        if (!EndpointResolver.TryResolve(request.Format, request.BaseUrl, request.UseRelay, request.RelayPrefix, request.ApiKey, out var endpoint, out var cfgError))
             throw new TranslationException(new TranslationError(TranslationErrorKind.Configuration, cfgError ?? "Invalid endpoint.", request.UseRelay ? RequestRoute.Relay : RequestRoute.Direct));
 
         var route = endpoint!.Route;
-        if (string.IsNullOrWhiteSpace(request.Model))
+        if (!deeplx && string.IsNullOrWhiteSpace(request.Model))
             throw new TranslationException(new TranslationError(TranslationErrorKind.Configuration, "No model selected.", route));
 
-        var hits = GlossaryEngine.MatchHits(request.GlossaryText, request.Text);
-        var body = PromptBuilder.BuildRequestJson(
-            request.Model,
-            request.Text,
-            request.TargetLanguagePromptName,
-            request.SourceLanguage,
-            stream: false,
-            baseUrl: request.BaseUrl,
-            glossaryText: request.GlossaryText);
+        // DeepLX has no prompt that could carry glossary constraints, so it reports no hits.
+        var hitCount = deeplx ? 0 : GlossaryEngine.MatchHits(request.GlossaryText, request.Text).Count;
+        var body = deeplx
+            ? DeeplxProtocol.BuildRequestJson(request.Text, request.SourceLanguage, request.TargetLanguageCode)
+            : PromptBuilder.BuildRequestJson(
+                request.Model,
+                request.Text,
+                request.TargetLanguagePromptName,
+                request.SourceLanguage,
+                stream: false,
+                baseUrl: request.BaseUrl,
+                glossaryText: request.GlossaryText);
+        // A key that was substituted into the URL is not repeated as a Bearer header.
+        var apiKey = endpoint.KeyInUrl ? string.Empty : request.ApiKey;
         var sw = Stopwatch.StartNew();
         TransportResponse response;
         try
         {
-            response = await _transport.PostJsonAsync(endpoint.ChatCompletionsUrl, request.ApiKey, body, _timeout, ct).ConfigureAwait(false);
+            response = await _transport.PostJsonAsync(endpoint.ChatCompletionsUrl, apiKey, body, _timeout, ct).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -71,22 +79,32 @@ public sealed class OpenAiCompatibleTranslator
 
         if (response.StatusCode is < 200 or >= 300)
         {
-            var detail = ExtractErrorDetail(response);
-            var msg = response.StatusCode switch
-            {
-                412 => "Request rejected by the service (HTTP 412).",
-                401 => "Unauthorized (HTTP 401).",
-                403 => "Forbidden (HTTP 403).",
-                404 => "Endpoint not found (HTTP 404).",
-                429 => "Too many requests (HTTP 429).",
-                >= 500 => $"Service error (HTTP {response.StatusCode}).",
-                _ => $"Request failed (HTTP {response.StatusCode}).",
-            };
+            var detail = deeplx ? DeeplxErrorDetail(response) : ExtractErrorDetail(response);
+            var msg = HttpMessage(response.StatusCode);
             if (detail is not null) msg += " " + detail;
             throw new TranslationException(new TranslationError(TranslationErrorKind.Http, msg, route, response.StatusCode));
         }
 
-        if (!ChatCompletionParser.TryParse(response.Body, out var translation, out var parseError))
+        bool parsed;
+        string translation;
+        string? parseError;
+        if (deeplx)
+        {
+            parsed = DeeplxProtocol.TryParse(response.Body, out translation, out parseError, out var serviceCode);
+            if (!parsed && serviceCode is { } code)
+            {
+                // HTTP 200 carrying a non-200 "code": report it as the HTTP error it stands for.
+                var msg = HttpMessage(code);
+                if (parseError is not null) msg += " " + parseError;
+                throw new TranslationException(new TranslationError(TranslationErrorKind.Http, msg, route, code));
+            }
+        }
+        else
+        {
+            parsed = ChatCompletionParser.TryParse(response.Body, out translation, out parseError);
+        }
+
+        if (!parsed)
         {
             var kind = parseError is not null && parseError.Contains("empty translation", StringComparison.OrdinalIgnoreCase)
                 ? TranslationErrorKind.EmptyResult
@@ -94,8 +112,19 @@ public sealed class OpenAiCompatibleTranslator
             throw new TranslationException(new TranslationError(kind, parseError ?? "Unreadable response.", route, response.StatusCode));
         }
 
-        return new TranslationResult(translation, route, sw.Elapsed.TotalMilliseconds, request.Model, hits.Count);
+        return new TranslationResult(translation, route, sw.Elapsed.TotalMilliseconds, deeplx ? DeeplxProtocol.ModelLabel : request.Model, hitCount);
     }
+
+    private static string HttpMessage(int status) => status switch
+    {
+        412 => "Request rejected by the service (HTTP 412).",
+        401 => "Unauthorized (HTTP 401).",
+        403 => "Forbidden (HTTP 403).",
+        404 => "Endpoint not found (HTTP 404).",
+        429 => "Too many requests (HTTP 429).",
+        >= 500 => $"Service error (HTTP {status}).",
+        _ => $"Request failed (HTTP {status}).",
+    };
 
     private static string? ExtractErrorDetail(TransportResponse response)
     {
@@ -108,6 +137,10 @@ public sealed class OpenAiCompatibleTranslator
             return null;
         return err;
     }
+
+    /// <summary>The service's own message from a DeepLX error body ({"code":401,"message":"..."}), else nothing.</summary>
+    private static string? DeeplxErrorDetail(TransportResponse response)
+        => !DeeplxProtocol.TryParse(response.Body, out _, out var err, out var serviceCode) && serviceCode is not null ? err : null;
 
     private static string DescribeNetwork(HttpRequestException ex)
     {

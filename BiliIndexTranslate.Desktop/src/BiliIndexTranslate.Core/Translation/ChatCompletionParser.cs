@@ -116,7 +116,7 @@ public static class ChatCompletionParser
            || s.StartsWith("<body", StringComparison.OrdinalIgnoreCase)
            || (s.Length > 0 && s[0] == '<' && !s.StartsWith("<?xml", StringComparison.OrdinalIgnoreCase));
 
-    private static string Shorten(string s)
+    internal static string Shorten(string s)
     {
         s = s.Replace('\r', ' ').Replace('\n', ' ').Trim();
         return s.Length > 160 ? s[..160] + "…" : s;

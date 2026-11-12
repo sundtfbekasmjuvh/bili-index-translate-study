@@ -67,8 +67,20 @@
 
         <!-- Service -->
         <TextBlock Style="{StaticResource GroupTitle}" Text="SERVICE" />
-        <TextBlock Style="{StaticResource FieldLabel}" Text="Endpoint (base URL or full /chat/completions URL)" Margin="0,0,0,3" />
+        <Grid Margin="0,0,0,6">
+          <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="120" />
+            <ColumnDefinition Width="*" />
+          </Grid.ColumnDefinitions>
+          <TextBlock Style="{StaticResource FieldLabel}" Text="API format" />
+          <ComboBox x:Name="ApiFormatBox" Grid.Column="1" HorizontalAlignment="Left" MinWidth="260">
+            <ComboBoxItem Content="OpenAI-compatible (/chat/completions)" />
+            <ComboBoxItem Content="DeepLX-compatible (/translate)" />
+          </ComboBox>
+        </Grid>
+        <TextBlock Style="{StaticResource FieldLabel}" Text="Endpoint" Margin="0,0,0,3" />
         <TextBox x:Name="EndpointBox" />
+        <TextBlock Style="{StaticResource HintText}" Text="OpenAI-compatible: base URL or full /chat/completions URL. DeepLX: the complete translate URL, used as entered, e.g. https://host/translate?token={apiKey} ({apiKey} is replaced with the API key; without it the key is sent as a Bearer token; leave the key empty if the endpoint needs none). DeepLX only translates selected text: Study Card, screen snip, the glossary and the model choices need an OpenAI-compatible endpoint." />
         <Grid Margin="0,8,0,0">
           <Grid.ColumnDefinitions>
             <ColumnDefinition Width="*" />

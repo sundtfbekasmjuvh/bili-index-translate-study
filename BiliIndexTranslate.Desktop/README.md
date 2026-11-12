@@ -8,7 +8,7 @@ Built fresh in C# / .NET 8 (WPF for the card, UI Automation for reading selectio
 
 > **Status.** The code compiles cleanly on Windows (0 warnings) and the platform-independent core —
 > state machine, placement math, translation client, vision and study-card parsers, cache, settings —
-> is covered by 124 passing unit tests. CI builds and tests every push and pull request on
+> is covered by 170 passing unit tests. CI builds and tests every push and pull request on
 > `windows-latest`. On a Windows 11 desktop the app starts, registers its hotkeys, enforces a single
 > instance, opens Settings and exits cleanly from the tray. Selection reading, the popup card, the
 > error card, cache hits, foreground and minimize dismissal and the unsupported-control path have
@@ -56,7 +56,8 @@ translates the copied text. Automatic mode never touches the clipboard.
 * **Reading** – automatic translation, target language (简体中文 / 繁體中文 / English / 日本語 / 한국어),
   text size, light/dark/system theme, editable-field policy (default: skip single-line inputs such
   as address bars; multi-line editors are translated), show original by default.
-* **Service** – endpoint (base URL *or* full `/chat/completions` URL; the suffix is never
+* **Service** – API format (OpenAI-compatible by default, or DeepLX-compatible, see below),
+  endpoint (base URL *or* full `/chat/completions` URL; the suffix is never
   duplicated), API key (stored with DPAPI for your Windows account), model
   (`Index-Translate-2B` / `9B` / `35B-A3B`, default 9B, free text for other OpenAI-compatible
   servers), relay toggle. **Save and test** saves what is on screen and tests exactly that.
@@ -67,6 +68,16 @@ translates the copied text. Automatic mode never touches the clipboard.
   the tray and in Settings; automatic mode is unaffected.
 * **Advanced** – settle delay (120–800 ms), UI Automation selection events on/off, diagnostics file
   logging.
+
+**DeepLX format.** The endpoint is the complete translate URL and is used as entered, for example
+`https://host/translate?token={apiKey}` or `http://localhost:1188/translate`. `{apiKey}` is replaced
+with the API key; without the placeholder the key is sent as a Bearer token, and an empty key sends
+no credential. The request body is
+`{"text", "source_lang", "target_lang"}` and the translation is read from `data`; an HTTP error or
+a non-200 `code` in the body is shown as an error. This format only translates selected text: the
+glossary and the model choices have no effect, and Study Card and screen snip report that they need
+an OpenAI-compatible endpoint without sending a request. With the relay enabled, the relay URL must
+be the complete relayed translate URL.
 
 Settings file: `%LocalAppData%\BiliIndexTranslate\settings.json`. Malformed files are backed up as
 `settings.json.bad` and replaced with defaults; older files with a plain-text key are migrated.

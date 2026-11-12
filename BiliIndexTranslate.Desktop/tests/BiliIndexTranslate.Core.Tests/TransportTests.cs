@@ -43,6 +43,36 @@ public class HttpTranslationTransportTests
         }
     }
 
+    [Fact]
+    public async Task Deeplx_OverTheWire_SendsTheKeyOnlyInTheQuery_AndReadsData()
+    {
+        var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        try
+        {
+            var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+            var server = ServeJsonOnceAsync(listener, "{\"code\":200,\"data\":\"你好，世界。\"}");
+
+            using var transport = new HttpTranslationTransport();
+            var request = new TranslationRequest(
+                "Hello, world.", "zh-Hans", "Simplified Chinese", "auto", "Index-Translate-9B",
+                $"http://127.0.0.1:{port}/translate?token={{apiKey}}", false, "", "tok/1", "", ApiFormat.Deeplx);
+            var result = await new OpenAiCompatibleTranslator(transport, TimeSpan.FromSeconds(10)).TranslateAsync(request, CancellationToken.None);
+
+            Assert.Equal("你好，世界。", result.Translation);
+            var wire = await server;
+            Assert.StartsWith("POST /translate?token=tok%2F1 HTTP/1.1", wire);
+            Assert.DoesNotContain("Authorization:", wire, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("\"text\":\"Hello, world.\"", wire);
+            Assert.Contains("\"source_lang\":\"auto\"", wire);
+            Assert.Contains("\"target_lang\":\"ZH\"", wire);
+        }
+        finally
+        {
+            listener.Stop();
+        }
+    }
+
     private static async Task ServeOnceAsync(TcpListener listener, string sseBody)
     {
         using var client = await listener.AcceptTcpClientAsync();
@@ -63,5 +93,36 @@ public class HttpTranslationTransportTests
         await stream.WriteAsync(head);
         await stream.WriteAsync(payload);
         await stream.FlushAsync();
+    }
+
+    /// <summary>Accepts one request, reads it completely (headers and body), answers with JSON and returns what was received.</summary>
+    private static async Task<string> ServeJsonOnceAsync(TcpListener listener, string jsonBody)
+    {
+        using var client = await listener.AcceptTcpClientAsync();
+        var stream = client.GetStream();
+        var buffer = new byte[64 * 1024];
+        var received = new StringBuilder();
+        while (true)
+        {
+            var read = await stream.ReadAsync(buffer);
+            if (read == 0) break;
+            received.Append(Encoding.ASCII.GetString(buffer, 0, read));
+
+            var text = received.ToString();
+            var headEnd = text.IndexOf("\r\n\r\n", StringComparison.Ordinal);
+            if (headEnd < 0) continue;
+            var lengthLine = text[..headEnd].Split("\r\n").FirstOrDefault(l => l.StartsWith("Content-Length:", StringComparison.OrdinalIgnoreCase));
+            var bodyLength = lengthLine is null ? 0 : int.Parse(lengthLine["Content-Length:".Length..].Trim());
+            if (text.Length - (headEnd + 4) >= bodyLength) break;
+        }
+
+        var payload = Encoding.UTF8.GetBytes(jsonBody);
+        var head = Encoding.ASCII.GetBytes(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n" +
+            $"Content-Length: {payload.Length}\r\nConnection: close\r\n\r\n");
+        await stream.WriteAsync(head);
+        await stream.WriteAsync(payload);
+        await stream.FlushAsync();
+        return received.ToString();
     }
 }

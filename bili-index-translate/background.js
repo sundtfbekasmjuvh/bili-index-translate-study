@@ -4,6 +4,7 @@
 const DEFAULTS = {
   base: "https://index-translate.bilibili.com/v1",
   proxy: "",
+  apiType: "openai",
   model: "Index-Translate-9B",
   immersiveModel: "Index-Translate-2B",
   visionModel: "Index-Translate-35B-A3B",
@@ -23,6 +24,10 @@ const MAX_LEN = 3000;
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
 const TIMEOUT_MS = 35000;
 const MAX_ERROR_BODY = 4000;
+
+// apiType "deeplx": Base URL is a DeepLX-style translate endpoint instead of an OpenAI-compatible root.
+const API_TYPE_DEEPLX = "deeplx";
+const DEEPLX_LABEL = "DeepLX";
 
 // Strictly volatile in-RAM session LRU micro-cache (never persisted to chrome.storage or disk).
 const MEM_CACHE_LIMIT = 64;
@@ -877,7 +882,7 @@ function extractPartialStudyDeck(partialRaw, sourceText) {
 
 // ---- API & Streaming --------------------------------------------------------------------
 
-async function postChat(prefix, key, body, externalSignal) {
+async function postJson(url, headers, body, externalSignal) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
   const onAbort = () => controller.abort();
@@ -886,12 +891,9 @@ async function postChat(prefix, key, body, externalSignal) {
     else externalSignal.addEventListener("abort", onAbort, { once: true });
   }
   try {
-    const res = await fetch(stripSlashes(prefix) + "/chat/completions", {
+    const res = await fetch(url, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": "Bearer " + key
-      },
+      headers: headers,
       body: JSON.stringify(body),
       signal: controller.signal
     });
@@ -908,6 +910,18 @@ async function postChat(prefix, key, body, externalSignal) {
   }
 }
 
+async function postChat(prefix, key, body, externalSignal) {
+  return postJson(
+    stripSlashes(prefix) + "/chat/completions",
+    {
+      "Content-Type": "application/json",
+      "Authorization": "Bearer " + key
+    },
+    body,
+    externalSignal
+  );
+}
+
 async function openChatStream(prefix, key, body, signal) {
   return fetch(stripSlashes(prefix) + "/chat/completions", {
     method: "POST",
@@ -919,6 +933,241 @@ async function openChatStream(prefix, key, body, signal) {
     body: JSON.stringify(body),
     signal: signal
   });
+}
+
+// ---- DeepLX-compatible translate endpoints -------------------------------------------------
+// Contract: POST { text, source_lang, target_lang } -> { code: 200, data: "translation" }.
+// There is no prompt, so this format only translates plain text: the glossary is not applied and
+// Study Cards and image translation are refused instead of being sent to an endpoint that cannot do them.
+
+function isDeeplx(s) {
+  return String((s && s.apiType) || "").trim().toLowerCase() === API_TYPE_DEEPLX;
+}
+
+// DeepL target codes and the names they are recognised by (English, Chinese, native), lower-cased.
+const DEEPLX_LANGUAGE_NAMES = [
+  ["AR", ["arabic", "阿拉伯语"]],
+  ["BG", ["bulgarian", "保加利亚语"]],
+  ["CS", ["czech", "捷克语", "čeština"]],
+  ["DA", ["danish", "丹麦语", "dansk"]],
+  ["DE", ["german", "德语", "德文", "deutsch"]],
+  ["EL", ["greek", "希腊语"]],
+  ["EN", ["english", "英语", "英文"]],
+  ["ES", ["spanish", "西班牙语", "español"]],
+  ["ET", ["estonian", "爱沙尼亚语"]],
+  ["FI", ["finnish", "芬兰语", "suomi"]],
+  ["FR", ["french", "法语", "法文", "français"]],
+  ["HE", ["hebrew", "希伯来语"]],
+  ["HU", ["hungarian", "匈牙利语", "magyar"]],
+  ["ID", ["indonesian", "印尼语", "印度尼西亚语", "bahasa indonesia"]],
+  ["IT", ["italian", "意大利语", "italiano"]],
+  ["JA", ["japanese", "日语", "日文", "日本語"]],
+  ["KO", ["korean", "韩语", "韩文", "한국어"]],
+  ["LT", ["lithuanian", "立陶宛语"]],
+  ["LV", ["latvian", "拉脱维亚语"]],
+  ["NB", ["norwegian", "挪威语", "norsk"]],
+  ["NL", ["dutch", "荷兰语", "nederlands"]],
+  ["PL", ["polish", "波兰语", "polski"]],
+  ["PT", ["portuguese", "葡萄牙语", "português"]],
+  ["RO", ["romanian", "罗马尼亚语", "română"]],
+  ["RU", ["russian", "俄语", "俄文", "русский"]],
+  ["SK", ["slovak", "斯洛伐克语"]],
+  ["SL", ["slovenian", "斯洛文尼亚语"]],
+  ["SV", ["swedish", "瑞典语", "svenska"]],
+  ["TH", ["thai", "泰语"]],
+  ["TR", ["turkish", "土耳其语", "türkçe"]],
+  ["UK", ["ukrainian", "乌克兰语", "українська"]],
+  ["VI", ["vietnamese", "越南语", "tiếng việt"]]
+];
+
+// Maps the free-text target language to a DeepL code. A value that already looks like a code
+// (PT-BR, it, en_us) is passed through upper-cased, so any language the server supports can be set.
+function deeplxTargetLang(target) {
+  const t = String(target || DEFAULTS.target).trim();
+  if (isSimplifiedChineseTarget(t)) return "ZH";
+  if (/traditional|繁體|繁体|^zh[-_]?(tw|hk|hant)/i.test(t)) return "ZH-HANT";
+  if (/^[a-z]{2,3}([-_][a-z0-9]{2,4})?$/i.test(t)) return t.replace("_", "-").toUpperCase();
+  const name = t.toLowerCase();
+  for (const [code, names] of DEEPLX_LANGUAGE_NAMES) {
+    if (names.some((n) => name.includes(n))) return code;
+  }
+  if (/chinese|中文|汉语/i.test(t)) return "ZH";
+  return t;
+}
+
+// The endpoint is used as entered. "{apiKey}" (or "{{apiKey}}") in it is replaced with the key, as in
+// https://host/translate?token={apiKey}; without a placeholder the key is sent as a Bearer token.
+function buildDeeplxRequest(endpoint, key, text, target) {
+  const k = String(key || "").trim();
+  const raw = stripSlashes(endpoint);
+  const url = raw.replace(/\{\{apiKey\}\}|\{apiKey\}/gi, () => encodeURIComponent(k));
+  const headers = { "Content-Type": "application/json" };
+  if (k && url === raw) headers["Authorization"] = "Bearer " + k;
+  return {
+    url: url,
+    headers: headers,
+    body: { text: String(text || ""), source_lang: "auto", target_lang: deeplxTargetLang(target) }
+  };
+}
+
+// DeepLX reports failures either as an HTTP error or as HTTP 200 with a non-200 "code".
+function parseDeeplxResponse(raw, httpStatus) {
+  let data;
+  try {
+    data = JSON.parse(raw);
+  } catch (_) {
+    return { ok: false, status: httpStatus, body: "Response is not JSON: " + String(raw).slice(0, MAX_ERROR_BODY) };
+  }
+  const code = data && typeof data.code === "number" ? data.code : 200;
+  if (code !== 200) {
+    return { ok: false, status: code, body: String((data && data.message) || raw).slice(0, MAX_ERROR_BODY) };
+  }
+  const text = data && typeof data.data === "string" ? data.data.trim() : "";
+  if (!text) {
+    return { ok: false, status: httpStatus, body: "No translation in \"data\": " + String(raw).slice(0, MAX_ERROR_BODY) };
+  }
+  return { ok: true, text: text };
+}
+
+function deeplxCacheKey(s, text) {
+  return DEEPLX_LABEL + "|" + s.target + "|" + stripSlashes(s.base) + "||" + text;
+}
+
+// studyCard: false tells the page not to advertise the Study Card next to this translation.
+function deeplxEntry(text, via) {
+  return { text: text, model: DEEPLX_LABEL, via: via, glossaryHits: 0, studyCard: false };
+}
+
+// One request, one final text: DeepLX does not stream. As with the chat paths, a relay replaces the
+// Base URL only when it is configured, and nothing is retried on another route.
+async function deeplxRequest(s, text, externalSignal) {
+  const relay = stripSlashes(s.proxy);
+  const via = relay ? "relay" : "direct";
+  const req = buildDeeplxRequest(relay || s.base, s.key, text, s.target);
+
+  let r;
+  try {
+    r = await postJson(req.url, req.headers, req.body, externalSignal);
+  } catch (err) {
+    if (externalSignal && externalSignal.aborted) {
+      return { ok: false, cancelled: true, status: 0, body: "Cancelled" };
+    }
+    return { ok: false, status: 0, body: String((err && err.message) || err) };
+  }
+  if (!r.ok) {
+    return { ok: false, status: r.status, body: r.raw.slice(0, MAX_ERROR_BODY), via: via };
+  }
+  return { ...parseDeeplxResponse(r.raw, r.status), via: via };
+}
+
+async function deeplxTranslate(s, text, externalSignal) {
+  const cacheKey = deeplxCacheKey(s, text);
+  const hit = lruGet(volatileTranslateCache, cacheKey);
+  if (hit) return { ok: true, ...hit, cached: true };
+
+  const r = await deeplxRequest(s, text, externalSignal);
+  if (!r.ok) return r;
+  const out = deeplxEntry(r.text, r.via);
+  lruSet(volatileTranslateCache, cacheKey, out);
+  return { ok: true, ...out };
+}
+
+// Endpoints whose reply did not keep one line per paragraph; Alt+A no longer merges paragraphs for them.
+const deeplxNoLineBatch = new Set();
+
+// Alt+A batch. Paragraphs that are single lines go out as one request, one paragraph per line: a
+// DeepLX service translates line by line, so the reply splits back by line and a batch costs one
+// request instead of one per paragraph. When a reply does not have exactly one line per paragraph,
+// the endpoint is remembered as not line-preserving and its paragraphs are sent one by one, as are
+// paragraphs that contain line breaks themselves. A failed paragraph is left out of the result; the
+// batch itself fails only when it produced no translation at all.
+async function deeplxImmersiveBatch(s, items, onProgress, externalSignal) {
+  const segments = {};
+  let pending = [];
+  let translated = 0;
+
+  for (let i = 0; i < items.length; i++) {
+    const txt = items[i];
+    if (!txt) {
+      segments[i] = "";
+      continue;
+    }
+    const hit = lruGet(volatileTranslateCache, deeplxCacheKey(s, txt));
+    if (hit) {
+      segments[i] = hit.text;
+      translated++;
+    } else {
+      pending.push(i);
+    }
+  }
+
+  if (pending.length === 0) {
+    return { ok: true, segments: segments, model: DEEPLX_LABEL, via: "direct", cached: true };
+  }
+
+  const report = (via) => {
+    if (typeof onProgress === "function") {
+      onProgress({ segments: { ...segments }, model: DEEPLX_LABEL, via: via });
+    }
+  };
+  if (translated > 0) report("cache");
+
+  const commit = (i, text, via) => {
+    segments[i] = text;
+    translated++;
+    lruSet(volatileTranslateCache, deeplxCacheKey(s, items[i]), deeplxEntry(text, via));
+  };
+
+  let firstError = null;
+  const endpoint = stripSlashes(s.proxy) || stripSlashes(s.base);
+  if (pending.length > 1 && !deeplxNoLineBatch.has(endpoint) && pending.every((i) => !/[\r\n]/.test(items[i]))) {
+    const r = await deeplxRequest(s, pending.map((i) => items[i]).join("\n"), externalSignal);
+    if (r.cancelled) return r;
+    if (!r.ok) {
+      // Sending the same paragraphs one by one would fail the same way; do not multiply the failure.
+      firstError = r;
+      pending = [];
+    } else {
+      const lines = r.text.split(/\r?\n/).map((line) => line.trim());
+      if (lines.length === pending.length && lines.every(Boolean)) {
+        pending.forEach((i, k) => commit(i, lines[k], r.via));
+        report(r.via);
+        pending = [];
+      } else {
+        deeplxNoLineBatch.add(endpoint);
+      }
+    }
+  }
+
+  for (const i of pending) {
+    const r = await deeplxRequest(s, items[i], externalSignal);
+    if (r.cancelled) return r;
+    if (!r.ok) {
+      if (!firstError) firstError = r;
+      continue;
+    }
+    commit(i, r.text, r.via);
+    report(r.via);
+  }
+
+  if (translated === 0) return firstError;
+  return {
+    ok: true,
+    segments: segments,
+    model: DEEPLX_LABEL,
+    via: stripSlashes(s.proxy) ? "relay" : "direct",
+    glossaryHits: 0
+  };
+}
+
+function deeplxUnsupported(feature) {
+  return {
+    ok: false,
+    status: 0,
+    body:
+      feature +
+      " needs an OpenAI-compatible chat model. The DeepLX API format only translates text; change the API format in the extension options to use it."
+  };
 }
 
 async function fetchImageAsDataUrl(srcUrl) {
@@ -1075,6 +1324,7 @@ async function streamTranslation(text, onDelta, externalSignal) {
   if (text.length > MAX_LEN) return { ok: false, status: 0, body: "Selection is longer than " + MAX_LEN + " characters." };
 
   const s = await getSettings();
+  if (isDeeplx(s)) return deeplxTranslate(s, text, externalSignal);
   const activeModel = String(s.model || DEFAULTS.model).trim();
   const base = stripSlashes(s.base);
   const hits = matchGlossaryHits(s.glossary, text);
@@ -1120,6 +1370,7 @@ async function streamVisionTranslation(imageDataUrl, modelOverride, onDelta, ext
   }
 
   const s = await getSettings();
+  if (isDeeplx(s)) return deeplxUnsupported("Image translation");
   const activeModel = resolveVisionModel(s.visionModel, modelOverride);
   const base = stripSlashes(s.base);
   const cacheKey = activeModel + "|" + s.target + "|" + base + "|" + (await sha256Hex(s.glossary)) + "|" + (await sha256Hex(dataUrl));
@@ -1179,6 +1430,7 @@ async function streamImmersiveBatch(rawItems, modelOverride, onProgress, externa
   if (items.length === 0) return { ok: false, status: 0, body: "Empty batch." };
 
   const s = await getSettings();
+  if (isDeeplx(s)) return deeplxImmersiveBatch(s, items, onProgress, externalSignal);
   const activeModel = String(modelOverride || s.immersiveModel || DEFAULTS.immersiveModel || s.model).trim();
   const base = stripSlashes(s.base);
   const parsedEntries = parseGlossary(s.glossary);
@@ -1288,6 +1540,7 @@ async function streamStudyCard(text, modelOverride, onPartial, externalSignal) {
   if (text.length > MAX_LEN) return { ok: false, status: 0, body: "Selection is longer than " + MAX_LEN + " characters." };
 
   const s = await getSettings();
+  if (isDeeplx(s)) return deeplxUnsupported("Study Card");
   const base = stripSlashes(s.base);
   const activeModel = resolveStudyModel(s.model, modelOverride);
   const hits = matchGlossaryHits(s.glossary, text);
@@ -1345,6 +1598,7 @@ async function translate(text) {
   if (text.length > MAX_LEN) return { ok: false, status: 0, body: "Selection is longer than " + MAX_LEN + " characters." };
 
   const s = await getSettings();
+  if (isDeeplx(s)) return deeplxTranslate(s, text);
   const activeModel = String(s.model || DEFAULTS.model).trim();
   const base = stripSlashes(s.base);
   const hits = matchGlossaryHits(s.glossary, text);
@@ -1371,6 +1625,7 @@ async function generateStudyCard(text, modelOverride) {
   if (text.length > MAX_LEN) return { ok: false, status: 0, body: "Selection is longer than " + MAX_LEN + " characters." };
 
   const s = await getSettings();
+  if (isDeeplx(s)) return deeplxUnsupported("Study Card");
   const base = stripSlashes(s.base);
   const activeModel = resolveStudyModel(s.model, modelOverride);
   const hits = matchGlossaryHits(s.glossary, text);
@@ -1426,7 +1681,8 @@ if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.onMessage)
         .then((s) =>
           sendResponse({
             ok: true,
-            immersiveModel: s.immersiveModel || DEFAULTS.immersiveModel,
+            immersiveModel: isDeeplx(s) ? DEEPLX_LABEL : s.immersiveModel || DEFAULTS.immersiveModel,
+            modelSwitch: !isDeeplx(s),
             target: s.target || DEFAULTS.target
           })
         )
@@ -1558,6 +1814,7 @@ if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.onMessage)
   }
 
   chrome.storage.onChanged.addListener(() => {
+    deeplxNoLineBatch.clear();
     cachedGlossaryRaw = null;
     cachedGlossaryEntries = [];
     volatileTranslateCache.clear();
@@ -1699,11 +1956,16 @@ if (typeof module !== "undefined" && module.exports) {
     parseStudyCardJson,
     extractPartialStudyDeck,
     inferSourceLang,
+    deeplxTargetLang,
+    buildDeeplxRequest,
+    parseDeeplxResponse,
     callChatCompletion,
     readChatContent,
     streamTranslation,
     streamVisionTranslation,
     streamImmersiveBatch,
-    streamStudyCard
+    streamStudyCard,
+    translate,
+    generateStudyCard
   };
 }

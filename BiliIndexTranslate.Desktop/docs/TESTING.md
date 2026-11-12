@@ -7,7 +7,7 @@ Windows 11 Pro for Workstations (build 26200), .NET SDK 8.0.427, from the v1.4.0
 | Check | Result |
 |---|---|
 | `dotnet build BiliIndexTranslate.sln -c Release` | 0 errors, 0 warnings |
-| `dotnet test tests/BiliIndexTranslate.Core.Tests -c Release` | **124 passed, 0 failed** (session state machine, placement/anchoring, endpoint resolution, response parsing, SSE transport, vision dual output, study cards, cache, coordinator races, settings load/migrate) |
+| `dotnet test tests/BiliIndexTranslate.Core.Tests -c Release` | **170 passed, 0 failed** (session state machine, placement/anchoring, endpoint resolution, DeepLX format, response parsing, SSE transport, vision dual output, study cards, cache, coordinator races, settings load/migrate) |
 | `dotnet publish … -r win-x64 --self-contained false` | `BiliIndexTranslate.exe` — PE32+ x64 GUI, version 1.4.0 embedded (864 KB folder) |
 | `dotnet publish … --self-contained true -p:PublishSingleFile=true` | single 139 MB exe produced |
 | Icon | `tools/make-icon.py` output inspected at 256 px |
@@ -37,6 +37,29 @@ exercised.
 
 Probe latency over the run was 2.4–12.7 ms; the two translation paths measured 1 ms (cache
 warm mock) and 67 ms against the mock upstream.
+
+### DeepLX format through the Settings window (2026-11-12)
+
+Framework-dependent publish output of the working tree, driven through UI Automation against a
+local DeepLX-style mock on `127.0.0.1` (`tests/support/mock-upstream.js`). The user's
+`settings.json` was backed up first and restored afterwards (same SHA-256).
+
+| # | Step | Result |
+|---|---|---|
+| 1 | Open Settings (second instance) with a settings file that has no `apiFormat` | ✅ `API format` lists `OpenAI-compatible (/chat/completions)` and `DeepLX-compatible (/translate)`; OpenAI-compatible is selected |
+| 2 | Select DeepLX, endpoint `http://127.0.0.1:<port>/translate?token={apiKey}`, a test key, **Save and test** | ✅ `OK · 135 ms via direct · “译文：Hello, world.”`; the mock received one `POST /translate` with the key in the `token` query parameter, no `Authorization` header and the body `{"text":"Hello, world.","source_lang":"auto","target_lang":"ZH"}` |
+| 3 | Saved file | ✅ `"apiFormat": "Deeplx"`, the endpoint with its `{apiKey}` placeholder, the key as a DPAPI blob (`apiKeyScheme: dpapi-user`); the test key does not appear in plain text |
+| 4 | Restart, reopen Settings, **Save and test** | ✅ DeepLX still selected, endpoint kept, `OK · 131 ms via direct`; the mock received the same token again, so the key was read back from the file |
+| 5 | Switch to OpenAI-compatible while the endpoint still contains `{apiKey}`, **Save and test** | ✅ rejected with `The endpoint contains {apiKey}, which only the DeepLX API format fills in. …`; the settings file is unchanged |
+
+Not exercised live with the DeepLX format: the selection popup, Study Card and screen snip (unit
+tests only).
+
+The same build started from `src\BiliIndexTranslate.App\bin\Release\net8.0-windows` translated
+correctly, but on this machine neither `settings.json` nor `diagnostics.log` was written; from the
+publish output both were. The cause was not investigated further; it matches the note below about
+security software interfering with programs in `bin\`. Use the publish output (`tools\build.cmd`)
+when settings do not persist with `tools\run.cmd`.
 
 ### Resource behaviour over 200 selections
 
