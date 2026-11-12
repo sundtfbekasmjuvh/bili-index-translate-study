@@ -1,3 +1,5 @@
+<img src="bili-index-translate/icons/icon128.png" width="72" height="72" alt="Bili Index Translate 图标">
+
 # Bili Index Translate · 极简流式划词 + Zero-OCR 多模态识图框选 + Alt+A 双语对照 + instTrans 术语表 + 伴随语言学习卡片
 
 基于 Bilibili OpenAI 兼容多模态与文本翻译接口（`Index-Translate-35B-A3B` / `9B` / `2B`）构建的**双平台极简翻译与按需语言学习私教**：
@@ -151,5 +153,6 @@
 
 - `tests/extension/` 覆盖术语表解析、提示词构造、识图双轨解析、段落锚点、学习卡 JSON 修复与流式解析，四条流式请求路径的分块、取消和 JSON 回退，并用模拟的 `fetch` 验证 412 时只发一次请求、不自动改走中继；`deeplx.test.js` 和 `custom.test.js` 覆盖 DeepLX 格式与自定义模板的请求构造、占位符转义、响应解析和各条功能路径；`settings.test.js` 覆盖 API key 从同步存储到本机存储的迁移；`image-fetch.test.js` 覆盖右键图片下载的 8 MB 上限和超时。
 - `tests/e2e/` 在无头 Chromium 里加载未打包的扩展，后端换成 `tests/support/mock-upstream.js`（本地 OpenAI 兼容模拟服务，按提示词返回确定的译文、词卡和识图结果）。用例覆盖划词流式与取消、术语表注入、412 与显式中继、学习卡片快捷键、`Alt+A` 双语对照（视口优先、跳过中文和代码、滚动续翻、仅译与模型切换、无损还原）、`Alt+S` 框选裁剪、右键图片（含超过 8 MB 时中断下载）、选项页（含旧版本 API key 的迁移）、DeepLX 接口格式（模拟服务的 `/translate` 端点）和自定义模板（模拟服务里一个形状自拟的 `/custom-api` 端点）。每个用例结束时检查没有请求离开 `127.0.0.1`。右键菜单和扩展快捷键无法在 Playwright 里直接点击，用例在 service worker 里派发与 Chrome 相同的事件。
+- 图标：扩展的 `icons/icon16|32|48|128.png` 和桌面端的 `app.ico` 由同一个脚本 `BiliIndexTranslate.Desktop/tools/make-icon.py` 画出（只用 Python 标准库），改图标后重新运行它；`tests/extension/manifest.test.js` 检查 manifest 引用的文件和图标尺寸。
 - GitHub Actions（`.github/workflows/ci.yml`）在每次推送和 PR 上运行以上全部检查；端到端测试失败时上传 Playwright 报告和 trace，桌面端在 `windows-latest` 上构建、测试，并试打一次发布包。Dependabot（`.github/dependabot.yml`）每周检查 Actions、npm 和 NuGet 依赖。
 - 发布：先把 `bili-index-translate/manifest.json` 的 `version` 和 `BiliIndexTranslate.Desktop/Directory.Build.props` 的 `<Version>` 改成同一个版本号并合入 `main`，再推送 `vX.Y.Z` tag。`.github/workflows/release.yml` 会跑全部单测，用 `.github/scripts/package-release.ps1` 打出 3 个 ZIP 和 `SHA256SUMS.txt`，建成草稿 Release，核对说明后手动发布。tag 与两处版本号不一致或工作区有未提交改动时脚本直接失败。本地预演：`pwsh .github/scripts/package-release.ps1 -OutDir <空目录>`。

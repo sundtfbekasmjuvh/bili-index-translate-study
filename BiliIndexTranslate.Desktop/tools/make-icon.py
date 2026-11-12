@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-"""Generates Assets/app.ico and Assets/app-paused.ico without external dependencies.
+"""Generates the desktop icons (Assets/app.ico, Assets/app-paused.ico) and the browser extension
+icons (bili-index-translate/icons/icon<size>.png) from one drawing, without external dependencies.
 
 The icon is a rounded warm-neutral tile with a terracotta "译"-like stroke mark (a simple glyph
 built from rectangles so no font is required). The paused variant is desaturated.
-Sizes: 16, 20, 24, 32, 48, 64, 128, 256 (PNG-compressed entries, as Windows expects).
+Icon sizes: 16, 20, 24, 32, 48, 64, 128, 256 (PNG-compressed entries, as Windows expects).
+Extension sizes: 16, 32, 48, 128 (what Chrome asks for in the toolbar and on the extensions page).
 """
 import struct
 import zlib
@@ -12,6 +14,8 @@ import os
 SIZES = [16, 20, 24, 32, 48, 64, 128, 256]
 HERE = os.path.dirname(os.path.abspath(__file__))
 OUT = os.path.join(HERE, "..", "src", "BiliIndexTranslate.App", "Assets")
+EXTENSION_SIZES = [16, 32, 48, 128]
+EXTENSION_OUT = os.path.join(HERE, "..", "..", "bili-index-translate", "icons")
 
 
 def png_bytes(size, pixels):
@@ -121,3 +125,8 @@ if __name__ == "__main__":
     write_ico(os.path.join(OUT, "app.ico"), paused=False)
     write_ico(os.path.join(OUT, "app-paused.ico"), paused=True)
     print("wrote app.ico and app-paused.ico to", os.path.abspath(OUT))
+    os.makedirs(EXTENSION_OUT, exist_ok=True)
+    for size in EXTENSION_SIZES:
+        with open(os.path.join(EXTENSION_OUT, "icon%d.png" % size), "wb") as f:
+            f.write(render(size, paused=False))
+    print("wrote", ", ".join("icon%d.png" % s for s in EXTENSION_SIZES), "to", os.path.abspath(EXTENSION_OUT))
