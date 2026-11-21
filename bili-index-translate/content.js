@@ -1875,6 +1875,25 @@
   let immModeBtn = null;
   let immModelBtn = null;
 
+  // "Annotate hard words only" mode. immAnnotateAvail comes from the background (feature switched on and
+  // the backend supports it); immAnnotate is the mode currently in use and defaults to on when available.
+  const IMM_ANNOTATE_LANGS = ["zh", "en", "es"];
+  const IMM_NOTICE_UNDO_MS = 6000;
+  const IMM_NOTICE_ERROR_MS = 4000;
+  const newImmKeySets = () => ({ zh: new Set(), en: new Set(), es: new Set() });
+  let immAnnotateAvail = false;
+  let immAnnotate = false;
+  let immAnnotBtn = null;
+  let immNoticeEl = null;
+  let immNoticeTimer = null;
+  let immNoticeEntry = null; // the undo entry the floating bar currently offers
+  let immAnnotatedKeys = newImmKeySets(); // keys shown as a label on this page
+  let immKnownKeys = newImmKeySets(); // keys marked as known while this page is open
+  const immStash = new Map(); // "lang|key" -> [{ rec, note }] labels taken off the page, for undo
+  const immPendingMarks = new Set(); // "lang|key" with a mark or undo request in flight
+  let immGen = 0; // bumped on stop/restart so late replies leave the new page alone
+  let immOpenNote = null; // { tag, known } the label whose "known" button is open
+
   let immIntersectionObs = null;
   let immMutationObs = null;
   let immMutationTimer = null;
@@ -1903,6 +1922,24 @@
     immStatusEl = document.createElement("span");
     immStatusEl.className = "bit-imm-status";
     immStatusEl.textContent = tr("imm.title");
+
+    immNoticeEl = document.createElement("span");
+    immNoticeEl.className = "bit-imm-notice";
+    immNoticeEl.setAttribute("role", "status");
+    immNoticeEl.setAttribute("aria-live", "polite");
+
+    immAnnotBtn = document.createElement("button");
+    immAnnotBtn.className = "bit-imm-annot-btn";
+    immAnnotBtn.type = "button";
+    immAnnotBtn.title = tr("imm.annotateTitle");
+    immAnnotBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      immAnnotate = !immAnnotate;
+      if (immAnnotate) immViewMode = "bilingual"; // target-only would hide the source text
+      syncImmModeUi();
+      syncImmBar();
+      if (immActive) restartImmersiveWithNewModel();
+    });
 
     immModeBtn = document.createElement("button");
     immModeBtn.className = "bit-imm-btn";
@@ -1947,6 +1984,8 @@
 
     immBar.appendChild(dot);
     immBar.appendChild(immStatusEl);
+    immBar.appendChild(immNoticeEl);
+    immBar.appendChild(immAnnotBtn);
     immBar.appendChild(immModeBtn);
     immBar.appendChild(immModelBtn);
     immBar.appendChild(closeBtn);
@@ -1957,7 +1996,8 @@
   }
 
   function syncImmModeUi() {
-    if (immViewMode === "target-only") {
+    // Annotation keeps the source text; target-only would hide it.
+    if (immViewMode === "target-only" && !immAnnotate) {
       document.documentElement.setAttribute("data-bit-imm-mode", "target-only");
       if (immModeBtn) {
         immModeBtn.setAttribute("data-active", "");
@@ -1985,8 +2025,15 @@
         immStatusEl.textContent = tr("imm.ready", immDoneCount, immTotalCount);
       }
     }
+    if (immAnnotBtn) {
+      immAnnotBtn.style.display = immAnnotateAvail ? "" : "none";
+      immAnnotBtn.textContent = immAnnotate ? tr("imm.annotate") : tr("imm.translate");
+      if (immAnnotate) immAnnotBtn.setAttribute("data-active", "");
+      else immAnnotBtn.removeAttribute("data-active");
+    }
+    if (immModeBtn) immModeBtn.style.display = immAnnotate ? "none" : "";
     if (immModelBtn) {
-      immModelBtn.style.display = immModelSwitch ? "" : "none";
+      immModelBtn.style.display = immModelSwitch && !immAnnotate ? "" : "none";
       const m = immModelOverride || immResolvedModel || "Index-Translate-2B";
       const shortLabel = m.replace(/^Index-Translate-/i, "").replace(/-A3B$/i, "");
       immModelBtn.textContent = shortLabel;
@@ -2154,8 +2201,21 @@
     immTotalCount = Math.max(0, immTotalCount - 1);
     if (rec.state === "done") immDoneCount = Math.max(0, immDoneCount - 1);
     if (rec.span) rec.span.remove();
+    releaseImmShownKeys(rec);
     rec.el.removeAttribute("data-bit-imm-host");
     rec.el.removeAttribute("data-bit-imm-ready");
+  }
+
+  // The labels of a forgotten paragraph are gone, so their words may be annotated again where they
+  // appear next. A key is shown by one paragraph at most (applyImmNotes skips keys already shown),
+  // so no other record needs to be checked; a route change can forget thousands of records at once.
+  function releaseImmShownKeys(rec) {
+    if (!rec.shownKeys) return;
+    const mine = rec.shownKeys;
+    rec.shownKeys = null;
+    for (const { lang, key } of mine) {
+      immAnnotatedKeys[lang].delete(key);
+    }
   }
 
   // Paragraphs the page has removed since they were recorded (route changes, virtual lists). Their
@@ -2190,10 +2250,14 @@
         continue;
       }
       const shown = rec.span && rec.el.contains(rec.span);
-      if (rec.state === "done" && rec.translation && !shown && (rec.restores || 0) < IMM_MAX_RESTORES) {
+      // A paragraph that was annotated has its labels put back; a paragraph whose labels were all
+      // marked as known has nothing to put back.
+      const hasContent = rec.notes ? rec.notes.length > 0 : Boolean(rec.translation);
+      if (rec.state === "done" && hasContent && !shown && (rec.restores || 0) < IMM_MAX_RESTORES) {
         rec.restores = (rec.restores || 0) + 1;
         rec.span = null;
-        drawImmSegment(rec, rec.translation, true);
+        if (rec.notes) drawImmNotes(rec, rec.notes);
+        else drawImmSegment(rec, rec.translation, true);
       }
     }
     return stillChanging;
@@ -2293,6 +2357,240 @@
     setOnlyText(span, text);
   }
 
+  // ---- Annotate mode: labels under a paragraph ------------------------------------------------
+
+  // Fills rec.notes from a batch result. A word already shown on this page, or already marked as known,
+  // is dropped here: up to IMM_MAX_CONCURRENCY batches run at once, each asked with the keys known at
+  // its start. Then the label row is drawn.
+  function applyImmNotes(rec, rawNotes) {
+    const kept = [];
+    for (const n of Array.isArray(rawNotes) ? rawNotes : []) {
+      if (!n || !IMM_ANNOTATE_LANGS.includes(n.lang) || !n.key || !n.w || !n.gloss) continue;
+      if (immAnnotatedKeys[n.lang].has(n.key) || immKnownKeys[n.lang].has(n.key)) continue;
+      immAnnotatedKeys[n.lang].add(n.key);
+      kept.push({ w: String(n.w), gloss: String(n.gloss), key: String(n.key), lang: n.lang, ord: kept.length });
+    }
+    rec.notes = kept;
+    rec.shownKeys = kept.map((n) => ({ lang: n.lang, key: n.key }));
+    drawImmNotes(rec, kept);
+  }
+
+  // Replaces the loading dots by one row of labels, "word · gloss". The gloss comes from a model, so
+  // it is only ever set as text. With nothing to show the span is removed.
+  function drawImmNotes(rec, notes) {
+    if (!isCurrentImmRecord(rec)) return;
+    if (immOpenNote && rec.span && rec.span.contains(immOpenNote.tag)) closeImmNoteAction();
+    if (!notes || notes.length === 0) {
+      cancelFrameJob(rec);
+      if (rec.span) rec.span.remove();
+      rec.span = null;
+      return;
+    }
+    const span = ensureImmSpan(rec);
+    span.removeAttribute("data-loading");
+    span.removeAttribute("data-streaming");
+    span.setAttribute("data-notes", "1");
+    const tags = notes.map((note) => {
+      const tag = document.createElement("button");
+      tag.type = "button";
+      tag.className = "bit-imm-note";
+      tag.setAttribute("data-lang", note.lang);
+      tag.setAttribute("data-key", note.key);
+      tag.setAttribute("aria-expanded", "false");
+      tag.setAttribute("aria-label", tr("imm.noteLabel", note.w, note.gloss));
+      tag.textContent = note.w + " · " + note.gloss;
+      tag.addEventListener("click", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (immOpenNote && immOpenNote.tag === tag) closeImmNoteAction();
+        else openImmNoteAction(tag, note);
+      });
+      return tag;
+    });
+    span.replaceChildren(...tags);
+  }
+
+  // The "known" button closes on Esc or on a click anywhere else. These listeners exist only while
+  // it is open, so pages and frames where it never opens pay nothing for them.
+  function onImmNoteOutsideClick(e) {
+    if (!immOpenNote) return;
+    if (immOpenNote.tag.contains(e.target) || immOpenNote.known.contains(e.target)) return;
+    closeImmNoteAction();
+  }
+
+  function onImmNoteKeydown(e) {
+    if (e.key !== "Escape" || !immOpenNote) return;
+    const { tag, known } = immOpenNote;
+    const hadFocus = document.activeElement === known;
+    closeImmNoteAction();
+    if (hadFocus) tag.focus();
+  }
+
+  function closeImmNoteAction() {
+    document.removeEventListener("click", onImmNoteOutsideClick, true);
+    document.removeEventListener("keydown", onImmNoteKeydown);
+    if (!immOpenNote) return;
+    const { tag, known } = immOpenNote;
+    immOpenNote = null;
+    known.remove();
+    tag.setAttribute("aria-expanded", "false");
+  }
+
+  function openImmNoteAction(tag, note) {
+    closeImmNoteAction();
+    document.addEventListener("click", onImmNoteOutsideClick, true);
+    document.addEventListener("keydown", onImmNoteKeydown);
+    const known = document.createElement("button");
+    known.type = "button";
+    known.className = "bit-imm-known";
+    known.textContent = tr("imm.known");
+    known.setAttribute("aria-label", tr("imm.knownLabel", note.w));
+    known.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      markImmKnown(note);
+    });
+    tag.after(known);
+    tag.setAttribute("aria-expanded", "true");
+    immOpenNote = { tag, known };
+  }
+
+  // Takes every label of one word (same language and key) off the page and remembers where they were.
+  function removeImmNotesFor(lang, key) {
+    const stash = immStash.get(lang + "|" + key) || [];
+    for (const rec of Array.from(immRecords.values())) {
+      if (!rec.notes) continue;
+      const hit = rec.notes.filter((n) => n.lang === lang && n.key === key);
+      if (hit.length === 0) continue;
+      rec.notes = rec.notes.filter((n) => !(n.lang === lang && n.key === key));
+      for (const note of hit) stash.push({ rec, note });
+      drawImmNotes(rec, rec.notes);
+    }
+    if (stash.length > 0) immStash.set(lang + "|" + key, stash);
+  }
+
+  // Puts back the labels that removeImmNotesFor took off, in their original order within a paragraph.
+  function restoreImmNotesFor(lang, key) {
+    const stash = immStash.get(lang + "|" + key) || [];
+    immStash.delete(lang + "|" + key);
+    for (const { rec, note } of stash) {
+      if (!isCurrentImmRecord(rec) || !rec.notes || rec.notes.includes(note)) continue;
+      rec.notes.push(note);
+      rec.notes.sort((a, b) => a.ord - b.ord);
+      drawImmNotes(rec, rec.notes);
+    }
+  }
+
+  // When the undo offer goes away (timed out or replaced), its stashed labels can no longer come back,
+  // so they are dropped, unless the undo request is still on its way.
+  function clearImmNotice() {
+    clearTimeout(immNoticeTimer);
+    immNoticeTimer = null;
+    const entry = immNoticeEntry;
+    if (entry && !immPendingMarks.has(entry.lang + "|" + entry.key)) immStash.delete(entry.lang + "|" + entry.key);
+    immNoticeEntry = null;
+    if (immNoticeEl) immNoticeEl.replaceChildren();
+  }
+
+  // The bar shows one notice at a time; a new one replaces the old one (and its undo).
+  function showImmNotice(text, entry, ms) {
+    if (!immNoticeEl) return;
+    clearImmNotice();
+    const label = document.createElement("span");
+    label.className = "bit-imm-notice-text";
+    label.textContent = entry ? text + " ·" : text;
+    const parts = [label];
+    if (entry) {
+      const undo = document.createElement("button");
+      undo.type = "button";
+      undo.className = "bit-imm-undo";
+      undo.textContent = tr("imm.undo");
+      undo.addEventListener("click", (e) => {
+        e.stopPropagation();
+        undoImmKnown(entry);
+      });
+      parts.push(undo);
+    }
+    immNoticeEl.replaceChildren(...parts);
+    immNoticeEntry = entry || null;
+    const shown = immNoticeEl.firstChild;
+    immNoticeTimer = setTimeout(() => {
+      if (immNoticeEl && immNoticeEl.firstChild === shown) clearImmNotice();
+    }, ms);
+  }
+
+  function showImmMarkError(res) {
+    // The background answers { ok: false } without an error when the feature is switched off.
+    const off = res && res.ok === false && !res.error && !res.lost;
+    showImmNotice(tr(off ? "imm.annotateOff" : "imm.markFailed"), null, IMM_NOTICE_ERROR_MS);
+  }
+
+  // Resolves with the background's answer, or { ok: false, lost: true } when there was none (the
+  // service worker was recycled and chrome.runtime.lastError is set).
+  function sendAnnotateMark(lang, key, known) {
+    return new Promise((resolve) => {
+      try {
+        chrome.runtime.sendMessage({ type: "BILI_ANNOTATE_MARK", lang: lang, key: key, known: known }, (res) => {
+          const lastError = chrome.runtime && chrome.runtime.lastError;
+          resolve(lastError || !res || typeof res !== "object" ? { ok: false, lost: true } : res);
+        });
+      } catch (_) {
+        resolve({ ok: false, lost: true });
+      }
+    });
+  }
+
+  async function markImmKnown(note) {
+    const id = note.lang + "|" + note.key;
+    closeImmNoteAction();
+    if (immPendingMarks.has(id)) return;
+    immPendingMarks.add(id);
+    const gen = immGen;
+    const res = await sendAnnotateMark(note.lang, note.key, true);
+    immPendingMarks.delete(id);
+    if (gen !== immGen || !immActive) return;
+    if (!res || res.ok !== true) {
+      showImmMarkError(res);
+      return;
+    }
+    immKnownKeys[note.lang].add(note.key);
+    removeImmNotesFor(note.lang, note.key);
+    showImmNotice(tr("imm.marked", note.w), { lang: note.lang, key: note.key }, IMM_NOTICE_UNDO_MS);
+  }
+
+  async function undoImmKnown(entry) {
+    const id = entry.lang + "|" + entry.key;
+    if (immPendingMarks.has(id)) return;
+    immPendingMarks.add(id);
+    const gen = immGen;
+    const res = await sendAnnotateMark(entry.lang, entry.key, false);
+    immPendingMarks.delete(id);
+    if (gen !== immGen || !immActive) return;
+    if (!res || res.ok !== true) {
+      showImmMarkError(res);
+      return;
+    }
+    immKnownKeys[entry.lang].delete(entry.key);
+    restoreImmNotesFor(entry.lang, entry.key);
+    if (immNoticeEntry === entry) clearImmNotice();
+  }
+
+  // Another tab marked words as known: their labels leave this page too. Words that tab took back are
+  // not put back here.
+  function onAnnotateKnownChanged(change) {
+    if (!immActive || !immAnnotate || !change || !change.newValue || typeof change.newValue !== "object") return;
+    const before = change.oldValue && typeof change.oldValue === "object" ? change.oldValue : {};
+    for (const lang of IMM_ANNOTATE_LANGS) {
+      const list = Array.isArray(change.newValue[lang]) ? change.newValue[lang] : [];
+      const old = new Set(Array.isArray(before[lang]) ? before[lang] : []);
+      for (const key of list) {
+        if (typeof key !== "string" || old.has(key)) continue;
+        immKnownKeys[lang].add(key);
+        removeImmNotesFor(lang, key);
+      }
+    }
+  }
+
   // Streaming text waits for the next frame and only the newest text of a paragraph is drawn;
   // the final text is drawn at once.
   function applyImmSegmentText(rec, text, isFinal) {
@@ -2311,7 +2609,13 @@
     immInFlight++;
     syncImmBar();
 
-    const items = batch.map((r) => r.source);
+    const annotateMode = immAnnotate;
+    const items = annotateMode
+      ? batch.map((r) => ({
+          text: r.source,
+          lang: (r.el.closest("[lang]") && r.el.closest("[lang]").getAttribute("lang")) || document.documentElement.lang || ""
+        }))
+      : batch.map((r) => r.source);
     let finished = false;
 
     const finalizeBatch = (res) => {
@@ -2321,6 +2625,7 @@
 
       if (!immActive) return;
       const segs = (res && res.segments) || {};
+      const notes = annotateMode && res && res.ok && res.notes && typeof res.notes === "object" ? res.notes : {};
       if (res && res.model) immResolvedModel = res.model;
 
       for (let i = 0; i < batch.length; i++) {
@@ -2328,7 +2633,14 @@
         // Dropped by a restart: its paragraph is no longer counted.
         if (immRecords.get(rec.el) !== rec) continue;
         const txt = segs[i];
-        if (res && res.ok && txt) {
+        if (Array.isArray(notes[i])) {
+          cancelFrameJob(rec);
+          applyImmNotes(rec, notes[i]);
+          if (rec.state !== "done") {
+            rec.state = "done";
+            immDoneCount++;
+          }
+        } else if (res && res.ok && txt) {
           applyImmSegmentText(rec, txt, true);
           if (rec.state !== "done") {
             rec.state = "done";
@@ -2349,7 +2661,7 @@
 
     if (chrome && chrome.runtime && typeof chrome.runtime.connect === "function") {
       try {
-        const port = chrome.runtime.connect({ name: "bili-immersive-stream" });
+        const port = chrome.runtime.connect({ name: annotateMode ? "bili-annotate-stream" : "bili-immersive-stream" });
         immActivePorts.add(port);
         port.onMessage.addListener((msg) => {
           if (!immActive || !msg) return;
@@ -2370,11 +2682,23 @@
             finalizeBatch({ ok: false, status: 0 });
           }
         });
-        port.postMessage({
-          type: "START_IMMERSIVE_BATCH",
-          items: items,
-          modelOverride: immModelOverride
-        });
+        if (annotateMode) {
+          port.postMessage({
+            type: "START_ANNOTATE_BATCH",
+            items: items,
+            exclude: {
+              zh: Array.from(immAnnotatedKeys.zh),
+              en: Array.from(immAnnotatedKeys.en),
+              es: Array.from(immAnnotatedKeys.es)
+            }
+          });
+        } else {
+          port.postMessage({
+            type: "START_IMMERSIVE_BATCH",
+            items: items,
+            modelOverride: immModelOverride
+          });
+        }
         return;
       } catch (_) {}
     }
@@ -2409,6 +2733,13 @@
     immTotalCount = 0;
     immDoneCount = 0;
     immRecords.clear();
+    immGen++;
+    immAnnotatedKeys = newImmKeySets();
+    immKnownKeys = newImmKeySets();
+    closeImmNoteAction(); // also removes its document listeners
+    immStash.clear();
+    immPendingMarks.clear();
+    clearImmNotice();
 
     document.querySelectorAll(".bit-imm-block[data-bit-imm]").forEach((el) => el.remove());
     document.querySelectorAll("[data-bit-imm-host]").forEach((el) => {
@@ -2483,6 +2814,8 @@
   function startImmersivePage() {
     if (immActive) return;
     immActive = true;
+    immAnnotate = false;
+    immAnnotateAvail = false;
     ensureImmBar();
     immBar.setAttribute("data-open", "");
     syncImmModeUi();
@@ -2502,6 +2835,11 @@
             if (!immModelSwitch) immModelOverride = "";
             if (!immModelOverride && res.immersiveModel) immResolvedModel = res.immersiveModel;
             if (res.target) immTargetLang = res.target;
+            immAnnotateAvail = res.annotate === true;
+            immAnnotate = immAnnotateAvail;
+            if (immAnnotate) immViewMode = "bilingual";
+            syncImmModeUi();
+            syncImmBar();
           }
           boot();
         });
@@ -2565,6 +2903,17 @@
         if (area !== "sync" || !changes.uiLang) return;
         applyUiLang(changes.uiLang.newValue);
         window.__biliIndexTranslateLang = uiLang;
+      });
+    } catch (_) {}
+  }
+
+  // The words marked as known live in chrome.storage.local and only the background writes them; this
+  // page learns about changes (made in any tab) from the event.
+  if (chrome && chrome.storage && chrome.storage.onChanged) {
+    try {
+      chrome.storage.onChanged.addListener((changes, area) => {
+        if (area !== "local" || !changes || !changes.annotateKnown) return;
+        onAnnotateKnownChanged(changes.annotateKnown);
       });
     } catch (_) {}
   }

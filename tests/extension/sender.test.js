@@ -197,3 +197,64 @@ test("端口: 来自标签页的端口照常工作", async () => {
   assert.ok(p.sent.some((m) => m.type === "DONE" && m.ok === true), JSON.stringify(p.sent));
   assert.ok(fetches >= 1);
 });
+
+// ---- 只注释生词: 新消息和新端口 ----
+
+const ANNOTATE_EXT_ONLY = ["BILI_ANNOTATE_REMOVE", "BILI_ANNOTATE_CLEAR", "BILI_ANNOTATE_LIST"];
+const ANNOTATE_TAB_ONLY = ["BILI_ANNOTATE_MARK"];
+
+test("注释消息: CLEAR 和 LIST 只接受扩展页面, MARK 只接受标签页, 被拒绝时没有副作用", async () => {
+  for (const type of ANNOTATE_EXT_ONLY) {
+    await assertAccepted(type, EXT_PAGE);
+    await assertRejected(type, TAB_SCRIPT);
+  }
+  for (const type of ANNOTATE_TAB_ONLY) {
+    await assertAccepted(type, TAB_SCRIPT);
+    await assertRejected(type, EXT_PAGE);
+  }
+});
+
+test("注释消息: sender.id 不是本扩展时被拒绝", async () => {
+  const foreignPage = { id: "other-id", url: "chrome-extension://ext-id/options.html" };
+  const foreignTab = { id: "other-id", url: "https://www.bilibili.com/", tab: { id: 5, windowId: 9 } };
+  const noId = { url: "chrome-extension://ext-id/options.html", tab: { id: 5, windowId: 9 } };
+  for (const type of [...ANNOTATE_EXT_ONLY, ...ANNOTATE_TAB_ONLY]) {
+    for (const sender of [foreignPage, foreignTab, noId, undefined]) await assertRejected(type, sender);
+  }
+  await assertRejected("BILI_ANNOTATE_CLEAR", { id: "ext-id", url: "https://evil.example/" });
+  await assertRejected("BILI_ANNOTATE_MARK", { id: "ext-id", url: "https://x/", tab: {} });
+});
+
+test("bili-annotate-stream 端口: 非标签页的来源被断开, 标签页照常工作", async () => {
+  const annotatePort = (sender) => {
+    const p = {
+      name: "bili-annotate-stream",
+      sender,
+      sent: [],
+      disconnected: false,
+      onMessage: { addListener: (fn) => (p.receive = fn) },
+      onDisconnect: { addListener: (fn) => (p.close = fn) },
+      postMessage: (m) => p.sent.push(m),
+      disconnect: () => (p.disconnected = true)
+    };
+    return p;
+  };
+  for (const sender of [EXT_PAGE, { ...TAB_SCRIPT, id: "other-id" }, { id: "ext-id", tab: {} }, undefined]) {
+    resetCounters();
+    const p = annotatePort(sender);
+    connectListener(p);
+    assert.equal(p.disconnected, true);
+    assert.equal(p.receive, undefined);
+    await new Promise((r) => setTimeout(r, 20));
+    assert.deepEqual([reads, writes, fetches, p.sent.length], [0, 0, 0, 0]);
+  }
+
+  resetCounters();
+  const p = annotatePort(TAB_SCRIPT);
+  connectListener(p);
+  assert.equal(p.disconnected, false);
+  p.receive({ type: "START_ANNOTATE_BATCH", items: [{ text: "hello annotate port", lang: "en" }], exclude: { zh: [], en: [], es: [] } });
+  for (let i = 0; i < 200 && !p.sent.some((m) => m.type === "BATCH_DONE"); i++) await new Promise((r) => setTimeout(r, 5));
+  assert.ok(p.sent.some((m) => m.type === "BATCH_DONE" && m.ok === true), JSON.stringify(p.sent));
+  assert.ok(fetches >= 1);
+});
