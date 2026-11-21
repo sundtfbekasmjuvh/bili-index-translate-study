@@ -29,6 +29,10 @@
   post to the UI thread.
 * **Thread pool**: HTTP via one long-lived `HttpClient` (`SocketsHttpHandler`, pooled connection
   lifetime 10 min), concurrency bounded to 2, 20 s timeout per request, per-request `CancellationTokenSource`.
+  For a streamed reply (study cards, image translation) the timeout is an idle limit: it starts again
+  with every line that arrives. A failure the service reports inside the stream is raised as an error.
+  Streamed image-translation deltas reach the popup through `LatestValueRelay`: the UI thread is given
+  the newest delta once it has handled pending rendering and input, and the deltas in between are skipped.
 
 ## State model
 

@@ -25,6 +25,13 @@ const bg = require("../../bili-index-translate/background.js");
 
 let seq = 0;
 const unique = (label) => label + " " + ++seq;
+
+// 现在遇到限流或临时错误会自动重试: 把等待缩到几毫秒, 测试结束后恢复原值.
+function fastRetry(t) {
+  const saved = { ...bg.RETRY_POLICY };
+  Object.assign(bg.RETRY_POLICY, { baseDelayMs: 1, maxDelayMs: 5 });
+  t.after(() => Object.assign(bg.RETRY_POLICY, saved));
+}
 const tr = (text) => "译" + text;
 
 // DeepL 官方接口的形状: 文本以数组发送, 译文在 translations[].text.
@@ -329,7 +336,8 @@ test("streamImmersiveBatch: {texts} 模板把一批段落作为数组一次发�
   assert.equal(calls.length, 2);
 });
 
-test("streamImmersiveBatch: {text} 模板每段请求一次, 个别失败时保留其余译文", async () => {
+test("streamImmersiveBatch: {text} 模板每段请求一次, 个别失败时保留其余译文", async (t) => {
+  fastRetry(t);
   reset({ customBody: '{"q": "{text}", "to": "{targetLangLower}"}', customResultPath: "out", customErrorPath: "error" });
   const [a, b, c] = [unique("one"), unique("two"), unique("three")];
   respond = (call) => {
@@ -338,19 +346,21 @@ test("streamImmersiveBatch: {text} 模板每段请求一次, 个别失败时保�
   };
   const sizes = [];
   const res = await bg.streamImmersiveBatch([a, b, c], "", (p) => sizes.push(Object.keys(p.segments).length));
-  assert.deepEqual(res, batchOk({ 0: tr(a), 2: tr(c) }));
+  // 429 重试用尽 (共 3 次) 后停止, 不再发 c.
+  assert.deepEqual(res, batchOk({ 0: tr(a) }));
   assert.deepEqual(calls.map((x) => JSON.parse(x.body)), [
     { q: a, to: "zh" },
     { q: b, to: "zh" },
-    { q: c, to: "zh" }
+    { q: b, to: "zh" },
+    { q: b, to: "zh" }
   ]);
-  assert.deepEqual(sizes, [1, 2]);
+  assert.deepEqual(sizes, [1]);
 
   calls.length = 0;
   respond = () => jsonResponse({ error: "Slowdown" }, 429);
   const failed = await bg.streamImmersiveBatch([unique("x"), unique("y")], "", () => assert.fail("no progress expected"));
   assert.deepEqual(failed, { ok: false, status: 429, body: "Slowdown", via: "direct" });
-  assert.equal(calls.length, 2);
+  assert.equal(calls.length, 3);
 });
 
 test("streamImmersiveBatch: 批量请求失败时不再逐段重发; 返回数量对不上时改为逐段请求并记住该接口", async () => {

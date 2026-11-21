@@ -5,6 +5,7 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read
@@ -29,7 +30,7 @@ jobs:
 
       - name: Syntax check
         run: |
-          for f in bili-index-translate/*.js bili-study-sandbox/*.js tests/extension/*.js tests/support/*.js tests/e2e/*.js; do
+          for f in bili-index-translate/*.js bili-study-sandbox/*.js tests/extension/*.js tests/support/*.js tests/e2e/*.js tests/perf/*.js; do
             echo "node --check $f"
             node --check "$f"
           done
@@ -38,11 +39,12 @@ jobs:
         run: |
           node -e '
             const fs = require("fs");
-            const manifest = JSON.parse(fs.readFileSync("bili-index-translate/manifest.json", "utf8"));
-            const rules = JSON.parse(fs.readFileSync("bili-index-translate/dnr_rules.json", "utf8"));
+            const dir = "bili-index-translate/";
+            const manifest = JSON.parse(fs.readFileSync(dir + "manifest.json", "utf8"));
             if (manifest.manifest_version !== 3) throw new Error("manifest_version must be 3");
-            if (!Array.isArray(rules) || rules.length === 0) throw new Error("dnr_rules.json must be a non-empty array");
-            console.log("manifest", manifest.version, "with", rules.length, "DNR rule(s)");
+            const locales = fs.readdirSync(dir + "_locales");
+            for (const locale of locales) JSON.parse(fs.readFileSync(dir + "_locales/" + locale + "/messages.json", "utf8"));
+            console.log("manifest", manifest.version, "with locales", locales.join(", "));
           '
 
       - name: Unit tests

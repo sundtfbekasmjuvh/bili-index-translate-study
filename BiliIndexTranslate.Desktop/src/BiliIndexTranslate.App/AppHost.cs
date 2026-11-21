@@ -715,6 +715,22 @@ internal sealed class AppHost : IDisposable
         ImageTranslationResult? ok = null;
         TranslationError? error = null;
 
+        // Deltas arrive faster than the popup can be laid out and placed. The popup is given the newest
+        // one after the pending rendering and input have been handled, and the ones in between are skipped.
+        var live = new LatestValueRelay<ImageTranslationDelta>(
+            deliver =>
+            {
+                if (!_disposed) _dispatcher.BeginInvoke(DispatcherPriority.Background, deliver);
+            },
+            delta =>
+            {
+                if (seq != _visionSeq || !_visionActive) return;
+                var liveSnap = string.IsNullOrWhiteSpace(delta.ExtractedSourceText)
+                    ? baseSnapshot
+                    : baseSnapshot with { Text = delta.ExtractedSourceText };
+                _popup.ShowVisionTranslation(liveSnap, delta.Translation, Loc.T("Vision_Streaming", delta.Model));
+            });
+
         try
         {
             ok = await _visionService.TranslateImageAsync(
@@ -722,15 +738,7 @@ internal sealed class AppHost : IDisposable
                 cts.Token,
                 delta =>
                 {
-                    if (cts.IsCancellationRequested) return;
-                    Post(() =>
-                    {
-                        if (seq != _visionSeq || !_visionActive) return;
-                        var liveSnap = string.IsNullOrWhiteSpace(delta.ExtractedSourceText)
-                            ? baseSnapshot
-                            : baseSnapshot with { Text = delta.ExtractedSourceText };
-                        _popup.ShowVisionTranslation(liveSnap, delta.Translation, Loc.T("Vision_Streaming", delta.Model));
-                    });
+                    if (!cts.IsCancellationRequested) live.Offer(delta);
                 }).ConfigureAwait(false);
         }
         catch (TranslationException ex)
@@ -750,6 +758,8 @@ internal sealed class AppHost : IDisposable
 
         Post(() =>
         {
+            // The result below is final; a delta that is still waiting must not be drawn over it.
+            live.Clear();
             if (seq != _visionSeq || !_visionActive) return;
 
             if (ok is not null)

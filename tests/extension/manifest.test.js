@@ -43,14 +43,19 @@ function decodePng(file) {
   };
 }
 
-test("manifest 引用的脚本, 样式, 选项页和规则文件都存在", () => {
+test("manifest 引用的脚本, 样式和选项页都存在", () => {
   const files = [
     manifest.background.service_worker,
     manifest.options_ui.page,
-    ...manifest.content_scripts.flatMap((c) => [...c.js, ...c.css]),
-    ...manifest.declarative_net_request.rule_resources.map((r) => r.path)
+    ...manifest.content_scripts.flatMap((c) => [...c.js, ...c.css])
   ];
   for (const file of files) assert.ok(fs.existsSync(path.join(EXT, file)), file);
+});
+
+test("改写请求头的规则不写在 manifest 里 (那样会连网页自己的请求一起改), 由后台在运行时登记", () => {
+  assert.equal(manifest.declarative_net_request, undefined);
+  assert.ok(manifest.permissions.includes("declarativeNetRequest"));
+  assert.equal(fs.existsSync(path.join(EXT, "dnr_rules.json")), false);
 });
 
 test("扩展图标: 16/32/48/128 四个尺寸齐全, 工具栏图标复用其中的 16 和 32", () => {

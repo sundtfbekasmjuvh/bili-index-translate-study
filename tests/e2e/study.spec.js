@@ -110,7 +110,8 @@ test.describe("学习卡片", () => {
   });
 
   test("上游返回错误时卡片显示 HTTP 状态, 点重试后恢复", async ({ page, upstream }) => {
-    upstream.override("study", { status: 503, body: "busy" });
+    // 503 会自动重试 (共 3 次), 所以连续失败 3 次才显示错误; 点重试是第 4 次请求.
+    upstream.override("study", { status: 503, body: "busy", times: 3 });
     await translateSelection(page, "#p-word");
     const study = page.locator("#bili-index-study-panel");
     await page.keyboard.press("s");
@@ -118,7 +119,7 @@ test.describe("学习卡片", () => {
     await expect(study.locator(".bit-error")).toContainText("HTTP 503");
     await study.locator(".bit-retry-btn").click();
     await expect(study.locator(".bit-term")).toHaveText("ephemeral");
-    expect(requestsOf(upstream, "study")).toHaveLength(2);
+    expect(requestsOf(upstream, "study")).toHaveLength(4);
   });
 
   test("Esc 关闭两个面板并断开学习卡流", async ({ page, upstream }) => {

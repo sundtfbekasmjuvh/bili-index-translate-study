@@ -150,6 +150,22 @@ may not open the medium-integrity `dotnet` process that started it. On this mach
 reproduces with the default output directory and all tests pass with the output elsewhere. Point the
 output somewhere else, for example `dotnet test … -o %TEMP%\bit-tests`.
 
+## Checked on Linux (2026-11-15)
+
+Arch Linux, .NET SDK 8.0.428, from the 1.5.0 sources plus the streaming changes (idle timeout for
+streamed replies, errors reported inside a stream, `LatestValueRelay` for image-translation deltas).
+The app cannot run on Linux, so this covers compilation and the platform-independent core only.
+
+| Check | Result |
+|---|---|
+| `dotnet build BiliIndexTranslate.sln -c Release -warnaserror` (the app project sets `EnableWindowsTargeting`) | 0 errors, 0 warnings |
+| `dotnet test tests/BiliIndexTranslate.Core.Tests -c Release` | **266 passed, 0 failed** (the 253 above plus `StreamingTests.cs`: stream deltas and in-stream errors, the idle timeout over a real socket, `LatestValueRelay`; and `SseLineTests.cs`: SSE line reading with CRLF, no space after `data:`, blank and comment lines, `[DONE]`) |
+
+Not exercised on Windows yet: `AppHost` now hands streamed image-translation deltas to the popup
+through `LatestValueRelay` at `DispatcherPriority.Background`. The relay itself is unit-tested; that
+the popup still updates smoothly while an image translation streams, and that the final result is
+never overwritten by a late delta, should be confirmed with scenario walkthroughs on Windows.
+
 ## Scenarios
 
 Status key: ✅ verified on Windows · ◐ partial · ❌ failed · ⬜ not tested yet.

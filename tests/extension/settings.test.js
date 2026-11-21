@@ -94,3 +94,58 @@ test("写入 local 失败时不删除同步副本, 错误上报, 下次重试成
   assert.deepEqual(sync, {});
   assert.deepEqual(local, { key: "sk-keep" });
 });
+
+// 安装或更新时补默认设置: 只写还没存的项, 已存的项一律不写回.
+test("安装时补默认设置: 全新安装写入全部默认值; 已存的项保持原值, 不被写回", async () => {
+  reset();
+  const filled = await bg.fillMissingSyncDefaults();
+  assert.equal(sync.base, "https://index-translate.bilibili.com/v1");
+  assert.equal(sync.target, "中文");
+  assert.deepEqual(Object.keys(filled).sort(), Object.keys(sync).sort());
+
+  reset({ base: "http://127.0.0.1:9/v1", target: "English" });
+  const writes = [];
+  const realSet = chrome.storage.sync.set;
+  chrome.storage.sync.set = async (items) => {
+    writes.push(items);
+    return realSet(items);
+  };
+  try {
+    await bg.fillMissingSyncDefaults();
+  } finally {
+    chrome.storage.sync.set = realSet;
+  }
+  assert.equal(sync.base, "http://127.0.0.1:9/v1");
+  assert.equal(sync.target, "English");
+  assert.ok(writes.every((w) => !("base" in w) && !("target" in w)), JSON.stringify(writes));
+
+  // 什么都不缺时一次也不写.
+  writes.length = 0;
+  chrome.storage.sync.set = async (items) => {
+    writes.push(items);
+    return realSet(items);
+  };
+  try {
+    await bg.fillMissingSyncDefaults();
+  } finally {
+    chrome.storage.sync.set = realSet;
+  }
+  assert.deepEqual(writes, []);
+});
+
+test("安装时补默认设置: 读和写之间别处保存的值不会被旧值盖掉", async () => {
+  reset({ base: "https://index-translate.bilibili.com/v1" });
+  const realGet = chrome.storage.sync.get;
+  // 模拟竞态: 刚读完, 选项页 (或测试) 就保存了新的地址.
+  chrome.storage.sync.get = async (keys) => {
+    const out = await realGet(keys);
+    sync.base = "http://127.0.0.1:9/v1";
+    return out;
+  };
+  try {
+    await bg.fillMissingSyncDefaults();
+  } finally {
+    chrome.storage.sync.get = realGet;
+  }
+  assert.equal(sync.base, "http://127.0.0.1:9/v1");
+});

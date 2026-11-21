@@ -62,6 +62,45 @@
   let lastContextTarget = null;
   let lastContextPoint = null;
 
+  // Streamed text is drawn at most once per animation frame: deltas arrive faster than the screen
+  // refreshes, and every write to a panel is followed by a layout to position it. A job is keyed by
+  // what it draws, so a newer one replaces an older one that has not been drawn yet.
+  const MAIN_FRAME_JOB = "main-panel";
+  const frameJobs = new Map();
+  let frameHandle = 0;
+
+  function runFrameJobs() {
+    frameHandle = 0;
+    const jobs = Array.from(frameJobs.values());
+    frameJobs.clear();
+    for (const job of jobs) job();
+  }
+
+  function drawOnNextFrame(key, job) {
+    frameJobs.set(key, job);
+    if (!frameHandle) frameHandle = requestAnimationFrame(runFrameJobs);
+  }
+
+  function cancelFrameJob(key) {
+    frameJobs.delete(key);
+  }
+
+  // Replaces the text of an element that holds nothing else. An existing text node is updated in
+  // place, which leaves the element's child list alone (no node churn, no childList mutation).
+  function setOnlyText(el, text) {
+    const only = el.firstChild;
+    if (only && only.nodeType === 3 && !only.nextSibling) {
+      if (only.nodeValue !== text) only.nodeValue = text;
+    } else {
+      el.textContent = text;
+    }
+  }
+
+  function setPx(el, prop, value) {
+    const next = value + "px";
+    if (el.style[prop] !== next) el.style[prop] = next;
+  }
+
   function makeIcon(kind) {
     const NS = "http://www.w3.org/2000/svg";
     const svg = document.createElementNS(NS, "svg");
@@ -244,6 +283,38 @@
     applyScale(textScale + (e.deltaY < 0 ? 0.05 : -0.05));
   }
 
+  // ---- Accessibility helpers ---------------------------------------------------------------
+
+  // Icon-only buttons get the text of their tooltip as accessible name, unless they already have one.
+  function nameFromTitle(btn) {
+    if (btn && btn.title && !btn.hasAttribute("aria-label")) btn.setAttribute("aria-label", btn.title);
+  }
+
+  // Opening a panel never moves focus; the element that had focus is remembered so that closing the
+  // panel can give focus back if it was inside the panel.
+  let mainReturnFocusEl = null;
+  let studyReturnFocusEl = null;
+
+  function rememberFocus(owner) {
+    const a = document.activeElement;
+    if (!a || a === document.body || a === document.documentElement) return null;
+    if (owner && owner.contains(a)) return null;
+    return a;
+  }
+
+  function restoreFocus(owner, target) {
+    const a = document.activeElement;
+    if (!owner || !a || !owner.contains(a)) return;
+    if (target && document.documentElement.contains(target) && typeof target.focus === "function") {
+      try { target.focus({ preventScroll: true }); } catch (_) {}
+    }
+  }
+
+  // aria-busy is set only where the panel changes state, never in per-frame drawing.
+  function setBusy(el, busy) {
+    if (el) el.setAttribute("aria-busy", busy ? "true" : "false");
+  }
+
   // ---- Primary Translation Panel -----------------------------------------------------------
 
   function ensurePanel() {
@@ -274,6 +345,7 @@
     mainSpeakBtn.className = "bit-icon-btn";
     mainSpeakBtn.type = "button";
     mainSpeakBtn.title = tr("panel.speak");
+    nameFromTitle(mainSpeakBtn);
     mainSpeakBtn.appendChild(makeIcon("speaker"));
     mainSpeakBtn.addEventListener("click", (e) => {
       e.stopPropagation();
@@ -284,6 +356,7 @@
     mainCopyBtn.className = "bit-icon-btn";
     mainCopyBtn.type = "button";
     mainCopyBtn.title = tr("panel.copy");
+    nameFromTitle(mainCopyBtn);
     mainCopyBtn.appendChild(makeIcon("copy"));
     mainCopyBtn.addEventListener("click", (e) => {
       e.stopPropagation();
@@ -322,6 +395,8 @@
 
     bodyEl = document.createElement("div");
     bodyEl.className = "bit-body";
+    bodyEl.setAttribute("aria-live", "polite");
+    bodyEl.setAttribute("aria-busy", "false");
 
     footEl = document.createElement("div");
     footEl.className = "bit-foot";
@@ -405,6 +480,7 @@
     studyCopyBtn.className = "bit-icon-btn";
     studyCopyBtn.type = "button";
     studyCopyBtn.title = tr("study.copyTitle");
+    nameFromTitle(studyCopyBtn);
     studyCopyBtn.appendChild(makeIcon("copy"));
     studyCopyBtn.addEventListener("click", (e) => {
       e.stopPropagation();
@@ -432,6 +508,8 @@
 
     studyBodyEl = document.createElement("div");
     studyBodyEl.className = "bit-study-body";
+    studyBodyEl.setAttribute("aria-live", "polite");
+    studyBodyEl.setAttribute("aria-busy", "false");
 
     const foot = document.createElement("div");
     foot.className = "bit-study-foot";
@@ -611,6 +689,16 @@
     }, 1500);
   }
 
+  // The other end of a port closes it only when it goes away: the background worker was stopped or
+  // the extension was reloaded. Without this the panel would wait for a final message forever.
+  function onStreamLost(port, report) {
+    if (!port.onDisconnect || typeof port.onDisconnect.addListener !== "function") return;
+    port.onDisconnect.addListener(() => {
+      void (chrome.runtime && chrome.runtime.lastError);
+      report();
+    });
+  }
+
   function disconnectTranslateStream() {
     if (translatePort) {
       try { translatePort.disconnect(); } catch (_) {}
@@ -633,6 +721,9 @@
     studyDragged = false;
     if (studyTriggerBtn) studyTriggerBtn.removeAttribute("data-active");
     if (studyPanel) {
+      restoreFocus(studyPanel, studyReturnFocusEl);
+      studyReturnFocusEl = null;
+      setBusy(studyBodyEl, false);
       studyPanel.removeAttribute("data-open");
       if (studyBodyEl) studyBodyEl.textContent = "";
       if (studyFootLeftEl) {
@@ -645,6 +736,7 @@
 
   function hideAll() {
     reqSeq++;
+    cancelFrameJob(MAIN_FRAME_JOB);
     disconnectTranslateStream();
     hideStudyCard();
     currentSourceText = "";
@@ -652,6 +744,9 @@
     currentAnchor = null;
     dragged = false;
     if (panel) {
+      restoreFocus(panel, mainReturnFocusEl);
+      mainReturnFocusEl = null;
+      setBusy(bodyEl, false);
       panel.removeAttribute("data-open");
       if (bodyEl) bodyEl.textContent = "";
       if (footEl) footEl.textContent = "";
@@ -661,7 +756,7 @@
   function placePanel(anchor) {
     const vw = window.innerWidth;
     const vh = window.innerHeight;
-    panel.style.maxWidth = Math.min(390, vw - VIEWPORT_GAP * 2) + "px";
+    setPx(panel, "maxWidth", Math.min(390, vw - VIEWPORT_GAP * 2));
 
     const w = panel.offsetWidth;
     const h = panel.offsetHeight;
@@ -673,8 +768,8 @@
     top = clamp(top, VIEWPORT_GAP, vh - h - VIEWPORT_GAP);
     const left = clamp(anchor.left, VIEWPORT_GAP, vw - w - VIEWPORT_GAP);
 
-    panel.style.left = Math.round(left) + "px";
-    panel.style.top = Math.round(top) + "px";
+    setPx(panel, "left", Math.round(left));
+    setPx(panel, "top", Math.round(top));
 
     if (isStudyOpen() && !studyDragged) {
       placeStudyPanel();
@@ -685,7 +780,7 @@
     if (!studyPanel || !isStudyOpen()) return;
     const vw = window.innerWidth;
     const vh = window.innerHeight;
-    studyPanel.style.maxWidth = Math.min(404, vw - VIEWPORT_GAP * 2) + "px";
+    setPx(studyPanel, "maxWidth", Math.min(404, vw - VIEWPORT_GAP * 2));
 
     const sw = studyPanel.offsetWidth;
     const sh = studyPanel.offsetHeight;
@@ -710,8 +805,8 @@
 
       left = clamp(left, VIEWPORT_GAP, vw - sw - VIEWPORT_GAP);
       top = clamp(top, VIEWPORT_GAP, vh - sh - VIEWPORT_GAP);
-      studyPanel.style.left = Math.round(left) + "px";
-      studyPanel.style.top = Math.round(top) + "px";
+      setPx(studyPanel, "left", Math.round(left));
+      setPx(studyPanel, "top", Math.round(top));
       return;
     }
 
@@ -722,8 +817,8 @@
     };
     const left = clamp(anchor.left, VIEWPORT_GAP, vw - sw - VIEWPORT_GAP);
     const top = clamp(anchor.bottom + 8, VIEWPORT_GAP, vh - sh - VIEWPORT_GAP);
-    studyPanel.style.left = Math.round(left) + "px";
-    studyPanel.style.top = Math.round(top) + "px";
+    setPx(studyPanel, "left", Math.round(left));
+    setPx(studyPanel, "top", Math.round(top));
   }
 
   function syncSourceButtons() {
@@ -740,15 +835,18 @@
 
   function showLoading(anchor, isVision) {
     ensurePanel();
+    cancelFrameJob(MAIN_FRAME_JOB);
     dragged = false;
     currentTranslatedText = "";
     syncSourceButtons();
+    setBusy(bodyEl, true);
     bodyEl.innerHTML = "";
     const loading = document.createElement("div");
     loading.className = "bit-loading";
     loading.textContent = tr(isVision ? "panel.visionLoading" : "panel.translating");
     bodyEl.appendChild(loading);
     footEl.textContent = "";
+    if (!isOpen()) mainReturnFocusEl = rememberFocus(panel);
     panel.setAttribute("data-open", "");
     placePanel(anchor);
   }
@@ -763,22 +861,30 @@
     return head + (res.body ? "\n" + res.body : "") + hint;
   }
 
-  function renderMainStreamingDelta(deltaRes, anchor) {
+  // seq is the request the delta belongs to; a delta of a request that was replaced or closed
+  // before its frame came is not drawn.
+  function renderMainStreamingDelta(deltaRes, anchor, seq) {
     currentTranslatedText = deltaRes.text || "";
     if (deltaRes.sourceText && !currentSourceText) {
       currentSourceText = deltaRes.sourceText;
       syncSourceButtons();
     }
-    bodyEl.textContent = currentTranslatedText;
-    const streamLabel = " \u00b7 " + tr(deltaRes.vision ? "panel.visionStreaming" : "panel.streaming");
-    footEl.textContent = (deltaRes.model || "") + streamLabel;
-    if (!dragged) placePanel(anchor);
+    drawOnNextFrame(MAIN_FRAME_JOB, () => {
+      if (seq !== reqSeq || !isOpen()) return;
+      setOnlyText(bodyEl, currentTranslatedText);
+      const streamLabel = " \u00b7 " + tr(deltaRes.vision ? "panel.visionStreaming" : "panel.streaming");
+      setOnlyText(footEl, (deltaRes.model || "") + streamLabel);
+      if (!dragged) placePanel(anchor);
+    });
   }
 
   function showResult(res, anchor) {
     // Image fetch and capture errors can arrive while no panel is open, so make sure it is shown.
     ensurePanel();
+    cancelFrameJob(MAIN_FRAME_JOB);
+    if (!isOpen()) mainReturnFocusEl = rememberFocus(panel);
     panel.setAttribute("data-open", "");
+    setBusy(bodyEl, false);
     if (res && res.ok) {
       currentTranslatedText = res.text || "";
       if (res.sourceText) {
@@ -864,6 +970,7 @@
     studyQuizBtn.removeAttribute("data-active");
     studyQuizBtn.textContent = tr("study.quiz");
 
+    setBusy(studyBodyEl, true);
     studyBodyEl.textContent = "";
     studyBodyEl.appendChild(buildSkeletonLoader());
 
@@ -871,6 +978,7 @@
       tr(preferFlagshipStudyModel ? "study.loadingFlagship" : "study.loadingBalanced"),
       tr("study.noTrace")
     );
+    if (!isStudyOpen()) studyReturnFocusEl = rememberFocus(studyPanel);
     studyPanel.setAttribute("data-open", "");
     if (studyTriggerBtn) studyTriggerBtn.setAttribute("data-active", "");
     placeStudyPanel();
@@ -878,6 +986,7 @@
 
   function showStudyError(res) {
     ensureStudyPanel();
+    setBusy(studyBodyEl, false);
     studyBodyEl.textContent = "";
 
     const err = document.createElement("div");
@@ -940,6 +1049,7 @@
     prevBtn.className = "bit-step-btn";
     prevBtn.type = "button";
     prevBtn.title = tr("study.prev");
+    nameFromTitle(prevBtn);
     prevBtn.textContent = "\u2039";
     prevBtn.addEventListener("click", () => stepCard(-1));
 
@@ -947,6 +1057,7 @@
     nextBtn.className = "bit-step-btn";
     nextBtn.type = "button";
     nextBtn.title = tr("study.next");
+    nameFromTitle(nextBtn);
     nextBtn.textContent = "\u203a";
     nextBtn.addEventListener("click", () => stepCard(1));
 
@@ -1212,6 +1323,7 @@
         exTts.className = "bit-tts-mini";
         exTts.type = "button";
         exTts.title = tr("study.exampleSpeak");
+        nameFromTitle(exTts);
         exTts.appendChild(makeIcon("speaker"));
         exTts.addEventListener("click", () => speakText(card.example.source, deck.sourceLang, false));
 
@@ -1280,6 +1392,7 @@
           quizMode: prevQuiz,
           revealedIndices: prevRev
         };
+        setBusy(studyBodyEl, false);
         renderStudyDeck(false);
       } else {
         showStudyError(msg);
@@ -1311,6 +1424,11 @@
         port.onMessage.addListener((msg) => {
           if (seq !== studyReqSeq) return;
           applyStudyMessage(msg, text, anchor);
+        });
+        onStreamLost(port, () => {
+          if (seq !== studyReqSeq || studyPort !== port) return;
+          studyPort = null;
+          showStudyError({ status: 0, body: tr("error.streamLost") });
         });
         port.postMessage({ type: "START_STUDY_STREAM", text: text, modelOverride: modelOverride });
         return;
@@ -1425,11 +1543,16 @@
         port.onMessage.addListener((msg) => {
           if (seq !== reqSeq || !msg) return;
           if (msg.type === "DELTA") {
-            renderMainStreamingDelta(msg, anchor);
+            renderMainStreamingDelta(msg, anchor, seq);
           } else if (msg.type === "DONE") {
             disconnectTranslateStream();
             showResult(msg, anchor);
           }
+        });
+        onStreamLost(port, () => {
+          if (seq !== reqSeq || translatePort !== port) return;
+          translatePort = null;
+          showResult({ ok: false, status: 0, body: tr("error.streamLost") }, anchor);
         });
         port.postMessage({ type: "START_TRANSLATE_STREAM", text: text });
         return;
@@ -1551,11 +1674,16 @@
         port.onMessage.addListener((msg) => {
           if (seq !== reqSeq || !msg) return;
           if (msg.type === "DELTA") {
-            renderMainStreamingDelta(msg, anchor);
+            renderMainStreamingDelta(msg, anchor, seq);
           } else if (msg.type === "DONE") {
             disconnectTranslateStream();
             showResult(msg, anchor);
           }
+        });
+        onStreamLost(port, () => {
+          if (seq !== reqSeq || translatePort !== port) return;
+          translatePort = null;
+          showResult({ ok: false, status: 0, body: tr("error.streamLost") }, anchor);
         });
         port.postMessage({ type: "START_IMAGE_STREAM", dataUrl: dataUrl });
         return;
@@ -1726,6 +1854,15 @@
   const IMM_MAX_CONCURRENCY = 2;
   const IMM_MAX_BATCH_ITEMS = 4;
   const IMM_MAX_BATCH_CHARS = 960;
+  const IMM_RESCAN_SETTLE_MS = 260;
+  const IMM_RESCAN_MAX_WAIT_MS = 2000;
+  // The browser re-checks every observed paragraph on each frame that scrolls or changes layout, so
+  // a page with thousands of paragraphs pays for all of them on every frame. Only this many waiting
+  // paragraphs, the ones nearest the viewport, are observed; the choice is renewed after scrolling.
+  const IMM_MAX_OBSERVED = 400;
+  const IMM_REOBSERVE_MS = 150;
+  // How often a translation the page removed is put back before the paragraph is left alone.
+  const IMM_MAX_RESTORES = 3;
 
   let immActive = false;
   let immViewMode = "bilingual"; // "bilingual" | "target-only"
@@ -1741,6 +1878,11 @@
   let immIntersectionObs = null;
   let immMutationObs = null;
   let immMutationTimer = null;
+  let immMutationSince = 0; // when the oldest change that still waits for a rescan was seen
+  let immObserved = new Set(); // elements the intersection observer is watching
+  let immObserveOverflow = false; // more paragraphs are waiting than are being observed
+  let immReobserveTimer = null;
+  const immChanged = new Set(); // records whose paragraph the page has modified since it was recorded
   let immTotalCount = 0;
   let immDoneCount = 0;
   let immInFlight = 0;
@@ -1792,6 +1934,7 @@
     closeBtn.className = "bit-imm-close";
     closeBtn.type = "button";
     closeBtn.title = tr("imm.closeTitle");
+    nameFromTitle(closeBtn);
     closeBtn.textContent = "\u00d7";
     closeBtn.addEventListener("click", (e) => {
       e.stopPropagation();
@@ -1942,19 +2085,135 @@
       immTotalCount++;
 
       const r = el.getBoundingClientRect();
-      if (r.bottom >= -120 && r.top <= vh + 260) {
-        immediate.push(rec);
-      } else {
-        immIntersectionObs.observe(el);
-      }
+      if (r.bottom >= -120 && r.top <= vh + 260) immediate.push(rec);
     }
 
     // Enqueue immediately visible viewport blocks in reading order
     for (const rec of immediate) {
       enqueueImmRecord(rec);
     }
+    refreshImmObserved();
     syncImmBar();
     pumpImmQueue();
+  }
+
+  // Observes the waiting paragraphs: all of them while there are few, otherwise the IMM_MAX_OBSERVED
+  // nearest the viewport. Paragraphs that are no longer chosen stop being observed.
+  function refreshImmObserved() {
+    if (!immActive || !immIntersectionObs) return;
+    let waiting = [];
+    for (const rec of immRecords.values()) {
+      if (rec.state === "observed") waiting.push(rec);
+    }
+
+    immObserveOverflow = waiting.length > IMM_MAX_OBSERVED;
+    if (immObserveOverflow) {
+      const mid = (window.innerHeight || 800) / 2;
+      for (const rec of waiting) {
+        const r = rec.el.getBoundingClientRect();
+        // Hidden since it was recorded: it cannot come into view by scrolling, so it goes last.
+        if (r.width === 0 && r.height === 0) rec.distance = Infinity;
+        else rec.distance = r.bottom < mid ? mid - r.bottom : r.top > mid ? r.top - mid : 0;
+      }
+      waiting.sort((a, b) => a.distance - b.distance);
+      waiting = waiting.slice(0, IMM_MAX_OBSERVED);
+    }
+
+    const next = new Set();
+    for (const rec of waiting) next.add(rec.el);
+    for (const el of immObserved) {
+      if (!next.has(el)) immIntersectionObs.unobserve(el);
+    }
+    for (const el of next) {
+      if (!immObserved.has(el)) immIntersectionObs.observe(el);
+    }
+    immObserved = next;
+  }
+
+  // Scrolling (the page or a scrollable area in it) and resizing move other paragraphs near the
+  // viewport. This only matters while some waiting paragraphs are not observed.
+  function onImmViewportMoved() {
+    if (!immActive || !immObserveOverflow || immReobserveTimer) return;
+    immReobserveTimer = setTimeout(() => {
+      immReobserveTimer = null;
+      refreshImmObserved();
+    }, IMM_REOBSERVE_MS);
+  }
+
+  // Forgets a paragraph: it is no longer counted, observed, queued or drawn, and what was added to
+  // it is removed. A batch that is still translating it finds the record gone and skips it.
+  function dropImmRecord(rec) {
+    immRecords.delete(rec.el);
+    immChanged.delete(rec);
+    cancelFrameJob(rec);
+    if (immIntersectionObs && immObserved.delete(rec.el)) {
+      try { immIntersectionObs.unobserve(rec.el); } catch (_) {}
+    }
+    const queued = immQueue.indexOf(rec);
+    if (queued >= 0) immQueue.splice(queued, 1);
+    immTotalCount = Math.max(0, immTotalCount - 1);
+    if (rec.state === "done") immDoneCount = Math.max(0, immDoneCount - 1);
+    if (rec.span) rec.span.remove();
+    rec.el.removeAttribute("data-bit-imm-host");
+    rec.el.removeAttribute("data-bit-imm-ready");
+  }
+
+  // Paragraphs the page has removed since they were recorded (route changes, virtual lists). Their
+  // records would otherwise keep the detached nodes alive and stay in the total for as long as
+  // Alt+A is on.
+  function forgetDetachedImmRecords() {
+    for (const rec of Array.from(immRecords.values())) {
+      if (!rec.el.isConnected) dropImmRecord(rec);
+    }
+  }
+
+  // Paragraphs the page modified after they were recorded. Once such a paragraph has been left
+  // alone for the settle time: if its text is different, the record is dropped and the scan that
+  // follows records and translates it again; if only the translation is gone (the page rebuilt the
+  // paragraph with the same text), the translation is put back. Returns whether some paragraph is
+  // still being modified and needs another look.
+  function refreshChangedImmRecords() {
+    const now = performance.now();
+    let stillChanging = false;
+    for (const rec of Array.from(immChanged)) {
+      if (immRecords.get(rec.el) !== rec || !rec.el.isConnected) {
+        immChanged.delete(rec);
+        continue;
+      }
+      if (now - rec.changedAt < IMM_RESCAN_SETTLE_MS - 20) {
+        stillChanging = true;
+        continue;
+      }
+      immChanged.delete(rec);
+      if (extractBlockSourceText(rec.el) !== rec.source) {
+        dropImmRecord(rec);
+        continue;
+      }
+      const shown = rec.span && rec.el.contains(rec.span);
+      if (rec.state === "done" && rec.translation && !shown && (rec.restores || 0) < IMM_MAX_RESTORES) {
+        rec.restores = (rec.restores || 0) + 1;
+        rec.span = null;
+        drawImmSegment(rec, rec.translation, true);
+      }
+    }
+    return stillChanging;
+  }
+
+  // Waits for the page to settle, but not forever: a page that keeps changing (a ticker, a chat, an
+  // endless feed) would otherwise push the rescan back every time and never be scanned.
+  function scheduleImmRescan() {
+    const now = performance.now();
+    if (!immMutationSince) immMutationSince = now;
+    const wait = Math.max(0, Math.min(IMM_RESCAN_SETTLE_MS, immMutationSince + IMM_RESCAN_MAX_WAIT_MS - now));
+    clearTimeout(immMutationTimer);
+    immMutationTimer = setTimeout(() => {
+      immMutationSince = 0;
+      if (!immActive) return;
+      forgetDetachedImmRecords();
+      const stillChanging = refreshChangedImmRecords();
+      scanAndObserveBlocks(document.body);
+      if (stillChanging) scheduleImmRescan();
+    }, wait);
   }
 
   function ensureImmSpan(rec) {
@@ -1977,7 +2236,7 @@
   function enqueueImmRecord(rec) {
     if (!immActive || !rec || rec.state !== "observed") return;
     rec.state = "queued";
-    if (immIntersectionObs) {
+    if (immIntersectionObs && immObserved.delete(rec.el)) {
       try { immIntersectionObs.unobserve(rec.el); } catch (_) {}
     }
     immQueue.push(rec);
@@ -2014,17 +2273,38 @@
     syncImmBar();
   }
 
-  function applyImmSegmentText(rec, text, isFinal) {
-    if (!rec || !rec.el || !document.documentElement.contains(rec.el)) return;
+  // A record is current while Alt+A is on and it is still the one registered for its element;
+  // stopping or restarting drops every record, and nothing may be drawn for a dropped one.
+  function isCurrentImmRecord(rec) {
+    return immActive && Boolean(rec && rec.el) && immRecords.get(rec.el) === rec && rec.el.isConnected;
+  }
+
+  function drawImmSegment(rec, text, isFinal) {
+    if (!isCurrentImmRecord(rec)) return;
     const span = ensureImmSpan(rec);
-    span.removeAttribute("data-loading");
+    if (span.hasAttribute("data-loading")) span.removeAttribute("data-loading");
     if (isFinal) {
       span.removeAttribute("data-streaming");
       rec.el.setAttribute("data-bit-imm-ready", "1");
-    } else {
+      rec.translation = text;
+    } else if (!span.hasAttribute("data-streaming")) {
       span.setAttribute("data-streaming", "1");
     }
-    span.textContent = text;
+    setOnlyText(span, text);
+  }
+
+  // Streaming text waits for the next frame and only the newest text of a paragraph is drawn;
+  // the final text is drawn at once.
+  function applyImmSegmentText(rec, text, isFinal) {
+    if (!isCurrentImmRecord(rec)) return;
+    if (isFinal) {
+      cancelFrameJob(rec);
+      drawImmSegment(rec, text, true);
+      return;
+    }
+    if (rec.streamText === text) return;
+    rec.streamText = text;
+    drawOnNextFrame(rec, () => drawImmSegment(rec, rec.streamText, false));
   }
 
   function runImmBatch(batch) {
@@ -2045,6 +2325,8 @@
 
       for (let i = 0; i < batch.length; i++) {
         const rec = batch[i];
+        // Dropped by a restart: its paragraph is no longer counted.
+        if (immRecords.get(rec.el) !== rec) continue;
         const txt = segs[i];
         if (res && res.ok && txt) {
           applyImmSegmentText(rec, txt, true);
@@ -2053,6 +2335,7 @@
             immDoneCount++;
           }
         } else if (rec.span) {
+          cancelFrameJob(rec);
           rec.span.removeAttribute("data-loading");
           rec.span.removeAttribute("data-streaming");
           rec.span.textContent = res && res.status ? "[HTTP " + res.status + "]" : tr("imm.failed");
@@ -2113,6 +2396,14 @@
       immMutationObs = null;
     }
     clearTimeout(immMutationTimer);
+    immMutationSince = 0;
+    clearTimeout(immReobserveTimer);
+    immReobserveTimer = null;
+    immChanged.clear();
+    immObserved = new Set();
+    immObserveOverflow = false;
+    document.removeEventListener("scroll", onImmViewportMoved, true);
+    window.removeEventListener("resize", onImmViewportMoved);
     immQueue.length = 0;
     immInFlight = 0;
     immTotalCount = 0;
@@ -2144,30 +2435,48 @@
       { rootMargin: "320px 0px 560px 0px", threshold: 0.01 }
     );
 
+    // Scroll events do not bubble; capturing also sees scrollable areas inside the page.
+    document.addEventListener("scroll", onImmViewportMoved, { capture: true, passive: true });
+    window.addEventListener("resize", onImmViewportMoved);
+
     scanAndObserveBlocks(document.body);
 
     immMutationObs = new MutationObserver((mutations) => {
       if (!immActive) return;
-      let hasCandidate = false;
+      const now = performance.now();
+      const isOurs = (node) => node.nodeType === 1 && node.hasAttribute("data-bit-imm");
+      let rescan = false;
+
       for (const m of mutations) {
-        for (let i = 0; i < m.addedNodes.length; i++) {
-          const n = m.addedNodes[i];
-          if (n.nodeType === 1 && !n.hasAttribute("data-bit-imm") && !n.closest("#" + IMM_BAR_ID)) {
-            hasCandidate = true;
-            break;
-          }
+        const base = m.target.nodeType === 1 ? m.target : m.target.parentElement;
+        // Inside the bar or a translation: this script's own writing.
+        if (!base || base.closest("[data-bit-imm]")) continue;
+
+        if (m.type === "childList") {
+          // Adding or removing a translation is this script's doing as well.
+          let pageChange = false;
+          for (let i = 0; i < m.addedNodes.length && !pageChange; i++) pageChange = !isOurs(m.addedNodes[i]);
+          for (let i = 0; i < m.removedNodes.length && !pageChange; i++) pageChange = !isOurs(m.removedNodes[i]);
+          if (!pageChange) continue;
+          // Elements the page added may hold new paragraphs; elements it removed may have been recorded.
+          for (let i = 0; i < m.addedNodes.length && !rescan; i++) rescan = m.addedNodes[i].nodeType === 1;
+          for (let i = 0; i < m.removedNodes.length && !rescan; i++) rescan = m.removedNodes[i].nodeType === 1;
         }
-        if (hasCandidate) break;
+
+        // The page changed the content of a paragraph that is already recorded.
+        const host = base.closest("[data-bit-imm-host]");
+        const rec = host && immRecords.get(host);
+        if (rec) {
+          rec.changedAt = now;
+          immChanged.add(rec);
+          rescan = true;
+        }
       }
-      if (!hasCandidate) return;
-      clearTimeout(immMutationTimer);
-      immMutationTimer = setTimeout(() => {
-        if (immActive) scanAndObserveBlocks(document.body);
-      }, 260);
+      if (rescan) scheduleImmRescan();
     });
 
     if (document.body) {
-      immMutationObs.observe(document.body, { childList: true, subtree: true });
+      immMutationObs.observe(document.body, { childList: true, characterData: true, subtree: true });
     }
   }
 
@@ -2395,7 +2704,11 @@
     cancelRegionSnip();
     hideAll();
     if (immActive) stopImmersivePage();
-    try { chrome.runtime.sendMessage({ type: "BILI_PURGE_VOLATILE" }); } catch (_) {}
+    // The cache is shared by every tab. Frames come and go while a page is being read (ads, embeds),
+    // so only leaving the page itself empties it.
+    if (window === window.top) {
+      try { chrome.runtime.sendMessage({ type: "BILI_PURGE_VOLATILE" }); } catch (_) {}
+    }
   });
 
   function resolveContextImageAnchor() {
