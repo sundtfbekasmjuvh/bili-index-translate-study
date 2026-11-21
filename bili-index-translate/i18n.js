@@ -34,6 +34,7 @@
       "error.visionPort": "Vision streaming port unavailable.",
       "error.capture": "Unable to capture tab region.",
       "error.imageLoad": "Failed to load image.",
+      "error.streamLost": "The extension's background worker stopped before the reply was complete. Try again.",
 
       "study.aria": "Bili Language Study Card",
       "study.title": "Study Card",
@@ -177,6 +178,7 @@
       "error.visionPort": "无法连接识图通道。",
       "error.capture": "无法截取页面区域。",
       "error.imageLoad": "图片加载失败。",
+      "error.streamLost": "扩展后台在回复完成前中断了，请重试。",
 
       "study.aria": "Bili 语言学习卡片",
       "study.title": "语言学习卡片",

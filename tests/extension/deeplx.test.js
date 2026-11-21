@@ -27,6 +27,13 @@ const bg = require("../../bili-index-translate/background.js");
 
 let seq = 0;
 const unique = (label) => label + " " + ++seq;
+
+// 现在遇到限流或临时错误会自动重试: 把等待缩到几毫秒, 测试结束后恢复原值.
+function fastRetry(t) {
+  const saved = { ...bg.RETRY_POLICY };
+  Object.assign(bg.RETRY_POLICY, { baseDelayMs: 1, maxDelayMs: 5 });
+  t.after(() => Object.assign(bg.RETRY_POLICY, saved));
+}
 // 像真实的 DeepLX 服务一样逐行翻译并保留换行.
 const tr = (text) => text.split("\n").map((line) => "译" + line).join("\n");
 
@@ -241,23 +248,26 @@ test("streamImmersiveBatch: 单行段落合并为一次请求并按行拆回, �
   assert.equal(calls.length, 2);
 });
 
-test("streamImmersiveBatch: 自带换行的段落逐段请求并逐段上报, 个别失败时保留其余译文", async () => {
+test("streamImmersiveBatch: 自带换行的段落逐段请求并逐段上报, 个别失败时保留其余译文", async (t) => {
+  fastRetry(t);
   reset();
   const [a, b, c] = [unique("one\nmore"), unique("two\nmore"), unique("three")];
   respond = (body) => (body.text === b ? jsonResponse({ code: 429, message: "Too Many Requests" }, 429) : deeplxOk(tr(body.text)));
   const sizes = [];
   const res = await bg.streamImmersiveBatch([a, b, c], "", (p) => sizes.push(Object.keys(p.segments).length));
-  assert.deepEqual(res, batchOk({ 0: tr(a), 2: tr(c) }));
-  assert.deepEqual(calls.map((x) => x.body.text), [a, b, c]);
-  assert.deepEqual(sizes, [1, 2]);
+  // 429 重试用尽 (共 3 次) 后停止, 不再发 c.
+  assert.deepEqual(res, batchOk({ 0: tr(a) }));
+  assert.deepEqual(calls.map((x) => x.body.text), [a, b, b, b]);
+  assert.deepEqual(sizes, [1]);
 });
 
-test("streamImmersiveBatch: 合并请求失败时不再逐段重发; 没有任何译文才返回错误", async () => {
+test("streamImmersiveBatch: 合并请求失败时不再逐段重发; 没有任何译文才返回错误", async (t) => {
+  fastRetry(t);
   reset();
   respond = () => new Response("upstream down", { status: 502 });
   const failed = await bg.streamImmersiveBatch([unique("x"), unique("y")], "", () => assert.fail("no progress expected"));
   assert.deepEqual(failed, { ok: false, status: 502, body: "upstream down", via: "direct" });
-  assert.equal(calls.length, 1);
+  assert.equal(calls.length, 3);
 
   reset();
   const kept = unique("kept");
@@ -266,7 +276,7 @@ test("streamImmersiveBatch: 合并请求失败时不再逐段重发; 没有任�
   respond = () => new Response("upstream down", { status: 502 });
   const partial = await bg.streamImmersiveBatch([kept, unique("p"), unique("q")], "", () => {});
   assert.deepEqual(partial, batchOk({ 0: tr(kept) }));
-  assert.equal(calls.length, 1);
+  assert.equal(calls.length, 3);
 });
 
 test("streamImmersiveBatch: 回复行数对不上时改为逐段请求, 并记住该接口不再合并, 其他接口不受影响", async () => {

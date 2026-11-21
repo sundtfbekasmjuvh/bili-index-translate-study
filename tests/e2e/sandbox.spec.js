@@ -5,6 +5,7 @@
 // 不触发翻译, 因为沙盒服务会把翻译请求发往真实接口.
 const path = require("path");
 const net = require("net");
+const http = require("http");
 const { spawn } = require("child_process");
 const { test, expect } = require("@playwright/test");
 
@@ -80,3 +81,62 @@ for (const [locale, hint] of [
     });
   });
 }
+
+// 发一条原始 HTTP 请求, 这样 Host 和 Origin 头可以随意指定.
+function rawRequest({ method = "GET", path: target = "/", headers = {}, body = "" }) {
+  return new Promise((resolve, reject) => {
+    const { hostname, port } = new URL(origin);
+    const req = http.request({ host: hostname, port, method, path: target, headers }, (res) => {
+      let text = "";
+      res.on("data", (chunk) => (text += chunk));
+      res.on("end", () => resolve({ status: res.statusCode, text }));
+    });
+    req.on("error", reject);
+    req.end(body);
+  });
+}
+
+test.describe("预览沙盒的访问限制", () => {
+  const prefs = JSON.stringify({ type: "BILI_GET_IMMERSIVE_PREFS" });
+
+  test("只监听本机时, 用别的主机名寻址或由别的网站发起的请求被拒绝, 沙盒页面自己的请求正常", async () => {
+    expect((await rawRequest({})).status).toBe(200);
+    expect((await rawRequest({ headers: { Host: "localhost:3001" } })).status).toBe(200);
+    expect((await rawRequest({ headers: { Host: "attacker.example" } })).status).toBe(403);
+
+    const own = await rawRequest({ method: "POST", path: "/api/runtime", headers: { Origin: origin }, body: prefs });
+    expect(own.status).toBe(200);
+    expect(JSON.parse(own.text).ok).toBe(true);
+
+    const foreign = await rawRequest({ method: "POST", path: "/api/runtime", headers: { Origin: "https://attacker.example" }, body: prefs });
+    expect(foreign.status).toBe(403);
+  });
+
+  test("请求体不是 JSON 时返回错误信息, 服务不退出", async () => {
+    const bad = await rawRequest({ method: "POST", path: "/api/translate-stream", headers: { Origin: origin }, body: "{not json" });
+    expect(bad.status).toBe(200);
+    expect(JSON.parse(bad.text).ok).toBe(false);
+    expect((await rawRequest({})).status).toBe(200);
+  });
+  test("请求体的汉字字节被切在两个数据块之间时, 服务端仍按 UTF-8 正确解码", async () => {
+    // 请求体故意不是 JSON: 服务端的 JSON.parse 报错信息会原样带上它收到的文字, 借此观察解码结果, 不用碰任何上游接口.
+    const body = Buffer.from("\u6c49\u5b57\u6c49\u5b57", "utf8");
+    const cut = 4; // 第二个汉字 (3 字节) 的第 2 个字节之后
+    const { hostname, port } = new URL(origin);
+    const text = await new Promise((resolve, reject) => {
+      const socket = net.connect({ host: hostname, port: Number(port) });
+      const received = [];
+      socket.on("data", (chunk) => received.push(chunk));
+      socket.on("end", () => resolve(Buffer.concat(received).toString("utf8")));
+      socket.on("error", reject);
+      socket.write(
+        "POST /api/translate-stream HTTP/1.1\r\nHost: " + hostname + ":" + port + "\r\nOrigin: " + origin +
+          "\r\nContent-Type: application/json\r\nContent-Length: " + body.length + "\r\nConnection: close\r\n\r\n"
+      );
+      socket.write(body.subarray(0, cut));
+      setTimeout(() => socket.write(body.subarray(cut)), 60);
+    });
+    expect(text).toContain("\u6c49\u5b57\u6c49\u5b57");
+    expect(text).not.toContain("\ufffd");
+  });
+});

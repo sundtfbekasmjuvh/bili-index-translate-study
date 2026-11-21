@@ -45,6 +45,15 @@ const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
 const TIMEOUT_MS = 35000;
 const MAX_ERROR_BODY = 4000;
 
+// Automatic retry for rate limits and temporary server errors (see retryRequest). Only a response whose
+// status is listed is retried; network errors, timeouts and cancellation never are. Tests may change fields.
+const RETRY_POLICY = {
+  maxRetries: 2,
+  baseDelayMs: 500,
+  maxDelayMs: 8000,
+  statuses: [429, 500, 502, 503, 504]
+};
+
 // apiType "deeplx": Base URL is a DeepLX-style translate endpoint instead of an OpenAI-compatible root.
 const API_TYPE_DEEPLX = "deeplx";
 const DEEPLX_LABEL = "DeepLX";
@@ -128,6 +137,19 @@ function menuTitles() {
   const titles = {};
   for (const [id, titleKey] of MENUS) titles[id] = tr(titleKey);
   return titles;
+}
+
+// On install or update, writes the defaults of settings that are not stored yet. A setting already
+// stored is never written back: reading everything and writing it all back would overwrite a value
+// saved in between (by the options page, or by a test setting a local endpoint) with the old one.
+async function fillMissingSyncDefaults() {
+  const stored = await chrome.storage.sync.get(null);
+  const missing = {};
+  for (const [key, value] of Object.entries(DEFAULTS)) {
+    if (!Object.prototype.hasOwnProperty.call(stored || {}, key)) missing[key] = value;
+  }
+  if (Object.keys(missing).length > 0) await chrome.storage.sync.set(missing);
+  return missing;
 }
 
 async function getSettings() {
@@ -931,6 +953,125 @@ function extractPartialStudyDeck(partialRaw, sourceText) {
   };
 }
 
+// ---- Direct connection to the official endpoint ---------------------------------------------
+// The official endpoint answers HTTP 412 to a request that carries an extension's Origin header, so
+// that header is removed, and the client name set, on the requests this extension sends there. The
+// rule names the extension's own ID as the initiator, which is only known at run time; a rule in
+// the manifest cannot do that and would also rewrite what web pages send to the same host.
+const DIRECT_RULE_ID = 1;
+
+function directHeaderRule(extensionId) {
+  return {
+    id: DIRECT_RULE_ID,
+    priority: 1,
+    action: {
+      type: "modifyHeaders",
+      requestHeaders: [
+        { header: "origin", operation: "remove" },
+        { header: "user-agent", operation: "set", value: "Index-Translate-Client/1.0" }
+      ]
+    },
+    condition: {
+      urlFilter: "||index-translate.bilibili.com/v1/",
+      initiatorDomains: [extensionId]
+    }
+  };
+}
+
+// What a rule does, independent of how the browser writes it back (key order, header case).
+function directRuleSignature(rule) {
+  const action = (rule && rule.action) || {};
+  const condition = (rule && rule.condition) || {};
+  const headers = (action.requestHeaders || []).map((h) =>
+    [String(h.header).toLowerCase(), h.operation, h.value || ""].join(":")
+  );
+  return JSON.stringify([rule && rule.priority, action.type, headers, condition.urlFilter, condition.initiatorDomains || []]);
+}
+
+// Dynamic rules are kept by the browser across restarts, so the rule is written only when it is
+// missing or differs from the one this version wants. Returns whether it was written.
+async function installDirectRule() {
+  const dnr = typeof chrome !== "undefined" && chrome.declarativeNetRequest;
+  if (!dnr || typeof dnr.updateDynamicRules !== "function") return false;
+  const wanted = directHeaderRule(chrome.runtime.id);
+  const current = (await dnr.getDynamicRules()).find((rule) => rule.id === DIRECT_RULE_ID);
+  if (current && directRuleSignature(current) === directRuleSignature(wanted)) return false;
+  await dnr.updateDynamicRules({ removeRuleIds: [DIRECT_RULE_ID], addRules: [wanted] });
+  return true;
+}
+
+// Requests wait for this, so the first one after an install or update is not sent without the rule.
+let directRuleReady = null;
+
+function ensureDirectRule() {
+  if (!directRuleReady) {
+    directRuleReady = installDirectRule().catch((err) => {
+      console.warn("[Bili Index Translate] direct-connection rule not installed:", err);
+      return false;
+    });
+  }
+  return directRuleReady;
+}
+
+// ---- Retry on 429 / temporary server errors ---------------------------------------------------
+
+// Retry-After: seconds (decimals allowed), or an HTTP date (always contains a weekday or month name).
+// Returns milliseconds, or null when absent or anything else.
+function parseRetryAfter(value) {
+  if (value === null || value === undefined) return null;
+  const text = String(value).trim();
+  if (/^\d+(\.\d+)?$/.test(text)) return Number(text) * 1000;
+  if (!/[A-Za-z]/.test(text)) return null;
+  const at = Date.parse(text);
+  if (Number.isNaN(at)) return null;
+  return Math.max(0, at - Date.now());
+}
+
+// Wait before retry number `retried` + 1; null means the server asks for more than maxDelayMs, so give up.
+function retryDelayMs(retryAfter, retried) {
+  const asked = parseRetryAfter(retryAfter);
+  if (asked !== null) return asked > RETRY_POLICY.maxDelayMs ? null : asked;
+  const jitter = 0.8 + Math.random() * 0.4;
+  return RETRY_POLICY.baseDelayMs * Math.pow(2, retried) * jitter;
+}
+
+// A wait that ends at once, by rejecting, when the signal fires; timer and listener are always cleaned up.
+function abortableDelay(ms, signal) {
+  return new Promise((resolve, reject) => {
+    if (signal && signal.aborted) {
+      reject(new Error("Cancelled"));
+      return;
+    }
+    let timer = null;
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(new Error("Cancelled"));
+    };
+    timer = setTimeout(() => {
+      if (signal) signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    if (signal) signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+// Runs attempt() until it returns a response that is not retryable. attempt() resolves to something with
+// `status`; retryAfter(r) gives its Retry-After header value; discard(r) frees the previous body. Thrown
+// errors (network, timeout, cancel) pass straight through. onWait() is called when a wait starts and when
+// the next attempt starts, so an idle timer cannot fire in between. Cancelling during the wait rejects.
+async function retryRequest(attempt, { retryAfter, discard, signal, onWait }) {
+  for (let retried = 0; ; retried++) {
+    const r = await attempt();
+    if (!RETRY_POLICY.statuses.includes(r.status) || retried >= RETRY_POLICY.maxRetries) return r;
+    const wait = retryDelayMs(retryAfter(r), retried);
+    if (wait === null) return r;
+    if (discard) await discard(r);
+    if (onWait) onWait();
+    await abortableDelay(wait, signal);
+    if (onWait) onWait();
+  }
+}
+
 // ---- API & Streaming --------------------------------------------------------------------
 
 // One HTTP request with the shared timeout and caller-abort handling. bodyText is sent as is.
@@ -943,6 +1084,7 @@ async function sendRequest(url, method, headers, bodyText, externalSignal) {
     else externalSignal.addEventListener("abort", onAbort, { once: true });
   }
   try {
+    await ensureDirectRule();
     const res = await fetch(url, {
       method: method,
       headers: headers,
@@ -950,7 +1092,8 @@ async function sendRequest(url, method, headers, bodyText, externalSignal) {
       signal: controller.signal
     });
     const raw = await res.text();
-    return { ok: res.ok, status: res.status, raw: raw };
+    const retryAfter = res.headers && res.headers.get ? res.headers.get("retry-after") : null;
+    return { ok: res.ok, status: res.status, raw: raw, retryAfter: retryAfter };
   } catch (err) {
     if (err && err.name === "AbortError") {
       throw new Error(externalSignal && externalSignal.aborted ? "Cancelled" : tr("bg.timeout", TIMEOUT_MS / 1000));
@@ -979,6 +1122,7 @@ async function postChat(prefix, key, body, externalSignal) {
 }
 
 async function openChatStream(prefix, key, body, signal) {
+  await ensureDirectRule();
   return fetch(stripSlashes(prefix) + "/chat/completions", {
     method: "POST",
     headers: {
@@ -1108,7 +1252,10 @@ async function deeplxRequest(s, text, externalSignal) {
 
   let r;
   try {
-    r = await postJson(req.url, req.headers, req.body, externalSignal);
+    r = await retryRequest(() => postJson(req.url, req.headers, req.body, externalSignal), {
+      retryAfter: (x) => x.retryAfter,
+      signal: externalSignal
+    });
   } catch (err) {
     if (externalSignal && externalSignal.aborted) {
       return { ok: false, cancelled: true, status: 0, body: "Cancelled" };
@@ -1346,7 +1493,10 @@ async function customRequest(s, tpl, texts, externalSignal) {
 
   let r;
   try {
-    r = await sendRequest(req.url, tpl.method, req.headers, req.body, externalSignal);
+    r = await retryRequest(() => sendRequest(req.url, tpl.method, req.headers, req.body, externalSignal), {
+      retryAfter: (x) => x.retryAfter,
+      signal: externalSignal
+    });
   } catch (err) {
     if (externalSignal && externalSignal.aborted) {
       return { ok: false, cancelled: true, status: 0, body: "Cancelled" };
@@ -1490,6 +1640,9 @@ async function engineImmersiveBatch(engine, s, items, onProgress, externalSignal
     if (r.cancelled) return r;
     if (!r.ok) {
       if (!firstError) firstError = r;
+      // Retries are already used up: the service is limiting or down, so stop sending. A 500 may come
+      // from this paragraph alone, so it does not stop the others.
+      if (r.status !== 500 && RETRY_POLICY.statuses.includes(r.status)) break;
       continue;
     }
     commit(i, r.text, r.via);
@@ -1629,9 +1782,17 @@ async function readCompletionContent(res) {
   return (j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content) || "";
 }
 
+// An error object some OpenAI-compatible servers send inside the stream instead of an HTTP status.
+function streamErrorText(error) {
+  if (typeof error === "string") return error;
+  const message = error && typeof error.message === "string" ? error.message : "";
+  return (message || JSON.stringify(error) || "").slice(0, MAX_ERROR_BODY);
+}
+
 // Returns the raw completion text. For SSE responses onText receives the accumulated text after each
-// delta; returning false from onText cancels the rest of the stream.
-async function readChatContent(res, onText) {
+// delta; returning false from onText cancels the rest of the stream. onActivity is called for every
+// chunk that arrives, so that the caller can tell a slow stream from a stalled one.
+async function readChatContent(res, onText, onActivity) {
   const ctype = String(res.headers.get("content-type") || "").toLowerCase();
   if (!ctype.includes("event-stream") || !res.body) return readCompletionContent(res);
 
@@ -1640,65 +1801,101 @@ async function readChatContent(res, onText) {
   let sseBuf = "";
   let full = "";
 
-  while (true) {
-    const { value, done } = await reader.read();
-    if (done) return full;
-    sseBuf += decoder.decode(value, { stream: true });
-    const lines = sseBuf.split(/\r?\n/);
-    sseBuf = lines.pop() || "";
+  // false: stop reading (the terminator arrived, or onText asked to stop).
+  const consume = (line) => {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith("data:")) return true;
+    const payload = trimmed.slice(5).trim();
+    if (!payload) return true;
+    // Anything after the terminator is not part of this completion.
+    if (payload === "[DONE]") return false;
+    let chunkObj;
+    try {
+      chunkObj = JSON.parse(payload);
+    } catch (_) {
+      return true;
+    }
+    if (chunkObj && chunkObj.error) throw new Error(streamErrorText(chunkObj.error));
+    const choice = chunkObj && Array.isArray(chunkObj.choices) ? chunkObj.choices[0] : null;
+    const delta = choice && choice.delta && typeof choice.delta.content === "string" ? choice.delta.content : "";
+    if (!delta) return true;
+    full += delta;
+    return typeof onText !== "function" || onText(full) !== false;
+  };
 
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (!trimmed.startsWith("data:")) continue;
-      const payload = trimmed.slice(5).trim();
-      if (!payload) continue;
-      if (payload === "[DONE]") {
-        // Anything after the terminator is not part of this completion.
-        try { await reader.cancel(); } catch (_) {}
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (typeof onActivity === "function") onActivity();
+      if (done) {
+        // A last line that was not ended by a line break is still part of the completion.
+        sseBuf += decoder.decode();
+        if (sseBuf) consume(sseBuf);
         return full;
       }
-      let keepReading = true;
-      try {
-        const chunkObj = JSON.parse(payload);
-        const delta = (chunkObj.choices && chunkObj.choices[0] && chunkObj.choices[0].delta && chunkObj.choices[0].delta.content) || "";
-        if (delta) {
-          full += delta;
-          if (typeof onText === "function") keepReading = onText(full) !== false;
+      sseBuf += decoder.decode(value, { stream: true });
+      const lines = sseBuf.split(/\r?\n/);
+      sseBuf = lines.pop() || "";
+
+      for (const line of lines) {
+        if (!consume(line)) {
+          try { await reader.cancel(); } catch (_) {}
+          return full;
         }
-      } catch (_) {}
-      if (!keepReading) {
-        try { await reader.cancel(); } catch (_) {}
-        return full;
       }
     }
+  } catch (err) {
+    try { await reader.cancel(); } catch (_) {}
+    throw err;
   }
 }
 
 // Shared lifecycle of the streaming paths: timeout, caller abort, route choice and HTTP errors.
+// The timeout is an idle limit: it restarts whenever the stream delivers something (handleResponse
+// passes `touch` to readChatContent), so a long reply that keeps flowing is not cut off.
 async function runChatStream(s, base, body, externalSignal, handleResponse) {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+  let timedOut = false;
+  let timer = null;
+  const touch = () => {
+    clearTimeout(timer);
+    timer = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, TIMEOUT_MS);
+  };
   const onAbort = () => controller.abort();
   if (externalSignal) {
     if (externalSignal.aborted) controller.abort();
     else externalSignal.addEventListener("abort", onAbort, { once: true });
   }
+  touch();
 
   try {
     const relay = stripSlashes(s.proxy);
     const via = relay ? "relay" : "direct";
-    const res = await openChatStream(relay || base, s.key, body, controller.signal);
+    const res = await retryRequest(() => openChatStream(relay || base, s.key, body, controller.signal), {
+      retryAfter: (x) => (x.headers && x.headers.get ? x.headers.get("retry-after") : null),
+      discard: async (x) => {
+        try {
+          await x.body.cancel();
+        } catch (_) {}
+      },
+      signal: controller.signal,
+      onWait: touch
+    });
 
     if (!res.ok) {
       const errRaw = await res.text();
       return { ok: false, status: res.status, body: errRaw.slice(0, MAX_ERROR_BODY), via: via };
     }
 
-    return await handleResponse(res, via);
+    return await handleResponse(res, via, touch);
   } catch (err) {
     if (externalSignal && externalSignal.aborted) {
       return { ok: false, cancelled: true, status: 0, body: "Cancelled" };
     }
+    if (timedOut) return { ok: false, status: 0, body: tr("bg.timeout", TIMEOUT_MS / 1000) };
     return { ok: false, status: 0, body: String((err && err.message) || err) };
   } finally {
     clearTimeout(timer);
@@ -1736,13 +1933,13 @@ async function streamTranslation(text, onDelta, externalSignal) {
     base
   );
 
-  return runChatStream(s, base, body, externalSignal, async (res, via) => {
+  return runChatStream(s, base, body, externalSignal, async (res, via, touch) => {
     const raw = await readChatContent(res, (full) => {
       const visible = stripThink(full);
       if (visible && typeof onDelta === "function") {
         onDelta({ text: visible, model: activeModel, via: via, glossaryHits: hits.length });
       }
-    });
+    }, touch);
 
     const clean = stripThink(raw);
     if (!clean) return { ok: false, status: 200, body: tr("bg.emptyTranslation"), via: via };
@@ -1781,7 +1978,7 @@ async function streamVisionTranslation(imageDataUrl, modelOverride, onDelta, ext
     base
   );
 
-  return runChatStream(s, base, body, externalSignal, async (res, via) => {
+  return runChatStream(s, base, body, externalSignal, async (res, via, touch) => {
     let lastShown = "";
     const raw = await readChatContent(res, (full) => {
       const parsed = parseVisionDualOutput(full);
@@ -1795,7 +1992,7 @@ async function streamVisionTranslation(imageDataUrl, modelOverride, onDelta, ext
           vision: true
         });
       }
-    });
+    }, touch);
 
     const finalParsed = parseVisionDualOutput(raw);
     if (!finalParsed.translation) {
@@ -1880,7 +2077,7 @@ async function streamImmersiveBatch(rawItems, modelOverride, onProgress, externa
       ? { 0: visible.replace(/^\u3016P0\u3017\s*/, "").trim() }
       : parseAnchoredSegments(visible, uncachedTexts.length);
 
-  return runChatStream(s, base, body, externalSignal, async (res, via) => {
+  return runChatStream(s, base, body, externalSignal, async (res, via, touch) => {
     const applyParsedMap = (parsedSubMap, commitCache) => {
       let changed = false;
       for (let subIdx = 0; subIdx < uncachedIndices.length; subIdx++) {
@@ -1918,7 +2115,7 @@ async function streamImmersiveBatch(rawItems, modelOverride, onProgress, externa
           glossaryHits: batchHits.length
         });
       }
-    });
+    }, touch);
 
     applyParsedMap(parseBatch(stripThink(raw)), true);
     return { ok: true, segments: finalSegments, model: activeModel, via: via, glossaryHits: batchHits.length };
@@ -1954,7 +2151,7 @@ async function streamStudyCard(text, modelOverride, onPartial, externalSignal) {
     base
   );
 
-  return runChatStream(s, base, body, externalSignal, async (res, via) => {
+  return runChatStream(s, base, body, externalSignal, async (res, via, touch) => {
     let lastEmitSignature = "";
     let cappedDeck = null;
     const raw = await readChatContent(res, (full) => {
@@ -1975,7 +2172,7 @@ async function streamStudyCard(text, modelOverride, onPartial, externalSignal) {
         };
         return false;
       }
-    });
+    }, touch);
 
     const deck = cappedDeck || parseStudyCardJson(raw, text);
     if (!deck) return { ok: false, status: 200, body: tr("bg.emptyStudy"), via: via };
@@ -2037,11 +2234,155 @@ async function generateStudyCard(text, modelOverride) {
   return { ok: true, ...out };
 }
 
+// ---- Streaming ports ------------------------------------------------------------------------
+// A page asks for a stream by opening a port with one of these names and posting the start message.
+// Progress goes back as `progress` messages and the outcome as a single `done` message.
+const STREAM_PORTS = {
+  "bili-translate-stream": {
+    start: "START_TRANSLATE_STREAM",
+    progress: "DELTA",
+    done: "DONE",
+    run: (msg, onProgress, signal) => streamTranslation(msg.text, onProgress, signal)
+  },
+  "bili-image-stream": {
+    start: "START_IMAGE_STREAM",
+    progress: "DELTA",
+    done: "DONE",
+    run: (msg, onProgress, signal) => streamVisionTranslation(msg.dataUrl, msg.modelOverride, onProgress, signal)
+  },
+  "bili-immersive-stream": {
+    start: "START_IMMERSIVE_BATCH",
+    progress: "BATCH_DELTA",
+    done: "BATCH_DONE",
+    // Progress carries every paragraph of the batch; only the ones that changed are sent on.
+    segments: true,
+    run: (msg, onProgress, signal) => streamImmersiveBatch(msg.items, msg.modelOverride, onProgress, signal)
+  },
+  "bili-study-stream": {
+    start: "START_STUDY_STREAM",
+    progress: "PARTIAL",
+    done: "DONE",
+    run: (msg, onProgress, signal) => streamStudyCard(msg.text, msg.modelOverride, onProgress, signal)
+  }
+};
+
+// A model emits far more deltas than a page can show, and each progress message is copied to the
+// page and laid out there. The first one is sent at once and later ones at most every
+// STREAM_FLUSH_MS; each carries the newest state, so skipping the states in between loses nothing.
+const STREAM_FLUSH_MS = 33;
+
+function coalesce(send, intervalMs) {
+  let pending = null;
+  let timer = null;
+  let lastSent = -Infinity;
+  const flush = () => {
+    timer = null;
+    if (pending === null) return;
+    const payload = pending;
+    pending = null;
+    lastSent = Date.now();
+    send(payload);
+  };
+  return {
+    push(payload) {
+      pending = payload;
+      if (timer !== null) return;
+      const wait = lastSent + intervalMs - Date.now();
+      if (wait <= 0) flush();
+      else timer = setTimeout(flush, wait);
+    },
+    // Drops what has not been sent yet: the final message replaces it, or nobody is listening.
+    cancel() {
+      clearTimeout(timer);
+      timer = null;
+      pending = null;
+    }
+  };
+}
+
+function handleStreamPort(port) {
+  const spec = port && STREAM_PORTS[port.name];
+  if (!spec) return;
+  if (!fromTabScript(port.sender)) {
+    try { port.disconnect(); } catch (_) {}
+    return;
+  }
+
+  const abortCtrl = new AbortController();
+  let open = true;
+  let started = false;
+  const post = (type, payload) => {
+    if (!open) return;
+    try { port.postMessage({ type: type, ...payload }); } catch (_) {}
+  };
+
+  const sentSegments = {};
+  const progress = coalesce((payload) => {
+    if (spec.segments) {
+      const changed = {};
+      let any = false;
+      for (const [index, text] of Object.entries(payload.segments || {})) {
+        if (sentSegments[index] === text) continue;
+        sentSegments[index] = changed[index] = text;
+        any = true;
+      }
+      if (!any) return;
+      payload = { ...payload, segments: changed };
+    }
+    post(spec.progress, payload);
+  }, STREAM_FLUSH_MS);
+
+  port.onDisconnect.addListener(() => {
+    open = false;
+    progress.cancel();
+    abortCtrl.abort();
+  });
+
+  port.onMessage.addListener((msg) => {
+    if (started || !msg || msg.type !== spec.start) return;
+    started = true;
+    // The page waits for the final message, so a failure before the request is reported as one too.
+    Promise.resolve()
+      .then(() => spec.run(msg, progress.push, abortCtrl.signal))
+      .catch((err) => ({ ok: false, status: 0, body: String((err && err.message) || err) }))
+      .then((finalRes) => {
+        progress.cancel();
+        if (!(finalRes && finalRes.cancelled)) post(spec.done, finalRes);
+      });
+  });
+}
+
 // ---- Messaging, Streaming Ports, Commands & Context Menu ----------------------------------
+
+// Who may send what: extension pages (options) and page scripts (content.js) are told apart by sender.
+function isOwnId(sender) {
+  return !!(sender && typeof chrome.runtime.id === "string" && sender.id === chrome.runtime.id);
+}
+function fromExtensionPage(sender) {
+  return isOwnId(sender) && typeof sender.url === "string" && sender.url.startsWith(chrome.runtime.getURL(""));
+}
+function fromTabScript(sender) {
+  return isOwnId(sender) && !!sender.tab && typeof sender.tab.id === "number";
+}
+const MESSAGE_SENDERS = {
+  BILI_CHECK_API_CONFIG: [fromExtensionPage],
+  BILI_MIGRATE_SETTINGS: [fromExtensionPage],
+  BILI_STUDY_CARD: [fromTabScript],
+  BILI_CAPTURE_TAB: [fromTabScript],
+  BILI_GET_IMMERSIVE_PREFS: [fromTabScript],
+  BILI_PURGE_VOLATILE: [fromTabScript],
+  BILI_TRANSLATE: [fromExtensionPage, fromTabScript]
+};
 
 if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.onMessage) {
   chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (!msg) return false;
+
+    const allowed = Object.prototype.hasOwnProperty.call(MESSAGE_SENDERS, msg.type) ? MESSAGE_SENDERS[msg.type] : null;
+    if (allowed && !allowed.some((check) => check(sender))) {
+      sendResponse({ ok: false, status: 0, body: "Forbidden sender" });
+      return false;
+    }
 
     if (msg.type === "BILI_TRANSLATE") {
       translate(msg.text)
@@ -2062,9 +2403,8 @@ if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.onMessage)
     }
 
     if (msg.type === "BILI_CAPTURE_TAB") {
-      const winId = sender && sender.tab ? sender.tab.windowId : chrome.windows.WINDOW_ID_CURRENT;
       chrome.tabs
-        .captureVisibleTab(winId, { format: "png" })
+        .captureVisibleTab(sender.tab.windowId, { format: "png" })
         .then((dataUrl) => sendResponse({ ok: true, dataUrl: dataUrl }))
         .catch((err) => sendResponse({ ok: false, body: String((err && err.message) || err) }));
       return true;
@@ -2118,117 +2458,7 @@ if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.onMessage)
     return false;
   });
 
-  if (chrome.runtime.onConnect) {
-    chrome.runtime.onConnect.addListener((port) => {
-      if (!port) return;
-
-      if (port.name === "bili-translate-stream") {
-        const abortCtrl = new AbortController();
-        let disconnected = false;
-        port.onDisconnect.addListener(() => {
-          disconnected = true;
-          abortCtrl.abort();
-        });
-        port.onMessage.addListener((msg) => {
-          if (!msg || msg.type !== "START_TRANSLATE_STREAM") return;
-          streamTranslation(
-            msg.text,
-            (delta) => {
-              if (!disconnected) {
-                try { port.postMessage({ type: "DELTA", ...delta }); } catch (_) {}
-              }
-            },
-            abortCtrl.signal
-          ).then((finalRes) => {
-            if (!disconnected && !(finalRes && finalRes.cancelled)) {
-              try { port.postMessage({ type: "DONE", ...finalRes }); } catch (_) {}
-            }
-          });
-        });
-        return;
-      }
-
-      if (port.name === "bili-image-stream") {
-        const abortCtrl = new AbortController();
-        let disconnected = false;
-        port.onDisconnect.addListener(() => {
-          disconnected = true;
-          abortCtrl.abort();
-        });
-        port.onMessage.addListener((msg) => {
-          if (!msg || msg.type !== "START_IMAGE_STREAM") return;
-          streamVisionTranslation(
-            msg.dataUrl,
-            msg.modelOverride,
-            (delta) => {
-              if (!disconnected) {
-                try { port.postMessage({ type: "DELTA", ...delta }); } catch (_) {}
-              }
-            },
-            abortCtrl.signal
-          ).then((finalRes) => {
-            if (!disconnected && !(finalRes && finalRes.cancelled)) {
-              try { port.postMessage({ type: "DONE", ...finalRes }); } catch (_) {}
-            }
-          });
-        });
-        return;
-      }
-
-      if (port.name === "bili-immersive-stream") {
-        const abortCtrl = new AbortController();
-        let disconnected = false;
-        port.onDisconnect.addListener(() => {
-          disconnected = true;
-          abortCtrl.abort();
-        });
-        port.onMessage.addListener((msg) => {
-          if (!msg || msg.type !== "START_IMMERSIVE_BATCH") return;
-          streamImmersiveBatch(
-            msg.items,
-            msg.modelOverride,
-            (progress) => {
-              if (!disconnected) {
-                try { port.postMessage({ type: "BATCH_DELTA", ...progress }); } catch (_) {}
-              }
-            },
-            abortCtrl.signal
-          ).then((finalRes) => {
-            if (!disconnected && !(finalRes && finalRes.cancelled)) {
-              try { port.postMessage({ type: "BATCH_DONE", ...finalRes }); } catch (_) {}
-            }
-          });
-        });
-        return;
-      }
-
-      if (port.name === "bili-study-stream") {
-        const abortCtrl = new AbortController();
-        let disconnected = false;
-        port.onDisconnect.addListener(() => {
-          disconnected = true;
-          abortCtrl.abort();
-        });
-        port.onMessage.addListener((msg) => {
-          if (!msg || msg.type !== "START_STUDY_STREAM") return;
-          streamStudyCard(
-            msg.text,
-            msg.modelOverride,
-            (progress) => {
-              if (!disconnected) {
-                try { port.postMessage({ type: "PARTIAL", ...progress }); } catch (_) {}
-              }
-            },
-            abortCtrl.signal
-          ).then((finalRes) => {
-            if (!disconnected && !(finalRes && finalRes.cancelled)) {
-              try { port.postMessage({ type: "DONE", ...finalRes }); } catch (_) {}
-            }
-          });
-        });
-      }
-    });
-  }
+  if (chrome.runtime.onConnect) chrome.runtime.onConnect.addListener(handleStreamPort);
 
   function createMenus() {
     chrome.contextMenus.removeAll(() => {
@@ -2267,7 +2497,7 @@ if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.onMessage)
   chrome.runtime.onInstalled.addListener(() => {
     // The titles follow the interface language, so the settings are read first.
     getSettings().then(createMenus, createMenus);
-    chrome.storage.sync.get(DEFAULTS).then((s) => chrome.storage.sync.set(s));
+    fillMissingSyncDefaults().catch(() => {});
     migrateKeyToLocal().catch((err) => console.warn("[Bili Index Translate] API key migration failed:", err));
   });
 
@@ -2345,6 +2575,8 @@ if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.onMessage)
     chrome.runtime.openOptionsPage();
   });
 
+  ensureDirectRule();
+
   console.log("[Bili Index Translate] service worker started");
 }
 
@@ -2381,10 +2613,16 @@ if (typeof module !== "undefined" && module.exports) {
     checkApiConfig,
     menuTitles,
     migrateKeyToLocal,
+    fillMissingSyncDefaults,
     getSettings,
     fetchImageAsDataUrl,
     callChatCompletion,
+    RETRY_POLICY,
     readChatContent,
+    handleStreamPort,
+    STREAM_FLUSH_MS,
+    directHeaderRule,
+    installDirectRule,
     streamTranslation,
     streamVisionTranslation,
     streamImmersiveBatch,

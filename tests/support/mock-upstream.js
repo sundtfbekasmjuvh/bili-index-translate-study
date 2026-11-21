@@ -246,6 +246,8 @@ async function startMockUpstream(options = {}) {
       body,
       source: isDeeplx ? String(body.text || "") : isCustom ? customItems.join("\n") : sourceText(kind, body),
       authorization: req.headers.authorization || "",
+      origin: req.headers.origin || "",
+      userAgent: req.headers["user-agent"] || "",
       apiKeyHeader: req.headers["x-api-key"] || "",
       aborted: false,
       completed: false
@@ -256,7 +258,13 @@ async function startMockUpstream(options = {}) {
     });
 
     const idx = overrides.findIndex((o) => o.kind === kind && (!o.match || o.match(entry)));
-    const override = idx >= 0 ? overrides.splice(idx, 1)[0] : null;
+    // `times: N` keeps the override for the next N matching requests instead of one.
+    let override = null;
+    if (idx >= 0) {
+      override = overrides[idx];
+      if (override.times > 1) override.times -= 1;
+      else overrides.splice(idx, 1);
+    }
 
     if (override && override.status) {
       res.writeHead(override.status, { "Content-Type": override.contentType || "text/html; charset=utf-8" });
@@ -307,7 +315,7 @@ async function startMockUpstream(options = {}) {
     // One entry per /huge.png download: bytes written so far and whether the client hung up early.
     downloads,
     // Applies to the next request of this kind (optionally filtered by match). Supports
-    // { status, body } for HTTP errors, { reply } for custom text, and { hold } to pause the
+    // { status, body } for HTTP errors (add times: N to repeat for the next N requests), { reply } for custom text, and { hold } to pause the
     // stream after its first chunk until the promise resolves.
     override(kind, spec) {
       overrides.push({ kind, ...spec });

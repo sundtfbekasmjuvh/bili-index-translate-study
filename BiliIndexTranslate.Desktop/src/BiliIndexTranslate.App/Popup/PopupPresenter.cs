@@ -283,6 +283,18 @@ internal sealed class PopupPresenter : IDisposable
         StudyDeckResult? ok = null;
         TranslationError? error = null;
 
+        // Partial decks arrive faster than the card can be laid out and placed. The window is given the
+        // newest one after the pending rendering and input have been handled; the ones in between are skipped.
+        var live = new LatestValueRelay<StudyDeckResult>(
+            deliver => _ = _dispatcher.BeginInvoke(DispatcherPriority.Background, deliver),
+            partial =>
+            {
+                if (seq != _studySeq || !_studyVisible || !ReferenceEquals(_studyOwner, owner) || _studyWindow is null)
+                    return;
+                _studyWindow.ShowPartialDeck(sourceText, partial);
+                PlaceStudy(animate: false);
+            });
+
         try
         {
             ok = await _studyProvider!(
@@ -290,14 +302,7 @@ internal sealed class PopupPresenter : IDisposable
                 modelOverride,
                 partial =>
                 {
-                    if (cts.IsCancellationRequested) return;
-                    _ = _dispatcher.BeginInvoke(DispatcherPriority.Normal, new Action(() =>
-                    {
-                        if (seq != _studySeq || !_studyVisible || !ReferenceEquals(_studyOwner, owner) || _studyWindow is null)
-                            return;
-                        _studyWindow.ShowPartialDeck(sourceText, partial);
-                        PlaceStudy(animate: false);
-                    }));
+                    if (!cts.IsCancellationRequested) live.Offer(partial);
                 },
                 cts.Token).ConfigureAwait(false);
         }
@@ -318,6 +323,8 @@ internal sealed class PopupPresenter : IDisposable
 
         _ = _dispatcher.BeginInvoke(DispatcherPriority.Normal, new Action(() =>
         {
+            // The result below is final; a partial deck that is still waiting must not be drawn over it.
+            live.Clear();
             if (seq != _studySeq || !_studyVisible || !ReferenceEquals(_studyOwner, owner) || _studyWindow is null)
                 return;
 

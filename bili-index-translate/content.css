@@ -153,6 +153,27 @@ html[data-bit-theme="dark"] {
   #bili-index-study-panel[data-open] {
     animation: none;
   }
+
+  /* Skeleton shimmer, immersive loading pulse, capsule fade and every hover transition of the extension's own elements. */
+  #bili-index-translate-panel,
+  #bili-index-translate-panel *,
+  #bili-index-study-panel,
+  #bili-index-study-panel *,
+  #bili-index-imm-bar,
+  #bili-index-imm-bar *,
+  [data-bit-imm] {
+    animation: none !important;
+    transition: none !important;
+  }
+}
+
+/* ---- Keyboard focus outline for the extension's own controls ---- */
+
+#bili-index-translate-panel button:focus-visible,
+#bili-index-study-panel button:focus-visible,
+#bili-index-imm-bar button:focus-visible {
+  outline: 2px solid #2563eb;
+  outline-offset: 2px;
 }
 
 /* ---- Crisp Inline SVG Icons ---- */

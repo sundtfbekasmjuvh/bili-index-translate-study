@@ -15,15 +15,6 @@
     "<all_urls>",
     "https://index-translate.bilibili.com/*"
   ],
-  "declarative_net_request": {
-    "rule_resources": [
-      {
-        "id": "bili_direct_headers",
-        "enabled": true,
-        "path": "dnr_rules.json"
-      }
-    ]
-  },
   "commands": {
     "toggle-immersive": {
       "suggested_key": {

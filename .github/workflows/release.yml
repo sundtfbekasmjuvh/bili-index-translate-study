@@ -12,8 +12,14 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # The release is packaged only after the whole CI (unit, end-to-end and desktop) has passed on this commit.
+  ci:
+    name: CI
+    uses: ./.github/workflows/ci.yml
+
   release:
     name: Package and draft the release
+    needs: ci
     runs-on: windows-latest
     timeout-minutes: 30
     permissions:
@@ -26,6 +32,13 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: 0
+
+      # A release is cut from main only (see the README): refuse a tag that points anywhere else.
+      - name: Check that the tag is on main
+        run: |
+          git merge-base --is-ancestor $env:GITHUB_SHA origin/main
+          if ($LASTEXITCODE -ne 0) { throw "Tag $env:TAG does not point to a commit on main" }
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:

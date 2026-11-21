@@ -98,6 +98,95 @@ test("streamTranslation 对空输出和非 JSON 正文返回错误", async () =>
   assert.match(html.body, /JSON/);
 });
 
+test("streamTranslation 把没有换行结尾的最后一行也计入译文", async () => {
+  reset();
+  respond = () => sseResponse([delta("你好"), delta("世界").trimEnd()]);
+  const res = await bg.streamTranslation(unique("hello"), () => {});
+  assert.equal(res.ok, true);
+  assert.equal(res.text, "你好世界");
+});
+
+test("streamTranslation 把流里的 error 事件作为错误返回, 并取消上游流", async () => {
+  reset();
+  const stats = {};
+  respond = () =>
+    sseResponse(
+      [delta("你"), 'data: {"error":{"message":"model overloaded","type":"server_error"}}\n\n', delta("好"), "data: [DONE]\n\n"],
+      stats
+    );
+  const res = await bg.streamTranslation(unique("hello"), () => {});
+  assert.deepEqual(res, { ok: false, status: 0, body: "model overloaded" });
+  assert.equal(stats.cancelled, true);
+
+  respond = () => sseResponse([delta("你"), 'data: {"error":"quota exceeded"}\n\n']);
+  const plain = await bg.streamTranslation(unique("hello"), () => {});
+  assert.equal(plain.body, "quota exceeded");
+
+  // delta 里不是字符串的 content (null, 数组) 不计入译文.
+  respond = () =>
+    sseResponse([
+      'data: {"choices":[{"delta":{"content":null}}],"error":null}\n\n',
+      'data: {"choices":[{"delta":{"content":[{"type":"text","text":"x"}]}}]}\n\n',
+      delta("好"),
+      "data: [DONE]\n\n"
+    ]);
+  const odd = await bg.streamTranslation(unique("hello"), () => {});
+  assert.equal(odd.text, "好");
+});
+
+test("超时按空闲时间计: 一直有数据的长回复不被切断, 停滞的流报出超时", async (t) => {
+  reset();
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const settle = () => new Promise((resolve) => setImmediate(resolve));
+  let push = null;
+  respond = (init) => {
+    const body = new ReadableStream({
+      start(controller) {
+        push = (chunk) => controller.enqueue(encoder.encode(chunk));
+        init.signal.addEventListener("abort", () => {
+          try {
+            controller.error(new DOMException("The operation was aborted.", "AbortError"));
+          } catch (_) {}
+        });
+      }
+    });
+    return new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } });
+  };
+  const opened = async () => {
+    while (!push) await settle();
+  };
+
+  // 三段数据各隔 30 秒, 总共 90 秒, 每次间隔都短于 35 秒的上限.
+  const slow = bg.streamTranslation(unique("hello"), () => {});
+  await opened();
+  for (const part of ["一", "二", "三"]) {
+    t.mock.timers.tick(30000);
+    await settle();
+    push(delta(part));
+    await settle();
+  }
+  push("data: [DONE]\n\n");
+  const done = await slow;
+  assert.equal(done.ok, true);
+  assert.equal(done.text, "一二三");
+
+  // 收到一段后再无数据: 34 秒时还在等, 满 35 秒报超时.
+  push = null;
+  let settled = false;
+  const stalled = bg.streamTranslation(unique("hello"), () => {}).then((res) => {
+    settled = true;
+    return res;
+  });
+  await opened();
+  push(delta("一"));
+  await settle();
+  t.mock.timers.tick(34000);
+  await settle();
+  assert.equal(settled, false);
+  t.mock.timers.tick(1000);
+  assert.deepEqual(await stalled, { ok: false, status: 0, body: "Request timed out after 35 s" });
+});
+
 test("streamTranslation 把网络异常报告为 status 0", async () => {
   reset();
   respond = () => {
