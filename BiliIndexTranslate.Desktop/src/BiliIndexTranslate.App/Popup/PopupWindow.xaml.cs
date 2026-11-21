@@ -9,6 +9,7 @@ using BiliIndexTranslate.App.Native;
 using BiliIndexTranslate.Core.Geometry;
 using BiliIndexTranslate.Core.Selection;
 using BiliIndexTranslate.Core.Translation;
+using BiliIndexTranslate.App.Localization;
 
 namespace BiliIndexTranslate.App.Popup;
 
@@ -146,12 +147,12 @@ public partial class PopupWindow : Window, IPopupSurface
         _layout = ReadingLayout.Paragraph;
         ErrorTitle.Text = error.Kind switch
         {
-            TranslationErrorKind.Timeout => "No response",
-            TranslationErrorKind.Network => "Connection problem",
-            TranslationErrorKind.Configuration => "Check settings",
-            TranslationErrorKind.EmptyResult => "Empty translation",
-            TranslationErrorKind.InvalidResponse => "Unexpected response",
-            _ => "Translation failed",
+            TranslationErrorKind.Timeout => Loc.T("Error_Timeout"),
+            TranslationErrorKind.Network => Loc.T("Error_Network"),
+            TranslationErrorKind.Configuration => Loc.T("Error_Configuration"),
+            TranslationErrorKind.EmptyResult => Loc.T("Error_Empty"),
+            TranslationErrorKind.InvalidResponse => Loc.T("Error_Invalid"),
+            _ => Loc.T("Popup_Failed"),
         };
         ErrorMessage.Text = error.Message;
         ErrorHint.Text = error.Hint ?? string.Empty;
@@ -172,7 +173,7 @@ public partial class PopupWindow : Window, IPopupSurface
     public void SetShowOriginal(bool show)
     {
         _showOriginal = show;
-        OriginalButton.ToolTip = show ? "Hide original text" : "Show original text";
+        Loc.Bind(OriginalButton, FrameworkElement.ToolTipProperty, show ? "Popup_HideOriginal" : "Popup_ShowOriginal");
         OriginalButton.Foreground = show ? (Brush)FindResource("Popup.Accent") : (Brush)FindResource("Popup.TextSecondary");
         if (BodyScroll.Visibility == Visibility.Visible)
             OriginalPanel.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
@@ -189,13 +190,13 @@ public partial class PopupWindow : Window, IPopupSurface
     {
         IsPinned = pinned;
         PinButton.Content = pinned ? "\uE77A" : "\uE718";
-        PinButton.ToolTip = pinned ? "Unpin and close" : "Keep this translation open (pinned window)";
+        Loc.Bind(PinButton, FrameworkElement.ToolTipProperty, pinned ? "Popup_Unpin" : "Popup_Pin");
         PinButton.IsEnabled = true;
         Card.BorderBrush = pinned ? (Brush)FindResource("Popup.PinnedBorder") : (Brush)FindResource("Popup.Border");
         Card.Cursor = pinned ? Cursors.SizeAll : null;
         if (pinned)
         {
-            Caption.Text = "pinned · drag to move";
+            Caption.Text = Loc.T("Popup_PinnedCaption");
             SetControlsVisible(true);
         }
     }
@@ -288,7 +289,7 @@ public partial class PopupWindow : Window, IPopupSurface
         }
         catch (Exception)
         {
-            FlashCaption("Clipboard busy");
+            FlashCaption(Loc.T("Popup_ClipboardBusy"));
         }
     }
 

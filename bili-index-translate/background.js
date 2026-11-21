@@ -1,33 +1,66 @@
 // background.js
 "use strict";
 
+// Interface text. The service worker loads it with importScripts; Node (unit tests, the sandbox) with require.
+const I18N =
+  typeof module !== "undefined" && module.exports ? require("./i18n.js") : (importScripts("i18n.js"), globalThis.BiliI18n);
+
 const DEFAULTS = {
   base: "https://index-translate.bilibili.com/v1",
   proxy: "",
   apiType: "openai",
+  customName: "",
+  customMethod: "POST",
+  customHeaders: "",
+  customBody: "",
+  customResultPath: "",
+  customErrorPath: "",
   model: "Index-Translate-9B",
   immersiveModel: "Index-Translate-2B",
   visionModel: "Index-Translate-35B-A3B",
-  key: "bili",
-  target: "中文"
+  target: "中文",
+  uiLang: "auto"
 };
 
+// Kept in chrome.storage.local: the glossary because of its size, the API key so that it stays on
+// this device instead of being uploaded to the browser account by chrome.storage.sync.
 const LOCAL_DEFAULTS = {
-  glossary: ""
+  glossary: "",
+  key: "bili"
 };
 
 const MENU_ID = "bili-translate-selection";
 const MENU_STUDY_ID = "bili-study-selection";
 const MENU_IMAGE_ID = "bili-translate-image";
 const MENU_IMMERSIVE_ID = "bili-immersive-page";
+// Context menu entries: id, title key, context.
+const MENUS = [
+  [MENU_ID, "menu.translate", "selection"],
+  [MENU_STUDY_ID, "menu.study", "selection"],
+  [MENU_IMAGE_ID, "menu.image", "image"],
+  [MENU_IMMERSIVE_ID, "menu.immersive", "page"]
+];
 const MAX_LEN = 3000;
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
 const TIMEOUT_MS = 35000;
 const MAX_ERROR_BODY = 4000;
 
+// Automatic retry for rate limits and temporary server errors (see retryRequest). Only a response whose
+// status is listed is retried; network errors, timeouts and cancellation never are. Tests may change fields.
+const RETRY_POLICY = {
+  maxRetries: 2,
+  baseDelayMs: 500,
+  maxDelayMs: 8000,
+  statuses: [429, 500, 502, 503, 504]
+};
+
 // apiType "deeplx": Base URL is a DeepLX-style translate endpoint instead of an OpenAI-compatible root.
 const API_TYPE_DEEPLX = "deeplx";
 const DEEPLX_LABEL = "DeepLX";
+
+// apiType "custom": the request and the place of the translation in the reply come from a template.
+const API_TYPE_CUSTOM = "custom";
+const CUSTOM_LABEL = "Custom API";
 
 // Strictly volatile in-RAM session LRU micro-cache (never persisted to chrome.storage or disk).
 const MEM_CACHE_LIMIT = 64;
@@ -77,14 +110,54 @@ function stripSlashes(url) {
   return String(url || "").trim().replace(/\/+$/, "");
 }
 
-async function getSettings() {
-  const syncCfg = await chrome.storage.sync.get(DEFAULTS);
-  let glossary = "";
-  if (chrome.storage.local) {
-    const localCfg = await chrome.storage.local.get(LOCAL_DEFAULTS);
-    glossary = String(localCfg.glossary || "");
+// Versions up to 1.4.1 stored the API key in chrome.storage.sync. Move it to chrome.storage.local and
+// delete the synced copy. A key already saved on this device wins over the synced one. Runs before
+// every settings read, so a key synced in later by an older install is moved as well.
+async function migrateKeyToLocal() {
+  const synced = await chrome.storage.sync.get("key");
+  if (!Object.prototype.hasOwnProperty.call(synced, "key")) return false;
+  const local = await chrome.storage.local.get("key");
+  if (!Object.prototype.hasOwnProperty.call(local, "key")) {
+    await chrome.storage.local.set({ key: String(synced.key ?? "") });
   }
-  return { ...syncCfg, glossary };
+  await chrome.storage.sync.remove("key");
+  return true;
+}
+
+// Language of the messages and menu titles this worker produces: the uiLang setting, or the browser's
+// language while it is "auto". Every request reads the settings first, which refreshes it; only a check
+// made before that read (an empty selection, say) can still use the language the worker started with.
+let uiLang = I18N.resolveLang("auto");
+
+function tr(key, ...args) {
+  return I18N.translate(uiLang, key, ...args);
+}
+
+function menuTitles() {
+  const titles = {};
+  for (const [id, titleKey] of MENUS) titles[id] = tr(titleKey);
+  return titles;
+}
+
+// On install or update, writes the defaults of settings that are not stored yet. A setting already
+// stored is never written back: reading everything and writing it all back would overwrite a value
+// saved in between (by the options page, or by a test setting a local endpoint) with the old one.
+async function fillMissingSyncDefaults() {
+  const stored = await chrome.storage.sync.get(null);
+  const missing = {};
+  for (const [key, value] of Object.entries(DEFAULTS)) {
+    if (!Object.prototype.hasOwnProperty.call(stored || {}, key)) missing[key] = value;
+  }
+  if (Object.keys(missing).length > 0) await chrome.storage.sync.set(missing);
+  return missing;
+}
+
+async function getSettings() {
+  await migrateKeyToLocal();
+  const syncCfg = await chrome.storage.sync.get(DEFAULTS);
+  uiLang = I18N.resolveLang(syncCfg.uiLang);
+  const localCfg = await chrome.storage.local.get(LOCAL_DEFAULTS);
+  return { ...syncCfg, glossary: String(localCfg.glossary || ""), key: String(localCfg.key ?? "") };
 }
 
 function isIndexModelOrHost(model, baseUrl) {
@@ -880,9 +953,129 @@ function extractPartialStudyDeck(partialRaw, sourceText) {
   };
 }
 
+// ---- Direct connection to the official endpoint ---------------------------------------------
+// The official endpoint answers HTTP 412 to a request that carries an extension's Origin header, so
+// that header is removed, and the client name set, on the requests this extension sends there. The
+// rule names the extension's own ID as the initiator, which is only known at run time; a rule in
+// the manifest cannot do that and would also rewrite what web pages send to the same host.
+const DIRECT_RULE_ID = 1;
+
+function directHeaderRule(extensionId) {
+  return {
+    id: DIRECT_RULE_ID,
+    priority: 1,
+    action: {
+      type: "modifyHeaders",
+      requestHeaders: [
+        { header: "origin", operation: "remove" },
+        { header: "user-agent", operation: "set", value: "Index-Translate-Client/1.0" }
+      ]
+    },
+    condition: {
+      urlFilter: "||index-translate.bilibili.com/v1/",
+      initiatorDomains: [extensionId]
+    }
+  };
+}
+
+// What a rule does, independent of how the browser writes it back (key order, header case).
+function directRuleSignature(rule) {
+  const action = (rule && rule.action) || {};
+  const condition = (rule && rule.condition) || {};
+  const headers = (action.requestHeaders || []).map((h) =>
+    [String(h.header).toLowerCase(), h.operation, h.value || ""].join(":")
+  );
+  return JSON.stringify([rule && rule.priority, action.type, headers, condition.urlFilter, condition.initiatorDomains || []]);
+}
+
+// Dynamic rules are kept by the browser across restarts, so the rule is written only when it is
+// missing or differs from the one this version wants. Returns whether it was written.
+async function installDirectRule() {
+  const dnr = typeof chrome !== "undefined" && chrome.declarativeNetRequest;
+  if (!dnr || typeof dnr.updateDynamicRules !== "function") return false;
+  const wanted = directHeaderRule(chrome.runtime.id);
+  const current = (await dnr.getDynamicRules()).find((rule) => rule.id === DIRECT_RULE_ID);
+  if (current && directRuleSignature(current) === directRuleSignature(wanted)) return false;
+  await dnr.updateDynamicRules({ removeRuleIds: [DIRECT_RULE_ID], addRules: [wanted] });
+  return true;
+}
+
+// Requests wait for this, so the first one after an install or update is not sent without the rule.
+let directRuleReady = null;
+
+function ensureDirectRule() {
+  if (!directRuleReady) {
+    directRuleReady = installDirectRule().catch((err) => {
+      console.warn("[Bili Index Translate] direct-connection rule not installed:", err);
+      return false;
+    });
+  }
+  return directRuleReady;
+}
+
+// ---- Retry on 429 / temporary server errors ---------------------------------------------------
+
+// Retry-After: seconds (decimals allowed), or an HTTP date (always contains a weekday or month name).
+// Returns milliseconds, or null when absent or anything else.
+function parseRetryAfter(value) {
+  if (value === null || value === undefined) return null;
+  const text = String(value).trim();
+  if (/^\d+(\.\d+)?$/.test(text)) return Number(text) * 1000;
+  if (!/[A-Za-z]/.test(text)) return null;
+  const at = Date.parse(text);
+  if (Number.isNaN(at)) return null;
+  return Math.max(0, at - Date.now());
+}
+
+// Wait before retry number `retried` + 1; null means the server asks for more than maxDelayMs, so give up.
+function retryDelayMs(retryAfter, retried) {
+  const asked = parseRetryAfter(retryAfter);
+  if (asked !== null) return asked > RETRY_POLICY.maxDelayMs ? null : asked;
+  const jitter = 0.8 + Math.random() * 0.4;
+  return RETRY_POLICY.baseDelayMs * Math.pow(2, retried) * jitter;
+}
+
+// A wait that ends at once, by rejecting, when the signal fires; timer and listener are always cleaned up.
+function abortableDelay(ms, signal) {
+  return new Promise((resolve, reject) => {
+    if (signal && signal.aborted) {
+      reject(new Error("Cancelled"));
+      return;
+    }
+    let timer = null;
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(new Error("Cancelled"));
+    };
+    timer = setTimeout(() => {
+      if (signal) signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    if (signal) signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+// Runs attempt() until it returns a response that is not retryable. attempt() resolves to something with
+// `status`; retryAfter(r) gives its Retry-After header value; discard(r) frees the previous body. Thrown
+// errors (network, timeout, cancel) pass straight through. onWait() is called when a wait starts and when
+// the next attempt starts, so an idle timer cannot fire in between. Cancelling during the wait rejects.
+async function retryRequest(attempt, { retryAfter, discard, signal, onWait }) {
+  for (let retried = 0; ; retried++) {
+    const r = await attempt();
+    if (!RETRY_POLICY.statuses.includes(r.status) || retried >= RETRY_POLICY.maxRetries) return r;
+    const wait = retryDelayMs(retryAfter(r), retried);
+    if (wait === null) return r;
+    if (discard) await discard(r);
+    if (onWait) onWait();
+    await abortableDelay(wait, signal);
+    if (onWait) onWait();
+  }
+}
+
 // ---- API & Streaming --------------------------------------------------------------------
 
-async function postJson(url, headers, body, externalSignal) {
+// One HTTP request with the shared timeout and caller-abort handling. bodyText is sent as is.
+async function sendRequest(url, method, headers, bodyText, externalSignal) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
   const onAbort = () => controller.abort();
@@ -891,23 +1084,29 @@ async function postJson(url, headers, body, externalSignal) {
     else externalSignal.addEventListener("abort", onAbort, { once: true });
   }
   try {
+    await ensureDirectRule();
     const res = await fetch(url, {
-      method: "POST",
+      method: method,
       headers: headers,
-      body: JSON.stringify(body),
+      body: bodyText,
       signal: controller.signal
     });
     const raw = await res.text();
-    return { ok: res.ok, status: res.status, raw: raw };
+    const retryAfter = res.headers && res.headers.get ? res.headers.get("retry-after") : null;
+    return { ok: res.ok, status: res.status, raw: raw, retryAfter: retryAfter };
   } catch (err) {
     if (err && err.name === "AbortError") {
-      throw new Error(externalSignal && externalSignal.aborted ? "Cancelled" : "Request timed out after " + TIMEOUT_MS / 1000 + " s");
+      throw new Error(externalSignal && externalSignal.aborted ? "Cancelled" : tr("bg.timeout", TIMEOUT_MS / 1000));
     }
     throw err;
   } finally {
     clearTimeout(timer);
     if (externalSignal) externalSignal.removeEventListener("abort", onAbort);
   }
+}
+
+async function postJson(url, headers, body, externalSignal) {
+  return sendRequest(url, "POST", headers, JSON.stringify(body), externalSignal);
 }
 
 async function postChat(prefix, key, body, externalSignal) {
@@ -923,6 +1122,7 @@ async function postChat(prefix, key, body, externalSignal) {
 }
 
 async function openChatStream(prefix, key, body, signal) {
+  await ensureDirectRule();
   return fetch(stripSlashes(prefix) + "/chat/completions", {
     method: "POST",
     headers: {
@@ -1016,7 +1216,7 @@ function parseDeeplxResponse(raw, httpStatus) {
   try {
     data = JSON.parse(raw);
   } catch (_) {
-    return { ok: false, status: httpStatus, body: "Response is not JSON: " + String(raw).slice(0, MAX_ERROR_BODY) };
+    return { ok: false, status: httpStatus, body: tr("bg.notJson", String(raw).slice(0, MAX_ERROR_BODY)) };
   }
   const code = data && typeof data.code === "number" ? data.code : 200;
   if (code !== 200) {
@@ -1024,18 +1224,23 @@ function parseDeeplxResponse(raw, httpStatus) {
   }
   const text = data && typeof data.data === "string" ? data.data.trim() : "";
   if (!text) {
-    return { ok: false, status: httpStatus, body: "No translation in \"data\": " + String(raw).slice(0, MAX_ERROR_BODY) };
+    return { ok: false, status: httpStatus, body: tr("bg.deeplxNoData", String(raw).slice(0, MAX_ERROR_BODY)) };
   }
   return { ok: true, text: text };
 }
 
-function deeplxCacheKey(s, text) {
-  return DEEPLX_LABEL + "|" + s.target + "|" + stripSlashes(s.base) + "||" + text;
-}
+// ---- Text-only engines: DeepLX and custom JSON APIs -----------------------------------------
+// Both translate plain text with one request and one final result. Neither has a prompt, so the
+// glossary is not applied and Study Cards and image translation are refused. They share the cache,
+// the Alt+A batch handling and the error shape; an engine only says how to send text and read the reply.
 
 // studyCard: false tells the page not to advertise the Study Card next to this translation.
-function deeplxEntry(text, via) {
-  return { text: text, model: DEEPLX_LABEL, via: via, glossaryHits: 0, studyCard: false };
+function engineEntry(engine, text, via) {
+  return { text: text, model: engine.label, via: via, glossaryHits: 0, studyCard: false };
+}
+
+function engineCacheKey(engine, s, text) {
+  return engine.cachePrefix + "|" + s.target + "|" + stripSlashes(s.base) + "||" + text;
 }
 
 // One request, one final text: DeepLX does not stream. As with the chat paths, a relay replaces the
@@ -1047,7 +1252,10 @@ async function deeplxRequest(s, text, externalSignal) {
 
   let r;
   try {
-    r = await postJson(req.url, req.headers, req.body, externalSignal);
+    r = await retryRequest(() => postJson(req.url, req.headers, req.body, externalSignal), {
+      retryAfter: (x) => x.retryAfter,
+      signal: externalSignal
+    });
   } catch (err) {
     if (externalSignal && externalSignal.aborted) {
       return { ok: false, cancelled: true, status: 0, body: "Cancelled" };
@@ -1060,28 +1268,302 @@ async function deeplxRequest(s, text, externalSignal) {
   return { ...parseDeeplxResponse(r.raw, r.status), via: via };
 }
 
-async function deeplxTranslate(s, text, externalSignal) {
-  const cacheKey = deeplxCacheKey(s, text);
+// lineBatch: a DeepLX service translates line by line, so paragraphs can share one request.
+function deeplxEngine(s) {
+  return {
+    label: DEEPLX_LABEL,
+    cachePrefix: DEEPLX_LABEL,
+    lineBatch: true,
+    request: (text, signal) => deeplxRequest(s, text, signal)
+  };
+}
+
+// ---- Custom JSON API template ----------------------------------------------------------------
+// The request is described in the options instead of in code: URL, method, headers and body are
+// templates, and a path says where the translation is in the JSON reply. Placeholders:
+//   {text}        the text to translate
+//   {texts}       every text of the request as a JSON array (body only); one request per Alt+A batch
+//   {apiKey}      the API Key field
+//   {target}      the Target language field exactly as entered
+//   {targetLang}  the target as a DeepL-style code (ZH, EN, PT-BR); {targetLangLower} in lower case
+// Values are escaped for where they land: URL-encoded in the URL and in form bodies, JSON-escaped in
+// JSON bodies (write "{text}" inside the quotes of a string), stripped of line breaks in headers.
+
+const CUSTOM_PLACEHOLDER =
+  /\{\{(texts|text|apiKey|targetLangLower|targetLang|target)\}\}|\{(texts|text|apiKey|targetLangLower|targetLang|target)\}/gi;
+
+function fillCustomTemplate(template, values, encode) {
+  return String(template).replace(CUSTOM_PLACEHOLDER, (_, a, b) => encode(values[(a || b).toLowerCase()]));
+}
+
+function encodeRaw(v) {
+  return Array.isArray(v) ? JSON.stringify(v) : String(v);
+}
+
+function encodeForUrl(v) {
+  return encodeURIComponent(encodeRaw(v));
+}
+
+function encodeForHeader(v) {
+  return encodeRaw(v).replace(/[\r\n]+/g, " ");
+}
+
+// Inside a JSON string: the escaped characters without the surrounding quotes. {texts} is a whole array literal.
+function encodeForJson(v) {
+  return Array.isArray(v) ? JSON.stringify(v) : JSON.stringify(String(v)).slice(1, -1);
+}
+
+// Paths like data.translations[0].text. A key is a string token, [n] a number, and [*] (null) collects
+// every element of an array. Returns null when the path is empty or malformed.
+function parseJsonPath(path) {
+  const src = String(path || "").trim().replace(/^\$\.?/, "");
+  if (!/^(?:[^.\[\]\s]+|\[(?:\d+|\*)\])(?:\.[^.\[\]\s]+|\[(?:\d+|\*)\])*$/.test(src)) return null;
+  const tokens = [];
+  const re = /\[(\d+|\*)\]|[^.\[\]]+/g;
+  let m;
+  while ((m = re.exec(src)) !== null) {
+    tokens.push(m[1] === undefined ? m[0] : m[1] === "*" ? null : Number(m[1]));
+  }
+  return tokens;
+}
+
+// Every value the path reaches: at most one without [*], any number with it.
+function readJsonPath(data, tokens) {
+  let nodes = [data];
+  for (const t of tokens) {
+    const next = [];
+    for (const n of nodes) {
+      if (t === null) {
+        if (Array.isArray(n)) next.push(...n);
+      } else if (typeof t === "number") {
+        if (Array.isArray(n) && t < n.length) next.push(n[t]);
+      } else if (n && typeof n === "object" && !Array.isArray(n) && Object.prototype.hasOwnProperty.call(n, t)) {
+        next.push(n[t]);
+      }
+    }
+    nodes = next;
+  }
+  return nodes;
+}
+
+function customConfigError(message) {
+  return { ok: false, error: message };
+}
+
+function parseCustomTemplate(s) {
+  const method = String(s.customMethod || "").trim().toUpperCase() === "GET" ? "GET" : "POST";
+  const bodyTemplate = method === "GET" ? "" : String(s.customBody || "").trim();
+
+  const headers = [];
+  let contentType = "";
+  for (const rawLine of String(s.customHeaders || "").split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith("#")) continue;
+    const m = /^([A-Za-z0-9_-]+)\s*:\s*(.*)$/.exec(line);
+    if (!m) return customConfigError(tr("bg.custom.headerLine", line.slice(0, 80)));
+    headers.push([m[1], m[2]]);
+    if (m[1].toLowerCase() === "content-type") contentType = m[2];
+  }
+  if (bodyTemplate && !contentType) {
+    contentType = "application/json";
+    headers.push(["Content-Type", contentType]);
+  }
+
+  const resultPathText = String(s.customResultPath || "").trim();
+  const resultPath = parseJsonPath(resultPathText);
+  if (!resultPath) {
+    return customConfigError(
+      resultPathText ? tr("bg.custom.resultPathInvalid", resultPathText) : tr("bg.custom.resultPathEmpty")
+    );
+  }
+  const errorPathText = String(s.customErrorPath || "").trim();
+  const errorPath = errorPathText ? parseJsonPath(errorPathText) : null;
+  if (errorPathText && !errorPath) return customConfigError(tr("bg.custom.errorPathInvalid", errorPathText));
+
+  const endpoint = stripSlashes(s.proxy) || stripSlashes(s.base);
+  const batch = /\{\{?texts\}?\}/i.test(bodyTemplate);
+  if (!batch && !/\{\{?text\}?\}/i.test(endpoint + "\n" + bodyTemplate)) {
+    return customConfigError(tr("bg.custom.noText"));
+  }
+
+  return {
+    ok: true,
+    method: method,
+    headers: headers,
+    bodyTemplate: bodyTemplate,
+    form: /x-www-form-urlencoded/i.test(contentType),
+    json: /json/i.test(contentType),
+    resultPath: resultPath,
+    resultPathText: resultPathText,
+    errorPath: errorPath,
+    batch: batch
+  };
+}
+
+function buildCustomRequest(tpl, endpoint, key, texts, target) {
+  const t = String(target || DEFAULTS.target).trim();
+  const lang = deeplxTargetLang(t);
+  const values = {
+    text: texts[0],
+    texts: texts,
+    apikey: String(key || "").trim(),
+    target: t,
+    targetlang: lang,
+    targetlanglower: lang.toLowerCase()
+  };
+
+  const headers = {};
+  for (const [name, value] of tpl.headers) headers[name] = fillCustomTemplate(value, values, encodeForHeader);
+  const request = { url: fillCustomTemplate(stripSlashes(endpoint), values, encodeForUrl), headers: headers, body: undefined };
+
+  if (tpl.bodyTemplate) {
+    const encode = tpl.form ? encodeForUrl : tpl.json ? encodeForJson : encodeRaw;
+    request.body = fillCustomTemplate(tpl.bodyTemplate, values, encode);
+    if (tpl.json) {
+      try {
+        JSON.parse(request.body);
+      } catch (_) {
+        return { error: tr("bg.custom.bodyNotJson") };
+      }
+    }
+  }
+  return request;
+}
+
+// Reads the translations at the result path. A batch template ({texts}) must return one translation per
+// text; otherwise everything the path reaches is one translation (some services split it into pieces).
+function parseCustomResponse(raw, httpStatus, httpOk, tpl, expected) {
+  let data;
+  let isJson = true;
+  try {
+    data = JSON.parse(raw);
+  } catch (_) {
+    isJson = false;
+  }
+
+  let errorText = "";
+  if (isJson && tpl.errorPath) {
+    const found = readJsonPath(data, tpl.errorPath).find((v) => typeof v === "string" && v.trim());
+    if (found) errorText = found.trim();
+  }
+  const snippet = String(raw).slice(0, MAX_ERROR_BODY);
+
+  if (!httpOk) return { ok: false, status: httpStatus, body: errorText ? errorText.slice(0, MAX_ERROR_BODY) : snippet };
+  if (!isJson) return { ok: false, status: httpStatus, body: tr("bg.notJson", snippet) };
+
+  const texts = [];
+  let valid = true;
+  for (const v of readJsonPath(data, tpl.resultPath)) {
+    if (typeof v === "string") texts.push(v);
+    else if (Array.isArray(v) && v.every((x) => typeof x === "string")) texts.push(...v);
+    else valid = false;
+  }
+  const missing = {
+    ok: false,
+    status: httpStatus,
+    body: errorText || tr("bg.customNoResult", tpl.resultPathText, snippet)
+  };
+  if (!valid || texts.length === 0) return missing;
+
+  if (tpl.batch) {
+    const out = texts.map((x) => x.trim());
+    if (out.length !== expected || !out.every(Boolean)) {
+      return {
+        ok: false,
+        status: httpStatus,
+        mismatch: true,
+        body: tr("bg.customCount", expected, tpl.resultPathText, out.filter(Boolean).length)
+      };
+    }
+    return { ok: true, texts: out };
+  }
+
+  const text = texts.join("").trim();
+  return text ? { ok: true, texts: [text] } : missing;
+}
+
+// Same rules as the other paths: a relay replaces the URL only when it is configured, one request,
+// no retry on another route. A template that cannot work is reported without sending anything.
+async function customRequest(s, tpl, texts, externalSignal) {
+  if (!tpl.ok) return { ok: false, status: 0, body: tpl.error };
+  const relay = stripSlashes(s.proxy);
+  const via = relay ? "relay" : "direct";
+  const req = buildCustomRequest(tpl, relay || s.base, s.key, texts, s.target);
+  if (req.error) return { ok: false, status: 0, body: req.error };
+
+  let r;
+  try {
+    r = await retryRequest(() => sendRequest(req.url, tpl.method, req.headers, req.body, externalSignal), {
+      retryAfter: (x) => x.retryAfter,
+      signal: externalSignal
+    });
+  } catch (err) {
+    if (externalSignal && externalSignal.aborted) {
+      return { ok: false, cancelled: true, status: 0, body: "Cancelled" };
+    }
+    return { ok: false, status: 0, body: String((err && err.message) || err) };
+  }
+  return { ...parseCustomResponse(r.raw, r.status, r.ok, tpl, texts.length), via: via };
+}
+
+function customEngine(s) {
+  const label = String(s.customName || "").trim() || CUSTOM_LABEL;
+  const tpl = parseCustomTemplate(s);
+  const send = (texts, signal) => customRequest(s, tpl, texts, signal);
+  const engine = {
+    label: label,
+    cachePrefix: "custom:" + label,
+    lineBatch: false,
+    request: async (text, signal) => {
+      const r = await send([text], signal);
+      if (r.ok) return { ok: true, text: r.texts[0], via: r.via };
+      const { mismatch, ...error } = r;
+      return error;
+    }
+  };
+  if (tpl.ok && tpl.batch) engine.requestMany = send;
+  return engine;
+}
+
+// Used by the options page before saving, so a template that cannot work is reported there.
+function checkApiConfig(s) {
+  if (String((s && s.apiType) || "").trim().toLowerCase() !== API_TYPE_CUSTOM) return { ok: true };
+  const tpl = parseCustomTemplate(s);
+  if (!tpl.ok) return { ok: false, error: tpl.error };
+  const req = buildCustomRequest(tpl, stripSlashes(s.proxy) || s.base, s.key, ["sample"], s.target);
+  return req.error ? { ok: false, error: req.error } : { ok: true };
+}
+
+// null for the OpenAI-compatible format, which goes through the chat paths.
+function textEngine(s) {
+  if (isDeeplx(s)) return deeplxEngine(s);
+  if (String((s && s.apiType) || "").trim().toLowerCase() === API_TYPE_CUSTOM) return customEngine(s);
+  return null;
+}
+
+async function engineTranslate(engine, s, text, externalSignal) {
+  const cacheKey = engineCacheKey(engine, s, text);
   const hit = lruGet(volatileTranslateCache, cacheKey);
   if (hit) return { ok: true, ...hit, cached: true };
 
-  const r = await deeplxRequest(s, text, externalSignal);
+  const r = await engine.request(text, externalSignal);
   if (!r.ok) return r;
-  const out = deeplxEntry(r.text, r.via);
+  const out = engineEntry(engine, r.text, r.via);
   lruSet(volatileTranslateCache, cacheKey, out);
   return { ok: true, ...out };
 }
 
-// Endpoints whose reply did not keep one line per paragraph; Alt+A no longer merges paragraphs for them.
-const deeplxNoLineBatch = new Set();
+// Endpoints whose reply to a merged request did not give one translation per paragraph; Alt+A no
+// longer merges paragraphs for them.
+const noMergedBatch = new Set();
 
-// Alt+A batch. Paragraphs that are single lines go out as one request, one paragraph per line: a
-// DeepLX service translates line by line, so the reply splits back by line and a batch costs one
-// request instead of one per paragraph. When a reply does not have exactly one line per paragraph,
-// the endpoint is remembered as not line-preserving and its paragraphs are sent one by one, as are
-// paragraphs that contain line breaks themselves. A failed paragraph is left out of the result; the
-// batch itself fails only when it produced no translation at all.
-async function deeplxImmersiveBatch(s, items, onProgress, externalSignal) {
+// Alt+A batch. Where the engine allows it, the uncached paragraphs go out as one request: a batch
+// template ({texts}) sends them as an array, and a line-based service (DeepLX) gets one single-line
+// paragraph per line and the reply is split back by line. When the reply does not have exactly one
+// translation per paragraph, the endpoint is remembered and its paragraphs are sent one by one, as
+// are paragraphs an engine cannot merge. A failed paragraph is left out of the result; the batch
+// itself fails only when it produced no translation at all.
+async function engineImmersiveBatch(engine, s, items, onProgress, externalSignal) {
   const segments = {};
   let pending = [];
   let translated = 0;
@@ -1092,7 +1574,7 @@ async function deeplxImmersiveBatch(s, items, onProgress, externalSignal) {
       segments[i] = "";
       continue;
     }
-    const hit = lruGet(volatileTranslateCache, deeplxCacheKey(s, txt));
+    const hit = lruGet(volatileTranslateCache, engineCacheKey(engine, s, txt));
     if (hit) {
       segments[i] = hit.text;
       translated++;
@@ -1102,12 +1584,12 @@ async function deeplxImmersiveBatch(s, items, onProgress, externalSignal) {
   }
 
   if (pending.length === 0) {
-    return { ok: true, segments: segments, model: DEEPLX_LABEL, via: "direct", cached: true };
+    return { ok: true, segments: segments, model: engine.label, via: "direct", cached: true };
   }
 
   const report = (via) => {
     if (typeof onProgress === "function") {
-      onProgress({ segments: { ...segments }, model: DEEPLX_LABEL, via: via });
+      onProgress({ segments: { ...segments }, model: engine.label, via: via });
     }
   };
   if (translated > 0) report("cache");
@@ -1115,35 +1597,52 @@ async function deeplxImmersiveBatch(s, items, onProgress, externalSignal) {
   const commit = (i, text, via) => {
     segments[i] = text;
     translated++;
-    lruSet(volatileTranslateCache, deeplxCacheKey(s, items[i]), deeplxEntry(text, via));
+    lruSet(volatileTranslateCache, engineCacheKey(engine, s, items[i]), engineEntry(engine, text, via));
   };
 
   let firstError = null;
-  const endpoint = stripSlashes(s.proxy) || stripSlashes(s.base);
-  if (pending.length > 1 && !deeplxNoLineBatch.has(endpoint) && pending.every((i) => !/[\r\n]/.test(items[i]))) {
-    const r = await deeplxRequest(s, pending.map((i) => items[i]).join("\n"), externalSignal);
-    if (r.cancelled) return r;
-    if (!r.ok) {
-      // Sending the same paragraphs one by one would fail the same way; do not multiply the failure.
-      firstError = r;
-      pending = [];
-    } else {
-      const lines = r.text.split(/\r?\n/).map((line) => line.trim());
-      if (lines.length === pending.length && lines.every(Boolean)) {
-        pending.forEach((i, k) => commit(i, lines[k], r.via));
-        report(r.via);
-        pending = [];
+  const endpoint = engine.cachePrefix + "|" + (stripSlashes(s.proxy) || stripSlashes(s.base));
+  if (pending.length > 1 && !noMergedBatch.has(endpoint)) {
+    let merged = null;
+    if (engine.requestMany) {
+      merged = await engine.requestMany(pending.map((i) => items[i]), externalSignal);
+    } else if (engine.lineBatch && pending.every((i) => !/[\r\n]/.test(items[i]))) {
+      const r = await engine.request(pending.map((i) => items[i]).join("\n"), externalSignal);
+      if (r.ok) {
+        const lines = r.text.split(/\r?\n/).map((line) => line.trim());
+        merged =
+          lines.length === pending.length && lines.every(Boolean)
+            ? { ok: true, texts: lines, via: r.via }
+            : { ok: false, mismatch: true };
       } else {
-        deeplxNoLineBatch.add(endpoint);
+        merged = r;
+      }
+    }
+
+    if (merged) {
+      if (merged.cancelled) return merged;
+      if (merged.ok) {
+        pending.forEach((i, k) => commit(i, merged.texts[k], merged.via));
+        report(merged.via);
+        pending = [];
+      } else if (merged.mismatch) {
+        noMergedBatch.add(endpoint);
+      } else {
+        // Sending the same paragraphs one by one would fail the same way; do not multiply the failure.
+        firstError = merged;
+        pending = [];
       }
     }
   }
 
   for (const i of pending) {
-    const r = await deeplxRequest(s, items[i], externalSignal);
+    const r = await engine.request(items[i], externalSignal);
     if (r.cancelled) return r;
     if (!r.ok) {
       if (!firstError) firstError = r;
+      // Retries are already used up: the service is limiting or down, so stop sending. A 500 may come
+      // from this paragraph alone, so it does not stop the others.
+      if (r.status !== 500 && RETRY_POLICY.statuses.includes(r.status)) break;
       continue;
     }
     commit(i, r.text, r.via);
@@ -1154,36 +1653,78 @@ async function deeplxImmersiveBatch(s, items, onProgress, externalSignal) {
   return {
     ok: true,
     segments: segments,
-    model: DEEPLX_LABEL,
+    model: engine.label,
     via: stripSlashes(s.proxy) ? "relay" : "direct",
     glossaryHits: 0
   };
 }
 
-function deeplxUnsupported(feature) {
+// featureKey names the feature (bg.feature.image or bg.feature.study) that the text-only format cannot do.
+function textOnlyUnsupported(featureKey, engine) {
   return {
     ok: false,
     status: 0,
-    body:
-      feature +
-      " needs an OpenAI-compatible chat model. The DeepLX API format only translates text; change the API format in the extension options to use it."
+    body: tr("bg.unsupported", tr(featureKey), tr(engine.label === DEEPLX_LABEL ? "bg.format.deeplx" : "bg.format.custom"))
   };
 }
 
-async function fetchImageAsDataUrl(srcUrl) {
+// Reads a response body but stops as soon as it grows past maxBytes, so an oversized download is
+// dropped instead of being buffered in full. Returns null when the limit is exceeded.
+async function readBodyCapped(res, maxBytes) {
+  if (!res.body) return new Uint8Array(await res.arrayBuffer());
+  const reader = res.body.getReader();
+  const chunks = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > maxBytes) {
+      await reader.cancel().catch(() => {});
+      return null;
+    }
+    chunks.push(value);
+  }
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return bytes;
+}
+
+async function fetchImageAsDataUrl(srcUrl, timeoutMs = TIMEOUT_MS) {
   const url = String(srcUrl || "").trim();
-  if (!url) throw new Error("Empty image URL.");
+  if (!url) throw new Error(tr("bg.image.emptyUrl"));
   if (url.startsWith("data:image/")) return url;
 
-  const res = await fetch(url, { credentials: "omit" });
-  if (!res.ok) throw new Error("Failed to fetch image (HTTP " + res.status + ").");
-  const buf = await res.arrayBuffer();
-  if (buf.byteLength === 0) throw new Error("Image is empty.");
-  if (buf.byteLength > MAX_IMAGE_BYTES) throw new Error("Image exceeds 8 MB limit; use Alt+S region snip instead.");
+  const tooLarge = tr("bg.image.tooLarge");
+  const controller = new AbortController();
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeoutMs);
+  try {
+    const res = await fetch(url, { credentials: "omit", signal: controller.signal });
+    if (!res.ok) throw new Error(tr("bg.image.http", res.status));
+    // Content-Length can be missing or wrong, so it only allows an early refusal; the capped read is the limit.
+    if (Number(res.headers.get("content-length")) > MAX_IMAGE_BYTES) throw new Error(tooLarge);
+    const bytes = await readBodyCapped(res, MAX_IMAGE_BYTES);
+    if (!bytes) throw new Error(tooLarge);
+    if (bytes.byteLength === 0) throw new Error(tr("bg.image.empty"));
 
-  const rawType = (res.headers.get("content-type") || "image/png").split(";")[0].trim().toLowerCase();
-  const mime = rawType.startsWith("image/") ? rawType : "image/png";
-  return "data:" + mime + ";base64," + arrayBufferToBase64(buf);
+    const rawType = (res.headers.get("content-type") || "image/png").split(";")[0].trim().toLowerCase();
+    const mime = rawType.startsWith("image/") ? rawType : "image/png";
+    return "data:" + mime + ";base64," + arrayBufferToBase64(bytes);
+  } catch (err) {
+    if (timedOut) throw new Error(tr("bg.image.timeout", timeoutMs / 1000));
+    throw err;
+  } finally {
+    clearTimeout(timer);
+    controller.abort(); // ends a download that was refused before its body was read
+  }
 }
 
 async function callChatCompletion(messages, s, temperature = 0.0, activeModel = "", maxTokens = undefined) {
@@ -1217,7 +1758,7 @@ async function callChatCompletion(messages, s, temperature = 0.0, activeModel = 
     return {
       ok: false,
       status: r.status,
-      body: "Response is not JSON: " + r.raw.slice(0, MAX_ERROR_BODY),
+      body: tr("bg.notJson", r.raw.slice(0, MAX_ERROR_BODY)),
       via: via
     };
   }
@@ -1228,7 +1769,7 @@ async function callChatCompletion(messages, s, temperature = 0.0, activeModel = 
     return {
       ok: false,
       status: r.status,
-      body: "No choices[0].message.content in: " + r.raw.slice(0, MAX_ERROR_BODY),
+      body: tr("bg.noContent", r.raw.slice(0, MAX_ERROR_BODY)),
       via: via
     };
   }
@@ -1241,9 +1782,17 @@ async function readCompletionContent(res) {
   return (j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content) || "";
 }
 
+// An error object some OpenAI-compatible servers send inside the stream instead of an HTTP status.
+function streamErrorText(error) {
+  if (typeof error === "string") return error;
+  const message = error && typeof error.message === "string" ? error.message : "";
+  return (message || JSON.stringify(error) || "").slice(0, MAX_ERROR_BODY);
+}
+
 // Returns the raw completion text. For SSE responses onText receives the accumulated text after each
-// delta; returning false from onText cancels the rest of the stream.
-async function readChatContent(res, onText) {
+// delta; returning false from onText cancels the rest of the stream. onActivity is called for every
+// chunk that arrives, so that the caller can tell a slow stream from a stalled one.
+async function readChatContent(res, onText, onActivity) {
   const ctype = String(res.headers.get("content-type") || "").toLowerCase();
   if (!ctype.includes("event-stream") || !res.body) return readCompletionContent(res);
 
@@ -1252,65 +1801,101 @@ async function readChatContent(res, onText) {
   let sseBuf = "";
   let full = "";
 
-  while (true) {
-    const { value, done } = await reader.read();
-    if (done) return full;
-    sseBuf += decoder.decode(value, { stream: true });
-    const lines = sseBuf.split(/\r?\n/);
-    sseBuf = lines.pop() || "";
+  // false: stop reading (the terminator arrived, or onText asked to stop).
+  const consume = (line) => {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith("data:")) return true;
+    const payload = trimmed.slice(5).trim();
+    if (!payload) return true;
+    // Anything after the terminator is not part of this completion.
+    if (payload === "[DONE]") return false;
+    let chunkObj;
+    try {
+      chunkObj = JSON.parse(payload);
+    } catch (_) {
+      return true;
+    }
+    if (chunkObj && chunkObj.error) throw new Error(streamErrorText(chunkObj.error));
+    const choice = chunkObj && Array.isArray(chunkObj.choices) ? chunkObj.choices[0] : null;
+    const delta = choice && choice.delta && typeof choice.delta.content === "string" ? choice.delta.content : "";
+    if (!delta) return true;
+    full += delta;
+    return typeof onText !== "function" || onText(full) !== false;
+  };
 
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (!trimmed.startsWith("data:")) continue;
-      const payload = trimmed.slice(5).trim();
-      if (!payload) continue;
-      if (payload === "[DONE]") {
-        // Anything after the terminator is not part of this completion.
-        try { await reader.cancel(); } catch (_) {}
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (typeof onActivity === "function") onActivity();
+      if (done) {
+        // A last line that was not ended by a line break is still part of the completion.
+        sseBuf += decoder.decode();
+        if (sseBuf) consume(sseBuf);
         return full;
       }
-      let keepReading = true;
-      try {
-        const chunkObj = JSON.parse(payload);
-        const delta = (chunkObj.choices && chunkObj.choices[0] && chunkObj.choices[0].delta && chunkObj.choices[0].delta.content) || "";
-        if (delta) {
-          full += delta;
-          if (typeof onText === "function") keepReading = onText(full) !== false;
+      sseBuf += decoder.decode(value, { stream: true });
+      const lines = sseBuf.split(/\r?\n/);
+      sseBuf = lines.pop() || "";
+
+      for (const line of lines) {
+        if (!consume(line)) {
+          try { await reader.cancel(); } catch (_) {}
+          return full;
         }
-      } catch (_) {}
-      if (!keepReading) {
-        try { await reader.cancel(); } catch (_) {}
-        return full;
       }
     }
+  } catch (err) {
+    try { await reader.cancel(); } catch (_) {}
+    throw err;
   }
 }
 
 // Shared lifecycle of the streaming paths: timeout, caller abort, route choice and HTTP errors.
+// The timeout is an idle limit: it restarts whenever the stream delivers something (handleResponse
+// passes `touch` to readChatContent), so a long reply that keeps flowing is not cut off.
 async function runChatStream(s, base, body, externalSignal, handleResponse) {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+  let timedOut = false;
+  let timer = null;
+  const touch = () => {
+    clearTimeout(timer);
+    timer = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, TIMEOUT_MS);
+  };
   const onAbort = () => controller.abort();
   if (externalSignal) {
     if (externalSignal.aborted) controller.abort();
     else externalSignal.addEventListener("abort", onAbort, { once: true });
   }
+  touch();
 
   try {
     const relay = stripSlashes(s.proxy);
     const via = relay ? "relay" : "direct";
-    const res = await openChatStream(relay || base, s.key, body, controller.signal);
+    const res = await retryRequest(() => openChatStream(relay || base, s.key, body, controller.signal), {
+      retryAfter: (x) => (x.headers && x.headers.get ? x.headers.get("retry-after") : null),
+      discard: async (x) => {
+        try {
+          await x.body.cancel();
+        } catch (_) {}
+      },
+      signal: controller.signal,
+      onWait: touch
+    });
 
     if (!res.ok) {
       const errRaw = await res.text();
       return { ok: false, status: res.status, body: errRaw.slice(0, MAX_ERROR_BODY), via: via };
     }
 
-    return await handleResponse(res, via);
+    return await handleResponse(res, via, touch);
   } catch (err) {
     if (externalSignal && externalSignal.aborted) {
       return { ok: false, cancelled: true, status: 0, body: "Cancelled" };
     }
+    if (timedOut) return { ok: false, status: 0, body: tr("bg.timeout", TIMEOUT_MS / 1000) };
     return { ok: false, status: 0, body: String((err && err.message) || err) };
   } finally {
     clearTimeout(timer);
@@ -1320,11 +1905,12 @@ async function runChatStream(s, base, body, externalSignal, handleResponse) {
 
 async function streamTranslation(text, onDelta, externalSignal) {
   text = String(text || "").trim();
-  if (!text) return { ok: false, status: 0, body: "Nothing to translate." };
-  if (text.length > MAX_LEN) return { ok: false, status: 0, body: "Selection is longer than " + MAX_LEN + " characters." };
+  if (!text) return { ok: false, status: 0, body: tr("bg.nothingToTranslate") };
+  if (text.length > MAX_LEN) return { ok: false, status: 0, body: tr("bg.tooLong", MAX_LEN) };
 
   const s = await getSettings();
-  if (isDeeplx(s)) return deeplxTranslate(s, text, externalSignal);
+  const textOnly = textEngine(s);
+  if (textOnly) return engineTranslate(textOnly, s, text, externalSignal);
   const activeModel = String(s.model || DEFAULTS.model).trim();
   const base = stripSlashes(s.base);
   const hits = matchGlossaryHits(s.glossary, text);
@@ -1347,16 +1933,16 @@ async function streamTranslation(text, onDelta, externalSignal) {
     base
   );
 
-  return runChatStream(s, base, body, externalSignal, async (res, via) => {
+  return runChatStream(s, base, body, externalSignal, async (res, via, touch) => {
     const raw = await readChatContent(res, (full) => {
       const visible = stripThink(full);
       if (visible && typeof onDelta === "function") {
         onDelta({ text: visible, model: activeModel, via: via, glossaryHits: hits.length });
       }
-    });
+    }, touch);
 
     const clean = stripThink(raw);
-    if (!clean) return { ok: false, status: 200, body: "Empty translation.", via: via };
+    if (!clean) return { ok: false, status: 200, body: tr("bg.emptyTranslation"), via: via };
     const out = { text: clean, model: activeModel, via: via, glossaryHits: hits.length };
     lruSet(volatileTranslateCache, cacheKey, out);
     return { ok: true, ...out };
@@ -1366,11 +1952,12 @@ async function streamTranslation(text, onDelta, externalSignal) {
 async function streamVisionTranslation(imageDataUrl, modelOverride, onDelta, externalSignal) {
   const dataUrl = String(imageDataUrl || "").trim();
   if (!dataUrl.startsWith("data:image/")) {
-    return { ok: false, status: 0, body: "Invalid image payload." };
+    return { ok: false, status: 0, body: tr("bg.invalidImage") };
   }
 
   const s = await getSettings();
-  if (isDeeplx(s)) return deeplxUnsupported("Image translation");
+  const textOnly = textEngine(s);
+  if (textOnly) return textOnlyUnsupported("bg.feature.image", textOnly);
   const activeModel = resolveVisionModel(s.visionModel, modelOverride);
   const base = stripSlashes(s.base);
   const cacheKey = activeModel + "|" + s.target + "|" + base + "|" + (await sha256Hex(s.glossary)) + "|" + (await sha256Hex(dataUrl));
@@ -1391,7 +1978,7 @@ async function streamVisionTranslation(imageDataUrl, modelOverride, onDelta, ext
     base
   );
 
-  return runChatStream(s, base, body, externalSignal, async (res, via) => {
+  return runChatStream(s, base, body, externalSignal, async (res, via, touch) => {
     let lastShown = "";
     const raw = await readChatContent(res, (full) => {
       const parsed = parseVisionDualOutput(full);
@@ -1405,11 +1992,11 @@ async function streamVisionTranslation(imageDataUrl, modelOverride, onDelta, ext
           vision: true
         });
       }
-    });
+    }, touch);
 
     const finalParsed = parseVisionDualOutput(raw);
     if (!finalParsed.translation) {
-      return { ok: false, status: 200, body: "No readable text found in image.", via: via };
+      return { ok: false, status: 200, body: tr("bg.noTextInImage"), via: via };
     }
     const hits = finalParsed.sourceText ? matchGlossaryHits(s.glossary, finalParsed.sourceText).length : 0;
     const out = {
@@ -1427,10 +2014,11 @@ async function streamVisionTranslation(imageDataUrl, modelOverride, onDelta, ext
 
 async function streamImmersiveBatch(rawItems, modelOverride, onProgress, externalSignal) {
   const items = Array.isArray(rawItems) ? rawItems.map((x) => String(x || "").trim()) : [];
-  if (items.length === 0) return { ok: false, status: 0, body: "Empty batch." };
+  if (items.length === 0) return { ok: false, status: 0, body: tr("bg.emptyBatch") };
 
   const s = await getSettings();
-  if (isDeeplx(s)) return deeplxImmersiveBatch(s, items, onProgress, externalSignal);
+  const textOnly = textEngine(s);
+  if (textOnly) return engineImmersiveBatch(textOnly, s, items, onProgress, externalSignal);
   const activeModel = String(modelOverride || s.immersiveModel || DEFAULTS.immersiveModel || s.model).trim();
   const base = stripSlashes(s.base);
   const parsedEntries = parseGlossary(s.glossary);
@@ -1489,7 +2077,7 @@ async function streamImmersiveBatch(rawItems, modelOverride, onProgress, externa
       ? { 0: visible.replace(/^\u3016P0\u3017\s*/, "").trim() }
       : parseAnchoredSegments(visible, uncachedTexts.length);
 
-  return runChatStream(s, base, body, externalSignal, async (res, via) => {
+  return runChatStream(s, base, body, externalSignal, async (res, via, touch) => {
     const applyParsedMap = (parsedSubMap, commitCache) => {
       let changed = false;
       for (let subIdx = 0; subIdx < uncachedIndices.length; subIdx++) {
@@ -1527,7 +2115,7 @@ async function streamImmersiveBatch(rawItems, modelOverride, onProgress, externa
           glossaryHits: batchHits.length
         });
       }
-    });
+    }, touch);
 
     applyParsedMap(parseBatch(stripThink(raw)), true);
     return { ok: true, segments: finalSegments, model: activeModel, via: via, glossaryHits: batchHits.length };
@@ -1536,11 +2124,12 @@ async function streamImmersiveBatch(rawItems, modelOverride, onProgress, externa
 
 async function streamStudyCard(text, modelOverride, onPartial, externalSignal) {
   text = String(text || "").trim();
-  if (!text) return { ok: false, status: 0, body: "Nothing to analyze." };
-  if (text.length > MAX_LEN) return { ok: false, status: 0, body: "Selection is longer than " + MAX_LEN + " characters." };
+  if (!text) return { ok: false, status: 0, body: tr("bg.nothingToAnalyze") };
+  if (text.length > MAX_LEN) return { ok: false, status: 0, body: tr("bg.tooLong", MAX_LEN) };
 
   const s = await getSettings();
-  if (isDeeplx(s)) return deeplxUnsupported("Study Card");
+  const textOnly = textEngine(s);
+  if (textOnly) return textOnlyUnsupported("bg.feature.study", textOnly);
   const base = stripSlashes(s.base);
   const activeModel = resolveStudyModel(s.model, modelOverride);
   const hits = matchGlossaryHits(s.glossary, text);
@@ -1562,7 +2151,7 @@ async function streamStudyCard(text, modelOverride, onPartial, externalSignal) {
     base
   );
 
-  return runChatStream(s, base, body, externalSignal, async (res, via) => {
+  return runChatStream(s, base, body, externalSignal, async (res, via, touch) => {
     let lastEmitSignature = "";
     let cappedDeck = null;
     const raw = await readChatContent(res, (full) => {
@@ -1583,10 +2172,10 @@ async function streamStudyCard(text, modelOverride, onPartial, externalSignal) {
         };
         return false;
       }
-    });
+    }, touch);
 
     const deck = cappedDeck || parseStudyCardJson(raw, text);
-    if (!deck) return { ok: false, status: 200, body: "Empty study card response.", via: via };
+    if (!deck) return { ok: false, status: 200, body: tr("bg.emptyStudy"), via: via };
     lruSet(volatileStudyCache, cacheKey, { deck: deck, model: activeModel, via: via });
     return { ok: true, deck: deck, model: activeModel, via: via };
   });
@@ -1594,11 +2183,12 @@ async function streamStudyCard(text, modelOverride, onPartial, externalSignal) {
 
 async function translate(text) {
   text = String(text || "").trim();
-  if (!text) return { ok: false, status: 0, body: "Nothing to translate." };
-  if (text.length > MAX_LEN) return { ok: false, status: 0, body: "Selection is longer than " + MAX_LEN + " characters." };
+  if (!text) return { ok: false, status: 0, body: tr("bg.nothingToTranslate") };
+  if (text.length > MAX_LEN) return { ok: false, status: 0, body: tr("bg.tooLong", MAX_LEN) };
 
   const s = await getSettings();
-  if (isDeeplx(s)) return deeplxTranslate(s, text);
+  const textOnly = textEngine(s);
+  if (textOnly) return engineTranslate(textOnly, s, text);
   const activeModel = String(s.model || DEFAULTS.model).trim();
   const base = stripSlashes(s.base);
   const hits = matchGlossaryHits(s.glossary, text);
@@ -1621,11 +2211,12 @@ async function translate(text) {
 
 async function generateStudyCard(text, modelOverride) {
   text = String(text || "").trim();
-  if (!text) return { ok: false, status: 0, body: "Nothing to analyze." };
-  if (text.length > MAX_LEN) return { ok: false, status: 0, body: "Selection is longer than " + MAX_LEN + " characters." };
+  if (!text) return { ok: false, status: 0, body: tr("bg.nothingToAnalyze") };
+  if (text.length > MAX_LEN) return { ok: false, status: 0, body: tr("bg.tooLong", MAX_LEN) };
 
   const s = await getSettings();
-  if (isDeeplx(s)) return deeplxUnsupported("Study Card");
+  const textOnly = textEngine(s);
+  if (textOnly) return textOnlyUnsupported("bg.feature.study", textOnly);
   const base = stripSlashes(s.base);
   const activeModel = resolveStudyModel(s.model, modelOverride);
   const hits = matchGlossaryHits(s.glossary, text);
@@ -1637,17 +2228,161 @@ async function generateStudyCard(text, modelOverride) {
   if (!res.ok) return res;
 
   const deck = parseStudyCardJson(res.content, text);
-  if (!deck) return { ok: false, status: 200, body: "Empty study card response.", via: res.via };
+  if (!deck) return { ok: false, status: 200, body: tr("bg.emptyStudy"), via: res.via };
   const out = { deck: deck, model: res.model, via: res.via };
   lruSet(volatileStudyCache, cacheKey, out);
   return { ok: true, ...out };
 }
 
+// ---- Streaming ports ------------------------------------------------------------------------
+// A page asks for a stream by opening a port with one of these names and posting the start message.
+// Progress goes back as `progress` messages and the outcome as a single `done` message.
+const STREAM_PORTS = {
+  "bili-translate-stream": {
+    start: "START_TRANSLATE_STREAM",
+    progress: "DELTA",
+    done: "DONE",
+    run: (msg, onProgress, signal) => streamTranslation(msg.text, onProgress, signal)
+  },
+  "bili-image-stream": {
+    start: "START_IMAGE_STREAM",
+    progress: "DELTA",
+    done: "DONE",
+    run: (msg, onProgress, signal) => streamVisionTranslation(msg.dataUrl, msg.modelOverride, onProgress, signal)
+  },
+  "bili-immersive-stream": {
+    start: "START_IMMERSIVE_BATCH",
+    progress: "BATCH_DELTA",
+    done: "BATCH_DONE",
+    // Progress carries every paragraph of the batch; only the ones that changed are sent on.
+    segments: true,
+    run: (msg, onProgress, signal) => streamImmersiveBatch(msg.items, msg.modelOverride, onProgress, signal)
+  },
+  "bili-study-stream": {
+    start: "START_STUDY_STREAM",
+    progress: "PARTIAL",
+    done: "DONE",
+    run: (msg, onProgress, signal) => streamStudyCard(msg.text, msg.modelOverride, onProgress, signal)
+  }
+};
+
+// A model emits far more deltas than a page can show, and each progress message is copied to the
+// page and laid out there. The first one is sent at once and later ones at most every
+// STREAM_FLUSH_MS; each carries the newest state, so skipping the states in between loses nothing.
+const STREAM_FLUSH_MS = 33;
+
+function coalesce(send, intervalMs) {
+  let pending = null;
+  let timer = null;
+  let lastSent = -Infinity;
+  const flush = () => {
+    timer = null;
+    if (pending === null) return;
+    const payload = pending;
+    pending = null;
+    lastSent = Date.now();
+    send(payload);
+  };
+  return {
+    push(payload) {
+      pending = payload;
+      if (timer !== null) return;
+      const wait = lastSent + intervalMs - Date.now();
+      if (wait <= 0) flush();
+      else timer = setTimeout(flush, wait);
+    },
+    // Drops what has not been sent yet: the final message replaces it, or nobody is listening.
+    cancel() {
+      clearTimeout(timer);
+      timer = null;
+      pending = null;
+    }
+  };
+}
+
+function handleStreamPort(port) {
+  const spec = port && STREAM_PORTS[port.name];
+  if (!spec) return;
+  if (!fromTabScript(port.sender)) {
+    try { port.disconnect(); } catch (_) {}
+    return;
+  }
+
+  const abortCtrl = new AbortController();
+  let open = true;
+  let started = false;
+  const post = (type, payload) => {
+    if (!open) return;
+    try { port.postMessage({ type: type, ...payload }); } catch (_) {}
+  };
+
+  const sentSegments = {};
+  const progress = coalesce((payload) => {
+    if (spec.segments) {
+      const changed = {};
+      let any = false;
+      for (const [index, text] of Object.entries(payload.segments || {})) {
+        if (sentSegments[index] === text) continue;
+        sentSegments[index] = changed[index] = text;
+        any = true;
+      }
+      if (!any) return;
+      payload = { ...payload, segments: changed };
+    }
+    post(spec.progress, payload);
+  }, STREAM_FLUSH_MS);
+
+  port.onDisconnect.addListener(() => {
+    open = false;
+    progress.cancel();
+    abortCtrl.abort();
+  });
+
+  port.onMessage.addListener((msg) => {
+    if (started || !msg || msg.type !== spec.start) return;
+    started = true;
+    // The page waits for the final message, so a failure before the request is reported as one too.
+    Promise.resolve()
+      .then(() => spec.run(msg, progress.push, abortCtrl.signal))
+      .catch((err) => ({ ok: false, status: 0, body: String((err && err.message) || err) }))
+      .then((finalRes) => {
+        progress.cancel();
+        if (!(finalRes && finalRes.cancelled)) post(spec.done, finalRes);
+      });
+  });
+}
+
 // ---- Messaging, Streaming Ports, Commands & Context Menu ----------------------------------
+
+// Who may send what: extension pages (options) and page scripts (content.js) are told apart by sender.
+function isOwnId(sender) {
+  return !!(sender && typeof chrome.runtime.id === "string" && sender.id === chrome.runtime.id);
+}
+function fromExtensionPage(sender) {
+  return isOwnId(sender) && typeof sender.url === "string" && sender.url.startsWith(chrome.runtime.getURL(""));
+}
+function fromTabScript(sender) {
+  return isOwnId(sender) && !!sender.tab && typeof sender.tab.id === "number";
+}
+const MESSAGE_SENDERS = {
+  BILI_CHECK_API_CONFIG: [fromExtensionPage],
+  BILI_MIGRATE_SETTINGS: [fromExtensionPage],
+  BILI_STUDY_CARD: [fromTabScript],
+  BILI_CAPTURE_TAB: [fromTabScript],
+  BILI_GET_IMMERSIVE_PREFS: [fromTabScript],
+  BILI_PURGE_VOLATILE: [fromTabScript],
+  BILI_TRANSLATE: [fromExtensionPage, fromTabScript]
+};
 
 if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.onMessage) {
   chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (!msg) return false;
+
+    const allowed = Object.prototype.hasOwnProperty.call(MESSAGE_SENDERS, msg.type) ? MESSAGE_SENDERS[msg.type] : null;
+    if (allowed && !allowed.some((check) => check(sender))) {
+      sendResponse({ ok: false, status: 0, body: "Forbidden sender" });
+      return false;
+    }
 
     if (msg.type === "BILI_TRANSLATE") {
       translate(msg.text)
@@ -1668,9 +2403,8 @@ if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.onMessage)
     }
 
     if (msg.type === "BILI_CAPTURE_TAB") {
-      const winId = sender && sender.tab ? sender.tab.windowId : chrome.windows.WINDOW_ID_CURRENT;
       chrome.tabs
-        .captureVisibleTab(winId, { format: "png" })
+        .captureVisibleTab(sender.tab.windowId, { format: "png" })
         .then((dataUrl) => sendResponse({ ok: true, dataUrl: dataUrl }))
         .catch((err) => sendResponse({ ok: false, body: String((err && err.message) || err) }));
       return true;
@@ -1678,15 +2412,38 @@ if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.onMessage)
 
     if (msg.type === "BILI_GET_IMMERSIVE_PREFS") {
       getSettings()
-        .then((s) =>
+        .then((s) => {
+          const textOnly = textEngine(s);
           sendResponse({
             ok: true,
-            immersiveModel: isDeeplx(s) ? DEEPLX_LABEL : s.immersiveModel || DEFAULTS.immersiveModel,
-            modelSwitch: !isDeeplx(s),
+            immersiveModel: textOnly ? textOnly.label : s.immersiveModel || DEFAULTS.immersiveModel,
+            modelSwitch: !textOnly,
             target: s.target || DEFAULTS.target
-          })
-        )
+          });
+        })
         .catch(() => sendResponse({ ok: false }));
+      return true;
+    }
+
+    if (msg.type === "BILI_CHECK_API_CONFIG") {
+      // The options page asks before it saves, so answer in the language the page is showing.
+      const settings = msg.settings || {};
+      const savedLang = uiLang;
+      uiLang = I18N.resolveLang(settings.uiLang);
+      try {
+        sendResponse(checkApiConfig(settings));
+      } finally {
+        uiLang = savedLang;
+      }
+      return false;
+    }
+
+    // The options page reads storage itself; it asks for this first so that it never shows a stale key.
+    if (msg.type === "BILI_MIGRATE_SETTINGS") {
+      migrateKeyToLocal().then(
+        () => sendResponse({ ok: true }),
+        (err) => sendResponse({ ok: false, error: String((err && err.message) || err) })
+      );
       return true;
     }
 
@@ -1701,163 +2458,47 @@ if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.onMessage)
     return false;
   });
 
-  if (chrome.runtime.onConnect) {
-    chrome.runtime.onConnect.addListener((port) => {
-      if (!port) return;
+  if (chrome.runtime.onConnect) chrome.runtime.onConnect.addListener(handleStreamPort);
 
-      if (port.name === "bili-translate-stream") {
-        const abortCtrl = new AbortController();
-        let disconnected = false;
-        port.onDisconnect.addListener(() => {
-          disconnected = true;
-          abortCtrl.abort();
-        });
-        port.onMessage.addListener((msg) => {
-          if (!msg || msg.type !== "START_TRANSLATE_STREAM") return;
-          streamTranslation(
-            msg.text,
-            (delta) => {
-              if (!disconnected) {
-                try { port.postMessage({ type: "DELTA", ...delta }); } catch (_) {}
-              }
-            },
-            abortCtrl.signal
-          ).then((finalRes) => {
-            if (!disconnected && !(finalRes && finalRes.cancelled)) {
-              try { port.postMessage({ type: "DONE", ...finalRes }); } catch (_) {}
-            }
-          });
-        });
-        return;
-      }
-
-      if (port.name === "bili-image-stream") {
-        const abortCtrl = new AbortController();
-        let disconnected = false;
-        port.onDisconnect.addListener(() => {
-          disconnected = true;
-          abortCtrl.abort();
-        });
-        port.onMessage.addListener((msg) => {
-          if (!msg || msg.type !== "START_IMAGE_STREAM") return;
-          streamVisionTranslation(
-            msg.dataUrl,
-            msg.modelOverride,
-            (delta) => {
-              if (!disconnected) {
-                try { port.postMessage({ type: "DELTA", ...delta }); } catch (_) {}
-              }
-            },
-            abortCtrl.signal
-          ).then((finalRes) => {
-            if (!disconnected && !(finalRes && finalRes.cancelled)) {
-              try { port.postMessage({ type: "DONE", ...finalRes }); } catch (_) {}
-            }
-          });
-        });
-        return;
-      }
-
-      if (port.name === "bili-immersive-stream") {
-        const abortCtrl = new AbortController();
-        let disconnected = false;
-        port.onDisconnect.addListener(() => {
-          disconnected = true;
-          abortCtrl.abort();
-        });
-        port.onMessage.addListener((msg) => {
-          if (!msg || msg.type !== "START_IMMERSIVE_BATCH") return;
-          streamImmersiveBatch(
-            msg.items,
-            msg.modelOverride,
-            (progress) => {
-              if (!disconnected) {
-                try { port.postMessage({ type: "BATCH_DELTA", ...progress }); } catch (_) {}
-              }
-            },
-            abortCtrl.signal
-          ).then((finalRes) => {
-            if (!disconnected && !(finalRes && finalRes.cancelled)) {
-              try { port.postMessage({ type: "BATCH_DONE", ...finalRes }); } catch (_) {}
-            }
-          });
-        });
-        return;
-      }
-
-      if (port.name === "bili-study-stream") {
-        const abortCtrl = new AbortController();
-        let disconnected = false;
-        port.onDisconnect.addListener(() => {
-          disconnected = true;
-          abortCtrl.abort();
-        });
-        port.onMessage.addListener((msg) => {
-          if (!msg || msg.type !== "START_STUDY_STREAM") return;
-          streamStudyCard(
-            msg.text,
-            msg.modelOverride,
-            (progress) => {
-              if (!disconnected) {
-                try { port.postMessage({ type: "PARTIAL", ...progress }); } catch (_) {}
-              }
-            },
-            abortCtrl.signal
-          ).then((finalRes) => {
-            if (!disconnected && !(finalRes && finalRes.cancelled)) {
-              try { port.postMessage({ type: "DONE", ...finalRes }); } catch (_) {}
-            }
-          });
-        });
+  function createMenus() {
+    chrome.contextMenus.removeAll(() => {
+      for (const [id, titleKey, context] of MENUS) {
+        chrome.contextMenus.create({ id: id, title: tr(titleKey), contexts: [context] }, () => void chrome.runtime.lastError);
       }
     });
   }
 
-  chrome.storage.onChanged.addListener(() => {
-    deeplxNoLineBatch.clear();
+  function refreshMenuTitles() {
+    for (const [id, title] of Object.entries(menuTitles())) {
+      chrome.contextMenus.update(id, { title: title }, () => void chrome.runtime.lastError);
+    }
+  }
+
+  chrome.storage.onChanged.addListener((changes, area) => {
+    noMergedBatch.clear();
     cachedGlossaryRaw = null;
     cachedGlossaryEntries = [];
     volatileTranslateCache.clear();
     volatileStudyCache.clear();
     volatileVisionCache.clear();
+    if (area === "sync" && changes && changes.uiLang) {
+      uiLang = I18N.resolveLang(changes.uiLang.newValue);
+      refreshMenuTitles();
+    }
   });
 
-  chrome.runtime.onInstalled.addListener(() => {
-    chrome.contextMenus.removeAll(() => {
-      chrome.contextMenus.create(
-        {
-          id: MENU_ID,
-          title: "Translate selection with Bili",
-          contexts: ["selection"]
-        },
-        () => void chrome.runtime.lastError
-      );
-      chrome.contextMenus.create(
-        {
-          id: MENU_STUDY_ID,
-          title: "Open Bili Study Card (\u5b66\u4e60\u5361\u7247)",
-          contexts: ["selection"]
-        },
-        () => void chrome.runtime.lastError
-      );
-      chrome.contextMenus.create(
-        {
-          id: MENU_IMAGE_ID,
-          title: "Translate image with Bili (\u8bc6\u56fe\u76f4\u8bd1 + \u8bcd\u5361)",
-          contexts: ["image"]
-        },
-        () => void chrome.runtime.lastError
-      );
-      chrome.contextMenus.create(
-        {
-          id: MENU_IMMERSIVE_ID,
-          title: "Toggle Bilingual Page Translation (\u53cc\u8bed\u5bf9\u7167\u7f51\u9875 \u00b7 Alt+A)",
-          contexts: ["page"]
-        },
-        () => void chrome.runtime.lastError
-      );
+  // The menus outlive a browser restart, but the browser's language may have changed since.
+  if (chrome.runtime.onStartup) {
+    chrome.runtime.onStartup.addListener(() => {
+      getSettings().then(refreshMenuTitles, () => {});
     });
-    chrome.storage.sync.get(DEFAULTS).then((s) => chrome.storage.sync.set(s));
+  }
+
+  chrome.runtime.onInstalled.addListener(() => {
+    // The titles follow the interface language, so the settings are read first.
+    getSettings().then(createMenus, createMenus);
+    fillMissingSyncDefaults().catch(() => {});
+    migrateKeyToLocal().catch((err) => console.warn("[Bili Index Translate] API key migration failed:", err));
   });
 
   async function sendToFrame(tabId, frameId, msg) {
@@ -1866,7 +2507,7 @@ if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.onMessage)
       await chrome.tabs.sendMessage(tabId, msg, { frameId: frameId });
     } catch (_) {
       await chrome.scripting.insertCSS({ target: target, files: ["content.css"] });
-      await chrome.scripting.executeScript({ target: target, files: ["content.js"] });
+      await chrome.scripting.executeScript({ target: target, files: ["i18n.js", "content.js"] });
       await chrome.tabs.sendMessage(tabId, msg, { frameId: frameId });
     }
   }
@@ -1898,7 +2539,10 @@ if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.onMessage)
     }
 
     if (info.menuItemId === MENU_IMAGE_ID && info.srcUrl) {
-      fetchImageAsDataUrl(info.srcUrl)
+      // Reading the settings first puts a download error in the current interface language.
+      getSettings()
+        .catch(() => null)
+        .then(() => fetchImageAsDataUrl(info.srcUrl))
         .then((dataUrl) =>
           sendToFrame(tab.id, frameId, {
             type: "BILI_CONTEXT_IMAGE_DATA",
@@ -1931,6 +2575,8 @@ if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.onMessage)
     chrome.runtime.openOptionsPage();
   });
 
+  ensureDirectRule();
+
   console.log("[Bili Index Translate] service worker started");
 }
 
@@ -1959,8 +2605,24 @@ if (typeof module !== "undefined" && module.exports) {
     deeplxTargetLang,
     buildDeeplxRequest,
     parseDeeplxResponse,
+    parseJsonPath,
+    readJsonPath,
+    parseCustomTemplate,
+    buildCustomRequest,
+    parseCustomResponse,
+    checkApiConfig,
+    menuTitles,
+    migrateKeyToLocal,
+    fillMissingSyncDefaults,
+    getSettings,
+    fetchImageAsDataUrl,
     callChatCompletion,
+    RETRY_POLICY,
     readChatContent,
+    handleStreamPort,
+    STREAM_FLUSH_MS,
+    directHeaderRule,
+    installDirectRule,
     streamTranslation,
     streamVisionTranslation,
     streamImmersiveBatch,

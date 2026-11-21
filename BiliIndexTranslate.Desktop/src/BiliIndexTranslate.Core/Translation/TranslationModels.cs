@@ -48,7 +48,8 @@ public sealed record TranslationRequest(
     string RelayPrefix,
     string ApiKey,
     string GlossaryText = "",
-    ApiFormat Format = ApiFormat.OpenAi);
+    ApiFormat Format = ApiFormat.OpenAi,
+    CustomApiTemplate? Custom = null);
 
 public sealed record TranslationResult(string Translation, RequestRoute Route, double ElapsedMs, string Model, int GlossaryHitCount = 0);
 
@@ -95,6 +96,18 @@ public interface ISseTranslationTransport : ITranslationTransport
         string jsonBody,
         TimeSpan timeout,
         Action<string> onDataLine,
+        CancellationToken ct);
+}
+
+/// <summary>Sends a request exactly as described; used by the custom API format, which sets its own method and headers.</summary>
+public interface IRawTranslationTransport : ITranslationTransport
+{
+    Task<TransportResponse> SendAsync(
+        string method,
+        Uri url,
+        IReadOnlyList<KeyValuePair<string, string>> headers,
+        string? body,
+        TimeSpan timeout,
         CancellationToken ct);
 }
 

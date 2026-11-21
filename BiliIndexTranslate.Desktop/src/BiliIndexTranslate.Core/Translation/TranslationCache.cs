@@ -19,6 +19,12 @@ public readonly record struct CacheKey(
         // DeepLX has no model and no prompt: neither the model setting nor the glossary changes its result.
         if (r.Format == ApiFormat.Deeplx)
             return new CacheKey(r.Text, r.TargetLanguageCode, DeeplxProtocol.ModelLabel, endpoint, "deeplx", r.SourceLanguage);
+        // A custom template has no model either; what it sends and reads is part of the key instead.
+        if (r.Format == ApiFormat.Custom)
+        {
+            var template = r.Custom ?? new CustomApiTemplate();
+            return new CacheKey(r.Text, r.TargetLanguageCode, "custom:" + template.Label, endpoint, "custom:" + template.Signature, r.SourceLanguage);
+        }
         var gSig = GlossaryEngine.Signature(GlossaryEngine.MatchHits(r.GlossaryText, r.Text));
         return new CacheKey(r.Text, r.TargetLanguageCode, r.Model, endpoint, PromptBuilder.PromptVersion, r.SourceLanguage, gSig);
     }

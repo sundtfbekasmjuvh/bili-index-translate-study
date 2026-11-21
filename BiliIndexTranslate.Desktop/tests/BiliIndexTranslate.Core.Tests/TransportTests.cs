@@ -73,6 +73,46 @@ public class HttpTranslationTransportTests
         }
     }
 
+    [Fact]
+    public async Task Send_OverTheWire_UsesTheGivenMethodHeadersAndBody_WithoutABearerHeader()
+    {
+        var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        try
+        {
+            var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+            using var transport = new HttpTranslationTransport();
+
+            var post = ServeJsonOnceAsync(listener, "{\"ok\":true}");
+            var response = await transport.SendAsync(
+                "POST",
+                new Uri($"http://127.0.0.1:{port}/custom?x=1"),
+                [new("X-Api-Key", "k 1/2"), new("Content-Type", "application/x-www-form-urlencoded")],
+                "q=hello%20world",
+                TimeSpan.FromSeconds(10),
+                CancellationToken.None);
+            Assert.Equal(200, response.StatusCode);
+            Assert.Equal("{\"ok\":true}", response.Body);
+            var wire = await post;
+            Assert.StartsWith("POST /custom?x=1 HTTP/1.1", wire);
+            Assert.Contains("X-Api-Key: k 1/2", wire);
+            Assert.Contains("Content-Type: application/x-www-form-urlencoded\r\n", wire);
+            Assert.DoesNotContain("Authorization:", wire, StringComparison.OrdinalIgnoreCase);
+            Assert.EndsWith("q=hello%20world", wire);
+
+            var get = ServeJsonOnceAsync(listener, "{\"ok\":true}");
+            await transport.SendAsync("GET", new Uri($"http://127.0.0.1:{port}/t?q=hi"), [], null, TimeSpan.FromSeconds(10), CancellationToken.None);
+            var getWire = await get;
+            Assert.StartsWith("GET /t?q=hi HTTP/1.1", getWire);
+            Assert.DoesNotContain("Content-Type:", getWire, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("Authorization:", getWire, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            listener.Stop();
+        }
+    }
+
     private static async Task ServeOnceAsync(TcpListener listener, string sseBody)
     {
         using var client = await listener.AcceptTcpClientAsync();

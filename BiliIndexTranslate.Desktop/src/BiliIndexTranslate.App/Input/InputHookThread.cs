@@ -1,6 +1,7 @@
 using System.Runtime.InteropServices;
 using BiliIndexTranslate.App.Native;
 using BiliIndexTranslate.Core.Geometry;
+using BiliIndexTranslate.App.Localization;
 
 namespace BiliIndexTranslate.App.Input;
 
@@ -143,8 +144,8 @@ internal sealed class InputHookThread : IDisposable
         {
             var err = Marshal.GetLastWin32Error();
             var msg = err == NativeMethods.ERROR_HOTKEY_ALREADY_REGISTERED
-                ? $"{spec.Display} is already used by another application."
-                : $"Could not register {spec.Display} (error {err}).";
+                ? Loc.T("Hotkey_InUse", spec.Display)
+                : Loc.T("Hotkey_RegisterFailed", spec.Display, err);
             _post(() => HotkeyStatusChanged?.Invoke(spec.Display, msg));
         }
     }
@@ -167,8 +168,8 @@ internal sealed class InputHookThread : IDisposable
         {
             var err = Marshal.GetLastWin32Error();
             var msg = err == NativeMethods.ERROR_HOTKEY_ALREADY_REGISTERED
-                ? $"{spec.Display} is already used by another application."
-                : $"Could not register {spec.Display} (error {err}).";
+                ? Loc.T("Hotkey_InUse", spec.Display)
+                : Loc.T("Hotkey_RegisterFailed", spec.Display, err);
             _post(() => SnipHotkeyStatusChanged?.Invoke(spec.Display, msg));
         }
     }

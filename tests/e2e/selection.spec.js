@@ -75,6 +75,16 @@ test.describe("划词翻译", () => {
     expect(content).not.toContain("Flash-Attention");
   });
 
+  test("上游第一次返回 429 时自动重试, 最终显示译文", async ({ page, upstream }) => {
+    upstream.override("translate", { status: 429, body: "slow down" });
+    const panel = page.locator("#bili-index-translate-panel");
+    await dragSelect(page, "#p-sentence");
+
+    await expect(panel.locator(".bit-body")).toHaveText("译文：" + SENTENCE);
+    await expect(panel.locator(".bit-foot")).toContainText("direct");
+    expect(requestsOf(upstream, "translate")).toHaveLength(2);
+  });
+
   test("直连返回 412 时只请求一次, 显示错误和手动设置中继的提示", async ({ page, upstream }) => {
     upstream.override("translate", { status: 412, body: "<html>precondition failed</html>" });
     const panel = page.locator("#bili-index-translate-panel");
@@ -83,7 +93,7 @@ test.describe("划词翻译", () => {
     const error = panel.locator(".bit-error");
     await expect(error).toContainText("HTTP 412");
     await expect(error).toContainText("precondition failed");
-    await expect(error).toContainText("nothing is switched automatically");
+    await expect(error).toContainText("扩展不会自动切换线路");
     await expect(panel.locator(".bit-foot")).toHaveText("via direct");
 
     await page.waitForTimeout(300);
@@ -101,9 +111,35 @@ test.describe("划词翻译", () => {
     upstream.override("translate", { status: 412, body: "relay says no" });
     await page.keyboard.press("Escape");
     await dragSelect(page, "#p-second");
-    await expect(panel.locator(".bit-error")).toContainText("The relay was also rejected");
+    await expect(panel.locator(".bit-error")).toContainText("中继也被拒绝");
     await expect(panel.locator(".bit-foot")).toHaveText("via relay");
     expect(upstream.requests.map((r) => r.path)).toEqual(["/relay/v1/chat/completions", "/relay/v1/chat/completions"]);
+  });
+
+  test("流式过程中后台一端断开时, 面板显示错误而不是一直停在加载状态", async ({ page, upstream, serviceWorker }) => {
+    // 后台被浏览器停掉或扩展被重新加载时, 页面这一端的端口会收到断开事件. 这里让后台主动断开来模拟.
+    await serviceWorker.evaluate(() => {
+      self.__dropStream = (port) => {
+        if (port.name === "bili-translate-stream") setTimeout(() => port.disconnect(), 150);
+      };
+      chrome.runtime.onConnect.addListener(self.__dropStream);
+    });
+    try {
+      const release = upstream.hold("translate");
+      const panel = page.locator("#bili-index-translate-panel");
+      await dragSelect(page, "#p-sentence");
+      await expect(panel.locator(".bit-error")).toContainText("扩展后台在回复完成前中断了");
+      release();
+
+      // 关掉错误面板 (它盖住了下一段) 后再划一次, 可以正常翻译.
+      await serviceWorker.evaluate(() => chrome.runtime.onConnect.removeListener(self.__dropStream));
+      await page.keyboard.press("Escape");
+      await expect(panel).not.toHaveAttribute("data-open", "");
+      await dragSelect(page, "#p-second");
+      await expect(panel.locator(".bit-body")).toHaveText("译文：Every checkpoint was logged before sunrise.");
+    } finally {
+      await serviceWorker.evaluate(() => chrome.runtime.onConnect.removeListener(self.__dropStream));
+    }
   });
 
   test("在面板外按下鼠标会关闭面板, 少于 2 个字符的选区不触发翻译", async ({ page, upstream }) => {

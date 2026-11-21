@@ -7,8 +7,10 @@ namespace BiliIndexTranslate.Core.Translation;
 /// <summary>
 /// Single long-lived <see cref="HttpClient"/> with pooled connections. Timeouts are enforced per request
 /// through a linked token so a stalled provider never ties up the client. Response bodies are capped.
+/// For a streamed reply the timeout is an idle limit: it starts again with every line that arrives,
+/// so a long reply that keeps flowing is not cut off, while one that stalls still is.
 /// </summary>
-public sealed class HttpTranslationTransport : ISseTranslationTransport, IDisposable
+public sealed class HttpTranslationTransport : ISseTranslationTransport, IRawTranslationTransport, IDisposable
 {
     private const int MaxBodyBytes = 2 * 1024 * 1024;
     private readonly HttpClient _client;
@@ -55,6 +57,51 @@ public sealed class HttpTranslationTransport : ISseTranslationTransport, IDispos
         }
     }
 
+    public async Task<TransportResponse> SendAsync(
+        string method,
+        Uri url,
+        IReadOnlyList<KeyValuePair<string, string>> headers,
+        string? body,
+        TimeSpan timeout,
+        CancellationToken ct)
+    {
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        cts.CancelAfter(timeout);
+
+        using var request = new HttpRequestMessage(new HttpMethod(method), url);
+        if (body is not null)
+        {
+            var contentType = headers.LastOrDefault(h => h.Key.Equals("Content-Type", StringComparison.OrdinalIgnoreCase)).Value;
+            var content = new StringContent(body, Encoding.UTF8);
+            content.Headers.Remove("Content-Type");
+            content.Headers.TryAddWithoutValidation("Content-Type", string.IsNullOrWhiteSpace(contentType) ? "application/json" : contentType);
+            request.Content = content;
+        }
+        foreach (var header in headers)
+        {
+            if (header.Key.Equals("Content-Type", StringComparison.OrdinalIgnoreCase)) continue;
+            // Entity headers such as Content-Language belong to the content; everything else to the request.
+            if (!request.Headers.TryAddWithoutValidation(header.Key, header.Value))
+                request.Content?.Headers.TryAddWithoutValidation(header.Key, header.Value);
+        }
+
+        try
+        {
+            using var response = await _client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cts.Token).ConfigureAwait(false);
+            var responseType = response.Content.Headers.ContentType?.MediaType;
+            string responseBody;
+            await using (var stream = await response.Content.ReadAsStreamAsync(cts.Token).ConfigureAwait(false))
+            {
+                responseBody = await ReadCappedAsync(stream, cts.Token).ConfigureAwait(false);
+            }
+            return new TransportResponse((int)response.StatusCode, responseBody, responseType);
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            throw new TimeoutException();
+        }
+    }
+
     public async Task<TransportResponse> PostSseAsync(
         Uri url,
         string apiKey,
@@ -85,14 +132,13 @@ public sealed class HttpTranslationTransport : ISseTranslationTransport, IDispos
                 var totalChars = 0;
                 while (await reader.ReadLineAsync(cts.Token).ConfigureAwait(false) is { } line)
                 {
+                    cts.CancelAfter(timeout); // the stream is alive: allow the full time for the next line
                     totalChars += line.Length;
                     if (totalChars > MaxBodyBytes) break;
-                    var trimmed = line.Trim();
-                    if (!trimmed.StartsWith("data:", StringComparison.Ordinal)) continue;
-                    var data = trimmed[5..].Trim();
-                    if (data == "[DONE]") break; // anything after the terminator is not part of this completion
-                    if (data.Length > 0)
-                        onDataLine(data);
+                    var kind = ReadSseLine(line, out var data);
+                    if (kind == SseLineKind.Done) break; // anything after the terminator is not part of this completion
+                    if (kind == SseLineKind.Data)
+                        onDataLine(data!);
                 }
                 return new TransportResponse(status, string.Empty, contentType);
             }
@@ -104,6 +150,24 @@ public sealed class HttpTranslationTransport : ISseTranslationTransport, IDispos
         {
             throw new TimeoutException();
         }
+    }
+
+    private enum SseLineKind { Ignore, Data, Done }
+
+    /// <summary>
+    /// Classifies one SSE line without intermediate strings (spans cannot be used inside the async reader):
+    /// only the payload of a non-empty <c>data:</c> line is allocated.
+    /// </summary>
+    private static SseLineKind ReadSseLine(string line, out string? data)
+    {
+        data = null;
+        var trimmed = line.AsSpan().Trim();
+        if (!trimmed.StartsWith("data:", StringComparison.Ordinal)) return SseLineKind.Ignore;
+        var payload = trimmed[5..].Trim();
+        if (payload.SequenceEqual("[DONE]")) return SseLineKind.Done;
+        if (payload.Length == 0) return SseLineKind.Ignore;
+        data = payload.ToString();
+        return SseLineKind.Data;
     }
 
     private static async Task<string> ReadCappedAsync(Stream stream, CancellationToken ct)

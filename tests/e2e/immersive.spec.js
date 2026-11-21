@@ -1,7 +1,7 @@
 "use strict";
 
 // Alt+A 双语对照: 视口优先分批, 跳过中文和代码块, 滚动续翻, 仅译/模型切换, 无损还原.
-const { test, expect, runCommand, requestsOf } = require("./fixtures");
+const { test, expect, runCommand, requestsOf, openWithExtension } = require("./fixtures");
 
 const VISIBLE = {
   "h1": "Release notes",
@@ -62,6 +62,112 @@ test.describe("双语对照", () => {
     expect(pageRequests(upstream)).toHaveLength(firstBatch + 1);
   });
 
+  test("很长的页面: 跳到页尾, 再跳回中部, 新进入视口的段落都会续翻, 远处的段落不翻", async ({ page, serviceWorker, upstream }) => {
+    await openWithExtension(page, serviceWorker, upstream.origin + "/long.html");
+    await page.keyboard.press("Alt+KeyA");
+    await expect(page.locator("#p0 > .bit-imm-block")).toHaveText("译文：Entry 0 records one change made to the scheduler.");
+
+    await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+    await expect(page.locator("#p899 > .bit-imm-block")).toHaveText("译文：Entry 899 records one change made to the scheduler.");
+
+    await page.locator("#p450").evaluate((el) => el.scrollIntoView({ block: "center" }));
+    await expect(page.locator("#p450 > .bit-imm-block")).toHaveText("译文：Entry 450 records one change made to the scheduler.");
+
+    // 状态条数的是页面上符合条件的全部段落 (900 段加标题); 没到过的位置不请求.
+    await expect(page.locator("#bili-index-imm-bar .bit-imm-status")).toHaveText(/双语就绪 \d+\/901/);
+    await expect(page.locator("#p225 > .bit-imm-block")).toHaveCount(0);
+    await expect(page.locator("#p700 > .bit-imm-block")).toHaveCount(0);
+    expect(sentItems(upstream)).not.toContain("Entry 225 records one change made to the scheduler.");
+  });
+
+  test("页面不停变动时, 新出现的段落仍会在两秒左右被扫描并翻译", async ({ page }) => {
+    await page.keyboard.press("Alt+KeyA");
+    await expect(page.locator("#bili-index-imm-bar .bit-imm-status")).toHaveText("双语就绪 5/6");
+
+    // 每 100 ms 加一个节点, 比等待页面安静的 260 ms 短: 只等安静的话永远等不到.
+    await page.evaluate(() => {
+      window.__ticker = setInterval(() => {
+        const tick = document.createElement("div");
+        tick.className = "tick";
+        document.body.appendChild(tick);
+      }, 100);
+      const late = document.createElement("p");
+      late.id = "p-late";
+      late.textContent = "A late paragraph arrives while the page keeps changing.";
+      document.querySelector("h1").after(late);
+    });
+    await expect(page.locator("#p-late > .bit-imm-block")).toHaveText(
+      "译文：A late paragraph arrives while the page keeps changing.",
+      { timeout: 5000 }
+    );
+    expect(await page.evaluate(() => document.querySelectorAll(".tick").length)).toBeGreaterThan(5);
+    await page.evaluate(() => clearInterval(window.__ticker));
+  });
+
+  test("页面删掉已翻译的段落后, 状态条的计数随之减少", async ({ page }) => {
+    await page.keyboard.press("Alt+KeyA");
+    const status = page.locator("#bili-index-imm-bar .bit-imm-status");
+    await expect(status).toHaveText("双语就绪 5/6");
+
+    await page.evaluate(() => document.querySelector("#p-second").remove());
+    await expect(status).toHaveText("双语就绪 4/5");
+  });
+
+  test("页面改了已翻译段落的文字: 译文按新原文重译; 改成中文后译文撤掉, 计数减少", async ({ page, upstream }) => {
+    await page.keyboard.press("Alt+KeyA");
+    const status = page.locator("#bili-index-imm-bar .bit-imm-status");
+    await expect(status).toHaveText("双语就绪 5/6");
+    await expect(page.locator("#p-second > .bit-imm-block")).toHaveText("译文：Every checkpoint was logged before sunrise.");
+
+    // 原地改文本节点 (单页应用更新内容的常见方式): 旧译文不能留在新原文下面.
+    await page.evaluate(() => {
+      document.querySelector("#p-second").firstChild.nodeValue = "Every checkpoint was logged after sunset.";
+    });
+    await expect(page.locator("#p-second > .bit-imm-block")).toHaveText("译文：Every checkpoint was logged after sunset.");
+    await expect(page.locator("#p-second > .bit-imm-block")).toHaveCount(1);
+    await expect(status).toHaveText("双语就绪 5/6");
+    expect(sentItems(upstream)).toContain("Every checkpoint was logged after sunset.");
+
+    await page.evaluate(() => {
+      document.querySelector("#p-word").firstChild.nodeValue = "这一段现在已经是中文了，不需要翻译。";
+    });
+    await expect(page.locator("#p-word > .bit-imm-block")).toHaveCount(0);
+    await expect(page.locator("#p-word")).not.toHaveAttribute("data-bit-imm-host", "1");
+    await expect(status).toHaveText("双语就绪 4/5");
+  });
+
+  test("页面用同样的文字重建了段落 (译文被一并抹掉): 译文放回去, 不重新请求; 页面反复抹掉时最多放回 3 次", async ({ page, upstream }) => {
+    await page.keyboard.press("Alt+KeyA");
+    await expect(page.locator("#bili-index-imm-bar .bit-imm-status")).toHaveText("双语就绪 5/6");
+    const sent = pageRequests(upstream).length;
+
+    await page.evaluate(() => {
+      document.querySelector("#p-word").textContent = "ephemeral";
+    });
+    await expect(page.locator("#p-word > .bit-imm-block")).toHaveCount(0);
+    await expect(page.locator("#p-word > .bit-imm-block")).toHaveText("译文：ephemeral");
+
+    // 这个段落每次出现译文就被页面重建一遍.
+    await page.evaluate(() => {
+      const el = document.querySelector("#li-one");
+      const text = el.firstChild.nodeValue;
+      window.__rebuilds = 0;
+      const rebuild = () => {
+        window.__rebuilds++;
+        el.textContent = text;
+      };
+      new MutationObserver(() => {
+        if (el.querySelector(".bit-imm-block")) rebuild();
+      }).observe(el, { childList: true });
+      rebuild();
+    });
+    await expect.poll(() => page.evaluate(() => window.__rebuilds)).toBe(4);
+    await page.waitForTimeout(1200);
+    expect(await page.evaluate(() => window.__rebuilds)).toBe(4);
+    await expect(page.locator("#li-one > .bit-imm-block")).toHaveCount(0);
+    expect(pageRequests(upstream).length).toBe(sent);
+  });
+
   test("仅译模式隐藏原文, 切到 9B 后用新模型重新翻译", async ({ page, upstream }) => {
     await page.keyboard.press("Alt+KeyA");
     const bar = page.locator("#bili-index-imm-bar");
@@ -105,7 +211,8 @@ test.describe("双语对照", () => {
   });
 
   test("上游出错的批次标出 HTTP 状态, 其余批次正常", async ({ page, upstream }) => {
-    upstream.override("immersive", { status: 500, body: "boom" });
+    // 500 会自动重试 (共 3 次), 所以让同一批次连续失败 3 次才算最终出错.
+    upstream.override("immersive", { status: 500, body: "boom", times: 3, match: (r) => r.source.includes(VISIBLE["#p-word"]) });
     await page.keyboard.press("Alt+KeyA");
     const status = page.locator("#bili-index-imm-bar .bit-imm-status");
     await expect(status).toHaveText("双语就绪 5/6");

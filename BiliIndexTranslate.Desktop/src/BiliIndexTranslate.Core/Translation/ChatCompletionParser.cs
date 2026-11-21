@@ -58,6 +58,42 @@ public static class ChatCompletionParser
         }
     }
 
+    /// <summary>
+    /// Reads one <c>data:</c> payload of a streamed completion and returns the text it adds ("" when the
+    /// chunk carries none or cannot be read). Some services report a failure inside the stream instead of
+    /// through the HTTP status; <paramref name="error"/> then holds their message and the stream is over.
+    /// </summary>
+    public static string ReadStreamDelta(string dataJson, out string? error)
+    {
+        error = null;
+        try
+        {
+            using var doc = JsonDocument.Parse(dataJson);
+            var root = doc.RootElement;
+            if (root.ValueKind != JsonValueKind.Object) return string.Empty;
+
+            if (root.TryGetProperty("error", out var errEl) && errEl.ValueKind is not (JsonValueKind.Null or JsonValueKind.Undefined))
+            {
+                error = DescribeError(errEl);
+                return string.Empty;
+            }
+
+            if (!root.TryGetProperty("choices", out var choices) || choices.ValueKind != JsonValueKind.Array || choices.GetArrayLength() == 0)
+                return string.Empty;
+            var first = choices[0];
+            if (first.ValueKind == JsonValueKind.Object
+                && first.TryGetProperty("delta", out var delta) && delta.ValueKind == JsonValueKind.Object
+                && delta.TryGetProperty("content", out var content) && content.ValueKind == JsonValueKind.String)
+                return content.GetString() ?? string.Empty;
+        }
+        catch (JsonException) { }
+        return string.Empty;
+    }
+
+    /// <summary>The error raised when a service reports a failure inside a stream that started with HTTP 200.</summary>
+    public static TranslationException StreamFailure(string serviceMessage, RequestRoute route)
+        => new(new TranslationError(TranslationErrorKind.Http, "The service reported an error: " + serviceMessage, route));
+
     /// <summary>Strips CoT <c>&lt;think&gt;...&lt;/think&gt;</c> reasoning blocks emitted by Qwen3.5 / R1 models.</summary>
     public static string StripThink(string? raw)
     {

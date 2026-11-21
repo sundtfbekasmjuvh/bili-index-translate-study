@@ -1,0 +1,14 @@
+{
+  "extDescription": {
+    "message": "划词翻译，Alt+A 流式双语对照网页，Alt+S 零 OCR 框选识图，instTrans 术语表与语言学习卡片。"
+  },
+  "cmdImmersive": {
+    "message": "开关流式双语对照网页"
+  },
+  "cmdSnip": {
+    "message": "框选网页或视频区域进行识图翻译并生成学习卡片"
+  },
+  "actionTitle": {
+    "message": "Bili Index Translate — 设置"
+  }
+}

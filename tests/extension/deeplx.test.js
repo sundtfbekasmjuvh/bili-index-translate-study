@@ -3,6 +3,7 @@
 // DeepLX 接口格式: 目标语言代码, 请求构造与响应解析, 以及划词, 双语对照, 学习卡和识图在该格式下的行为.
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const { storageArea } = require("../support/fake-storage");
 
 const ENDPOINT = "https://deeplx.example.test/translate?token={apiKey}";
 const REQUEST_URL = "https://deeplx.example.test/translate?token=tok%2F1";
@@ -13,12 +14,7 @@ const local = { glossary: "" };
 const calls = [];
 let respond;
 
-globalThis.chrome = {
-  storage: {
-    sync: { get: async (defaults) => ({ ...defaults, ...settings }) },
-    local: { get: async (defaults) => ({ ...defaults, ...local }) }
-  }
-};
+globalThis.chrome = { storage: { sync: storageArea(settings), local: storageArea(local) } };
 // 与真实 fetch 一致: 信号已中止时直接拒绝, 不算发出请求.
 globalThis.fetch = async (url, init) => {
   if (init.signal && init.signal.aborted) throw new DOMException("The operation was aborted.", "AbortError");
@@ -31,14 +27,22 @@ const bg = require("../../bili-index-translate/background.js");
 
 let seq = 0;
 const unique = (label) => label + " " + ++seq;
+
+// 现在遇到限流或临时错误会自动重试: 把等待缩到几毫秒, 测试结束后恢复原值.
+function fastRetry(t) {
+  const saved = { ...bg.RETRY_POLICY };
+  Object.assign(bg.RETRY_POLICY, { baseDelayMs: 1, maxDelayMs: 5 });
+  t.after(() => Object.assign(bg.RETRY_POLICY, saved));
+}
 // 像真实的 DeepLX 服务一样逐行翻译并保留换行.
 const tr = (text) => text.split("\n").map((line) => "译" + line).join("\n");
 
 function reset(overrides = {}) {
   calls.length = 0;
   for (const k of Object.keys(settings)) delete settings[k];
-  Object.assign(settings, { apiType: "deeplx", base: ENDPOINT, proxy: "", key: "tok/1", target: "中文" }, overrides);
+  Object.assign(settings, { apiType: "deeplx", base: ENDPOINT, proxy: "", target: "中文" }, overrides);
   local.glossary = "";
+  local.key = "tok/1";
   respond = (body) => deeplxOk(tr(body.text));
 }
 
@@ -244,23 +248,26 @@ test("streamImmersiveBatch: 单行段落合并为一次请求并按行拆回, �
   assert.equal(calls.length, 2);
 });
 
-test("streamImmersiveBatch: 自带换行的段落逐段请求并逐段上报, 个别失败时保留其余译文", async () => {
+test("streamImmersiveBatch: 自带换行的段落逐段请求并逐段上报, 个别失败时保留其余译文", async (t) => {
+  fastRetry(t);
   reset();
   const [a, b, c] = [unique("one\nmore"), unique("two\nmore"), unique("three")];
   respond = (body) => (body.text === b ? jsonResponse({ code: 429, message: "Too Many Requests" }, 429) : deeplxOk(tr(body.text)));
   const sizes = [];
   const res = await bg.streamImmersiveBatch([a, b, c], "", (p) => sizes.push(Object.keys(p.segments).length));
-  assert.deepEqual(res, batchOk({ 0: tr(a), 2: tr(c) }));
-  assert.deepEqual(calls.map((x) => x.body.text), [a, b, c]);
-  assert.deepEqual(sizes, [1, 2]);
+  // 429 重试用尽 (共 3 次) 后停止, 不再发 c.
+  assert.deepEqual(res, batchOk({ 0: tr(a) }));
+  assert.deepEqual(calls.map((x) => x.body.text), [a, b, b, b]);
+  assert.deepEqual(sizes, [1]);
 });
 
-test("streamImmersiveBatch: 合并请求失败时不再逐段重发; 没有任何译文才返回错误", async () => {
+test("streamImmersiveBatch: 合并请求失败时不再逐段重发; 没有任何译文才返回错误", async (t) => {
+  fastRetry(t);
   reset();
   respond = () => new Response("upstream down", { status: 502 });
   const failed = await bg.streamImmersiveBatch([unique("x"), unique("y")], "", () => assert.fail("no progress expected"));
   assert.deepEqual(failed, { ok: false, status: 502, body: "upstream down", via: "direct" });
-  assert.equal(calls.length, 1);
+  assert.equal(calls.length, 3);
 
   reset();
   const kept = unique("kept");
@@ -269,7 +276,7 @@ test("streamImmersiveBatch: 合并请求失败时不再逐段重发; 没有任�
   respond = () => new Response("upstream down", { status: 502 });
   const partial = await bg.streamImmersiveBatch([kept, unique("p"), unique("q")], "", () => {});
   assert.deepEqual(partial, batchOk({ 0: tr(kept) }));
-  assert.equal(calls.length, 1);
+  assert.equal(calls.length, 3);
 });
 
 test("streamImmersiveBatch: 回复行数对不上时改为逐段请求, 并记住该接口不再合并, 其他接口不受影响", async () => {

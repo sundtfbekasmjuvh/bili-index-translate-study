@@ -2,6 +2,7 @@ using System.Text;
 using System.Windows;
 using System.Windows.Threading;
 using BiliIndexTranslate.Core.Diagnostics;
+using BiliIndexTranslate.App.Localization;
 
 namespace BiliIndexTranslate.App.Diagnostics;
 
@@ -44,7 +45,7 @@ public partial class DiagnosticsWindow : Window
     private string RenderTimings()
     {
         var all = _timings.All();
-        if (all.Count == 0) return "no samples yet";
+        if (all.Count == 0) return Loc.T("Diag_NoSamples");
         var sb = new StringBuilder();
         sb.AppendLine($"{"category",-9} {"n",5} {"p50",8} {"p95",8} {"max",8} {"last",8}");
         foreach (var t in all)
@@ -55,7 +56,7 @@ public partial class DiagnosticsWindow : Window
     private string RenderApps()
     {
         var apps = _registry.Snapshot();
-        if (apps.Count == 0) return "no selections observed yet";
+        if (apps.Count == 0) return Loc.T("Diag_NoApps");
         var sb = new StringBuilder();
         foreach (var a in apps) sb.AppendLine(a.ToString());
         return sb.ToString().TrimEnd();
