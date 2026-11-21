@@ -88,3 +88,15 @@ test("选项页引用的图标文件存在", () => {
   assert.ok(refs.length >= 2, "options.html should show the icon");
   for (const ref of refs) assert.ok(fs.existsSync(path.join(EXT, ref)), ref);
 });
+
+test("注释模式的词表数据文件齐全, 合计不超过 1 MB", () => {
+  const files = ["hsk30.txt", "freq-en.txt", "freq-es.txt", "LICENSE-DATA.md"];
+  let words = 0;
+  for (const f of files) {
+    const p = path.join(EXT, "data", f);
+    assert.ok(fs.existsSync(p), "data/" + f);
+    if (f !== "LICENSE-DATA.md") words += fs.statSync(p).size;
+  }
+  assert.ok(words > 0 && words <= 1024 * 1024, "词表合计 " + words + " 字节");
+  assert.ok(fs.existsSync(path.join(EXT, "annotate.js")));
+});

@@ -28,6 +28,8 @@ function classify(body) {
   const content = lastUserContent(body);
   if (Array.isArray(content)) return "vision";
   if (messages.some((m) => m.role === "system" && /私教|language tutor/.test(String(m.content)))) return "study";
+  // "Annotate hard words only" prompts list the words under \u3010\u8bcd\u8868\u3011 (one paragraph) or \u3010\u8bcd\u88681\u3011, \u3010\u8bcd\u88682\u3011...
+  if (/\u3010\u8bcd\u8868/.test(String(content))) return "annotate";
   if (/\u3016P0\u3017/.test(String(content))) return "immersive";
   return "translate";
 }
@@ -42,6 +44,8 @@ function sourceText(kind, body) {
     return content.split("\n\n").slice(1).join("\n\n");
   }
   if (kind === "study") return content.slice(content.lastIndexOf("\n") + 1);
+  // The word lines of the prompt ("编号. 词"), one per line, so tests can see what was asked for.
+  if (kind === "annotate") return annotateWords(content).map((x) => x.num + ". " + x.word).join("\n");
   if (kind === "immersive") {
     const block = /【源文】\n([\s\S]*?)\n\n【约束要求】/.exec(content);
     return block ? block[1] : content;
@@ -51,6 +55,28 @@ function sourceText(kind, body) {
 
 function translationOf(text) {
   return "译文：" + text;
+}
+
+// The "编号. 词" lines under each 【词表...】 heading of an annotate prompt.
+function annotateWords(content) {
+  const out = [];
+  const re = /【词表\d*】\n([\s\S]*?)(?:\n\n|$)/g;
+  let m;
+  while ((m = re.exec(content)) !== null) {
+    for (const line of m[1].split("\n")) {
+      const w = /^(\d+)\.\s+(.+)$/.exec(line.trim());
+      if (w) out.push({ num: Number(w[1]), word: w[2] });
+    }
+  }
+  return out;
+}
+
+// "编号. 词 => 注:词" per word; the gloss is in English when the prompt asks for English glosses.
+function annotateReply(content) {
+  const english = /释义必须用英语书写/.test(content);
+  return annotateWords(content)
+    .map((x) => x.num + ". " + x.word + " => " + (english ? "note:" : "注:") + x.word)
+    .join("\n");
 }
 
 function studyDeck(text) {
@@ -91,6 +117,7 @@ function replyFor(kind, body) {
   const src = sourceText(kind, body);
   if (kind === "vision") return "\u3016\u8bd1\u6587\u3017" + VISION_TRANSLATION + "\u3016\u539f\u6587\u3017" + VISION_SOURCE;
   if (kind === "study") return JSON.stringify(studyDeck(src));
+  if (kind === "annotate") return annotateReply(String(lastUserContent(body) || ""));
   if (kind === "immersive") {
     const out = [];
     const re = /\u3016P(\d+)\u3017([^\n]*)/g;
@@ -298,7 +325,7 @@ async function startMockUpstream(options = {}) {
     const text = override && typeof override.reply === "string" ? override.reply : replyFor(kind, body);
     if (body.stream === false) {
       res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ choices: [{ message: { role: "assistant", content: text } }] }));
+      res.end(JSON.stringify({ choices: [{ message: { role: "assistant", content: text }, finish_reason: "stop" }] }));
       entry.completed = true;
       return;
     }

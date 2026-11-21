@@ -233,4 +233,45 @@ function requestsOf(upstream, kind) {
   return upstream.requests.filter((r) => r.kind === kind);
 }
 
-module.exports = { test, expect, dragSelect, openWithExtension, clickContextMenu, runCommand, requestsOf, EXTENSION_DIR, OFFICIAL_HOST };
+// The words stored as known (chrome.storage.local annotateKnown), as the background keeps them.
+async function readAnnotateKnown(serviceWorker) {
+  return serviceWorker.evaluate(async () => (await chrome.storage.local.get("annotateKnown")).annotateKnown);
+}
+
+// The annotate cache lives in the service worker and is not emptied by the settings fixture when no
+// stored setting changes, so tests that count requests empty it themselves.
+async function clearAnnotateCache(serviceWorker) {
+  await serviceWorker.evaluate(() => volatileAnnotateCache.clear());
+}
+
+// Writes annotateKnown (and, when given, the switch and levels) the way a background write would, for
+// tests of the options page. `words` is { zh: [], en: [], es: [] }; the list order is the order of marking.
+async function seedAnnotateKnown(serviceWorker, words, extra = {}) {
+  await serviceWorker.evaluate(
+    async ({ words, extra }) => {
+      await chrome.storage.local.set({ ...extra, annotateKnown: { v: 1, zh: [], en: [], es: [], ...words } });
+    },
+    { words, extra }
+  );
+}
+
+// The annotate settings of chrome.storage.local (keys that were never written are absent).
+async function readAnnotateSettings(serviceWorker) {
+  return serviceWorker.evaluate(() => chrome.storage.local.get(["annotateEnabled", "annotateLevels"]));
+}
+
+module.exports = {
+  test,
+  expect,
+  dragSelect,
+  openWithExtension,
+  clickContextMenu,
+  runCommand,
+  requestsOf,
+  readAnnotateKnown,
+  clearAnnotateCache,
+  seedAnnotateKnown,
+  readAnnotateSettings,
+  EXTENSION_DIR,
+  OFFICIAL_HOST
+};
