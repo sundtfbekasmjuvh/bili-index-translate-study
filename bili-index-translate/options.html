@@ -124,6 +124,31 @@
       line-height: 1.75;
     }
     .shortcuts strong { color: var(--ink); }
+    .annotate { margin-top: 26px; padding-top: 4px; border-top: 1px solid var(--border); }
+    .annotate h2 { font-size: 15px; font-weight: 700; margin: 18px 0 0; }
+    label.check { justify-content: flex-start; gap: 8px; }
+    input[type="checkbox"] { width: auto; margin: 0; padding: 0; accent-color: var(--accent); }
+    input[type="checkbox"]:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
+    @media (max-width: 560px) {
+      .grid-3 { grid-template-columns: 1fr; }
+    }
+    #annotateCount { margin-top: 16px; font-size: 13px; font-weight: 600; }
+    #annotateDetails { margin-top: 8px; }
+    #annotateDetails summary { cursor: pointer; font-size: 13px; }
+    .known-group { margin-top: 12px; }
+    .known-group ul { display: flex; flex-wrap: wrap; gap: 6px; list-style: none; margin: 6px 0 0; padding: 0; }
+    .known-group li {
+      display: inline-flex;
+      align-items: center;
+      gap: 2px;
+      padding: 1px 3px 1px 10px;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      background: var(--accent-soft);
+    }
+    .known-group li button { padding: 0 7px; border: 0; border-radius: 999px; font-size: 15px; line-height: 1.4; }
+    .known-group .known-more { margin-top: 8px; }
     kbd {
       display: inline-block;
       padding: 0 5px;
@@ -258,6 +283,43 @@
         </label>
         <textarea id="glossary" spellcheck="false" data-i18n-placeholder="glossary.placeholder" placeholder="# One rule per line (only matched terms are dynamically injected per request):&#10;Sovereign Scheduler => 主权调度器&#10;Context Engineering -> 上下文工程&#10;Flash-Attention&#10;PyTorch"></textarea>
         <small data-i18n="glossary.help">Format: <code>Source =&gt; Target</code> (or <code>-&gt;</code> / <code>=</code>) forces terminology; writing a single term like <code>Flash-Attention</code> locks it unchanged. Inline <code>`code`</code> is protected automatically.</small>
+
+        <section class="annotate" aria-labelledby="annotateTitle">
+          <h2 id="annotateTitle" data-i18n="annotate.title">Annotate hard words only</h2>
+
+          <label class="check" for="annotateEnabled">
+            <input id="annotateEnabled" type="checkbox">
+            <span data-i18n="annotate.enable">Turn on “Annotate hard words only” (for Alt+A pages)</span>
+          </label>
+          <small data-i18n="annotate.privacy">When this is on, a word you mark as known is stored on this device only (<code>chrome.storage.local</code>): just the word itself, no sentences, page addresses or times. It is never synced or uploaded, and you can clear it at any time. When this is off, pages no longer read or write the saved words; they stay, and you can still view, remove or clear them here.</small>
+          <small data-i18n="annotate.scope">Works only when the target language is Chinese or English. Chinese, English and Spanish pages get annotations; Japanese pages are still translated paragraph by paragraph. DeepLX and the custom API are not supported. A non-official OpenAI-compatible address can be used, but the result is not guaranteed; when the reply has the wrong format, the paragraph is translated whole instead.</small>
+
+          <div class="grid-3">
+            <div>
+              <label for="annotateLevelZh"><span data-i18n="annotate.levelZh">Chinese level</span></label>
+              <select id="annotateLevelZh"></select>
+            </div>
+            <div>
+              <label for="annotateLevelEn"><span data-i18n="annotate.levelEn">English level</span></label>
+              <select id="annotateLevelEn"></select>
+            </div>
+            <div>
+              <label for="annotateLevelEs"><span data-i18n="annotate.levelEs">Spanish level</span></label>
+              <select id="annotateLevelEs"></select>
+            </div>
+          </div>
+          <small data-i18n="annotate.levelsHelp">Words within the level count as known and get no note.</small>
+          <small data-i18n="annotate.resetNote">“Reset defaults” only turns the switch off and restores the levels; it does not clear the saved words.</small>
+
+          <div id="annotateCount" aria-live="polite"></div>
+          <details id="annotateDetails" hidden>
+            <summary data-i18n="annotate.listSummary">Show the saved words</summary>
+            <div id="annotateList"></div>
+          </details>
+          <div class="row">
+            <button type="button" id="annotateClear" disabled>Clear all saved words</button>
+          </div>
+        </section>
 
         <div class="row">
           <button type="submit" id="save" class="primary" data-i18n="button.save">Save</button>

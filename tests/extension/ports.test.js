@@ -187,3 +187,140 @@ test("名字不认识的端口不处理", () => {
   bg.handleStreamPort(port);
   assert.equal(port.receive, undefined);
 });
+
+// ---- 只注释生词端口 (bili-annotate-stream) ----
+
+// 注释请求 (提示词里有【词表) 回一份 JSON, 其余的整段翻译请求走可以逐块推送的流.
+function annotateUpstream(onAnnotate) {
+  const up = liveUpstream();
+  const streamRespond = respond;
+  respond = (init) => {
+    const body = JSON.parse(init.body);
+    if (!/【词表/.test(body.messages[0].content)) return streamRespond(init);
+    const content = onAnnotate(body);
+    const reply = { choices: [{ message: { content }, finish_reason: "stop" }] };
+    return new Response(JSON.stringify(reply), { status: 200, headers: { "content-type": "application/json" } });
+  };
+  return up;
+}
+
+// 提示词【词表】下面的 "编号. 词" 行, 回成 "编号. 词 => 释词".
+function glossAll(body) {
+  const lines = [];
+  let inList = false;
+  for (const line of body.messages[0].content.split("\n")) {
+    if (line.startsWith("【词表")) inList = true;
+    else if (inList) {
+      const m = /^(\d+)\. (.+)$/.exec(line);
+      if (!m) break;
+      lines.push(m[1] + ". " + m[2] + " => 释" + m[2]);
+    }
+  }
+  return lines.join("\n");
+}
+
+function withAnnotate(enabled, body) {
+  return async () => {
+    Object.assign(local, { annotateEnabled: enabled, annotateLevels: { zh: 4, en: 2, es: 2 } });
+    bg.setAnnotateWordlists({ zh: new Map(), en: "the\nand\n", es: "el\nla\n" });
+    try {
+      await body();
+    } finally {
+      delete local.annotateEnabled;
+      delete local.annotateLevels;
+    }
+  };
+}
+
+const NO_EXCLUDE = { zh: [], en: [], es: [] };
+const HARD_WORDS = "ephemeral cacophony quixotic";
+
+test("注释端口: BATCH_DONE 带完整的 notes (w / gloss / key / lang), 没有整段译文", withAnnotate(true, async () => {
+  annotateUpstream(glossAll);
+  const port = fakePort("bili-annotate-stream");
+  bg.handleStreamPort(port);
+  const text = "The " + HARD_WORDS + " and the " + unique("paragraph");
+  port.receive({ type: "START_ANNOTATE_BATCH", items: [{ text, lang: "en" }], exclude: NO_EXCLUDE });
+  await waitFor(port, 1);
+  const done = port.sent[0];
+  assert.equal(done.type, "BATCH_DONE");
+  assert.equal(done.ok, true);
+  assert.deepEqual(done.segments, {});
+  assert.deepEqual(Object.keys(done.notes), ["0"]);
+  const keys = done.notes[0].map((n) => n.key);
+  for (const word of HARD_WORDS.split(" ")) assert.ok(keys.includes(word), word + " in " + keys);
+  for (const n of done.notes[0]) {
+    assert.deepEqual(Object.keys(n).sort(), ["gloss", "key", "lang", "w"]);
+    assert.equal(n.lang, "en");
+    assert.equal(n.gloss, "释" + n.w);
+  }
+}));
+
+test("注释端口: 进度消息里没有 notes, 只有整段翻译的段落 (按原编号); notes 只在最终消息里", withAnnotate(true, async () => {
+  const up = annotateUpstream(glossAll);
+  const port = fakePort("bili-annotate-stream");
+  bg.handleStreamPort(port);
+  port.receive({
+    type: "START_ANNOTATE_BATCH",
+    items: [
+      { text: "The " + HARD_WORDS + " and the " + unique("paragraph"), lang: "en" },
+      { text: "これは日本語の文章です。" + unique("x"), lang: "ja" }
+    ],
+    exclude: NO_EXCLUDE
+  });
+  await up.opened();
+  up.push(delta("译文"));
+  await waitFor(port, 1);
+  assert.equal(port.sent[0].type, "BATCH_DELTA");
+  assert.deepEqual(port.sent[0].segments, { 1: "译文" });
+  up.push("data: [DONE]\n\n");
+  await waitFor(port, 2);
+  for (const msg of port.sent.slice(0, -1)) {
+    assert.equal(msg.type, "BATCH_DELTA");
+    assert.equal("notes" in msg, false);
+  }
+  const done = port.sent[1];
+  assert.equal(done.type, "BATCH_DONE");
+  assert.deepEqual(done.segments, { 1: "译文" });
+  assert.ok(done.notes[0].length >= 3);
+  assert.equal("1" in done.notes, false);
+}));
+
+test("注释端口: 功能关闭时整段翻译, BATCH_DONE 没有 notes, 也不发注释请求", withAnnotate(false, async () => {
+  let annotateRequests = 0;
+  const up = annotateUpstream((body) => {
+    annotateRequests++;
+    return glossAll(body);
+  });
+  const port = fakePort("bili-annotate-stream");
+  bg.handleStreamPort(port);
+  port.receive({
+    type: "START_ANNOTATE_BATCH",
+    items: [{ text: "The " + HARD_WORDS + " and the " + unique("paragraph"), lang: "en" }],
+    exclude: NO_EXCLUDE
+  });
+  await up.opened();
+  up.push(delta("整段译文"));
+  up.push("data: [DONE]\n\n");
+  await waitFor(port, 2);
+  assert.equal(port.sent[0].type, "BATCH_DELTA");
+  const done = port.sent[1];
+  assert.equal(done.type, "BATCH_DONE");
+  assert.equal(done.ok, true);
+  assert.deepEqual(done.segments, { 0: "整段译文" });
+  assert.equal("notes" in done, false);
+  assert.equal(annotateRequests, 0);
+}));
+
+test("注释端口: 读不到设置时也会发出最终消息", async () => {
+  failSettings = true;
+  try {
+    const port = fakePort("bili-annotate-stream");
+    bg.handleStreamPort(port);
+    port.receive({ type: "START_ANNOTATE_BATCH", items: [{ text: "hello", lang: "en" }], exclude: NO_EXCLUDE });
+    await waitFor(port, 1);
+    assert.deepEqual(port.sent[0], { type: "BATCH_DONE", ok: false, status: 0, body: "storage unavailable" });
+  } finally {
+    failSettings = false;
+  }
+});

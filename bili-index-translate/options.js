@@ -21,8 +21,20 @@ const DEFAULTS = {
 // chrome.storage.local: the API key stays on this device and is not synced to the browser account.
 const LOCAL_DEFAULTS = {
   glossary: "",
-  key: "bili"
+  key: "bili",
+  // "Annotate hard words only". zh is an HSK level (1-7, 7 = HSK 7-9); en and es are frequency-rank
+  // cut-offs. The saved words (annotateKnown) are not here: only the background worker writes them.
+  annotateEnabled: false,
+  annotateLevels: { zh: 4, en: 5000, es: 5000 }
 };
+
+const ANNOTATE_LANGS = ["zh", "en", "es"];
+const ANNOTATE_HSK_LEVELS = [1, 2, 3, 4, 5, 6, 7];
+const ANNOTATE_FREQ_STEPS = [1000, 2000, 3000, 5000, 10000, 20000];
+const ANNOTATE_SHOWN = 200; // words listed per language until "Show all" is pressed
+const ANNOTATE_CONFIRM_MS = 5000;
+const ANNOTATE_LANG_KEY = { zh: "opt.annot.langZh", en: "opt.annot.langEn", es: "opt.annot.langEs" };
+const ANNOTATE_LEVEL_IDS = { zh: "annotateLevelZh", en: "annotateLevelEn", es: "annotateLevelEs" };
 
 const TEST_TEXT = "The quick brown fox jumps over the lazy dog.";
 
@@ -59,6 +71,8 @@ function applyPageLanguage(setting) {
     el.placeholder = text !== undefined ? text : englishPageText.get(el);
   }
   syncGlossaryBadge();
+  buildLevelOptions();
+  renderAnnotateKnown();
 }
 
 function setStatus(text, isError) {
@@ -95,6 +109,210 @@ function countGlossaryRules(raw) {
 function syncGlossaryBadge() {
   const n = countGlossaryRules($("glossary").value);
   $("glossaryCount").textContent = n === 1 ? tr("opt.ruleOne") : tr("opt.ruleMany", n);
+}
+
+// ---- Annotate hard words only ----------------------------------------------------------------
+
+// A missing key or a value of the wrong type falls back to the default of that language.
+function normalizeAnnotateLevels(raw) {
+  const def = LOCAL_DEFAULTS.annotateLevels;
+  const src = raw && typeof raw === "object" ? raw : {};
+  return {
+    zh: ANNOTATE_HSK_LEVELS.includes(src.zh) ? src.zh : def.zh,
+    en: ANNOTATE_FREQ_STEPS.includes(src.en) ? src.en : def.en,
+    es: ANNOTATE_FREQ_STEPS.includes(src.es) ? src.es : def.es
+  };
+}
+
+// The options are built here because their text carries a number; the selected values are kept
+// when the interface language changes.
+function buildLevelOptions() {
+  const fill = (id, entries) => {
+    const select = $(id);
+    const keep = select.value;
+    select.replaceChildren(...entries.map(([value, text]) => new Option(text, String(value))));
+    if (keep) select.value = keep;
+  };
+  fill(
+    ANNOTATE_LEVEL_IDS.zh,
+    ANNOTATE_HSK_LEVELS.map((n) => [n, n === 7 ? tr("opt.annot.hsk79") : tr("opt.annot.hsk", n)])
+  );
+  const freq = ANNOTATE_FREQ_STEPS.map((n) => [n, tr("opt.annot.top", n.toLocaleString("en-US"))]);
+  fill(ANNOTATE_LEVEL_IDS.en, freq);
+  fill(ANNOTATE_LEVEL_IDS.es, freq);
+}
+
+function fillAnnotate(localCfg) {
+  $("annotateEnabled").checked = !!localCfg && localCfg.annotateEnabled === true;
+  const levels = normalizeAnnotateLevels(localCfg && localCfg.annotateLevels);
+  for (const lang of ANNOTATE_LANGS) $(ANNOTATE_LEVEL_IDS[lang]).value = String(levels[lang]);
+}
+
+function readAnnotate() {
+  const levels = {};
+  for (const lang of ANNOTATE_LANGS) levels[lang] = Number($(ANNOTATE_LEVEL_IDS[lang]).value);
+  return { annotateEnabled: $("annotateEnabled").checked, annotateLevels: normalizeAnnotateLevels(levels) };
+}
+
+// The saved words, as listed by the background worker; null until they have been read.
+let annotateKnown = null;
+let annotateLoadFailed = false;
+const annotateExpanded = { zh: false, en: false, es: false };
+let clearArmed = false;
+let clearTimer = 0;
+let clearArmedAt = 0;
+// A second click this soon after the first is the same double-click, not a confirmation.
+const ANNOTATE_CONFIRM_MIN_MS = 500;
+
+function annotateTotal() {
+  return annotateKnown ? ANNOTATE_LANGS.reduce((n, lang) => n + annotateKnown[lang].length, 0) : 0;
+}
+
+function disarmClear() {
+  clearTimeout(clearTimer);
+  clearArmed = false;
+  $("annotateClear").textContent = tr("opt.annot.clear");
+}
+
+function renderAnnotateKnown() {
+  disarmClear();
+  const count = $("annotateCount");
+  const details = $("annotateDetails");
+  const list = $("annotateList");
+  list.replaceChildren();
+  $("annotateClear").disabled = annotateTotal() === 0;
+  if (!annotateKnown) {
+    count.textContent = annotateLoadFailed ? tr("opt.annot.loadFailed") : "";
+    details.hidden = true;
+    return;
+  }
+  if (annotateTotal() === 0) {
+    count.textContent = tr("opt.annot.empty");
+    details.hidden = true;
+    return;
+  }
+  const n = annotateKnown;
+  count.textContent = tr("opt.annot.count", annotateTotal(), n.zh.length, n.en.length, n.es.length);
+  details.hidden = false;
+  for (const lang of ANNOTATE_LANGS) {
+    const words = n[lang];
+    if (words.length === 0) continue;
+    const group = document.createElement("div");
+    group.className = "known-group";
+    group.dataset.lang = lang;
+    const head = document.createElement("strong");
+    head.tabIndex = -1;
+    head.textContent = tr("opt.annot.group", tr(ANNOTATE_LANG_KEY[lang]), words.length);
+    const ul = document.createElement("ul");
+    ul.setAttribute("aria-label", head.textContent);
+    // The newest words come first; a long list shows only the latest ones until "Show all".
+    const shown = annotateExpanded[lang] ? words.length : Math.min(words.length, ANNOTATE_SHOWN);
+    for (let i = words.length - 1; i >= words.length - shown; i--) {
+      const li = document.createElement("li");
+      const word = document.createElement("span");
+      word.textContent = words[i];
+      const del = document.createElement("button");
+      del.type = "button";
+      del.className = "word-del";
+      del.dataset.lang = lang;
+      del.dataset.key = words[i];
+      del.textContent = "×";
+      del.setAttribute("aria-label", tr("opt.annot.del", words[i]));
+      li.append(word, del);
+      ul.append(li);
+    }
+    group.append(head, ul);
+    if (shown < words.length) {
+      const more = document.createElement("button");
+      more.type = "button";
+      more.className = "known-more";
+      more.dataset.lang = lang;
+      more.textContent = tr("opt.annot.showAll", words.length);
+      group.append(more);
+    }
+    list.append(group);
+  }
+}
+
+async function loadAnnotateKnown() {
+  let res = null;
+  try {
+    res = await chrome.runtime.sendMessage({ type: "BILI_ANNOTATE_LIST" });
+  } catch (_) {}
+  const words = res && res.ok && res.words && typeof res.words === "object" ? res.words : null;
+  annotateLoadFailed = !words;
+  annotateKnown = words
+    ? Object.fromEntries(
+        ANNOTATE_LANGS.map((lang) => [lang, Array.isArray(words[lang]) ? words[lang].filter((w) => typeof w === "string") : []])
+      )
+    : null;
+  renderAnnotateKnown();
+}
+
+async function removeKnownWord(button) {
+  const { lang, key } = button.dataset;
+  if (button.disabled) return;
+  button.disabled = true;
+  let res = null;
+  try {
+    res = await chrome.runtime.sendMessage({ type: "BILI_ANNOTATE_REMOVE", lang, key });
+  } catch (_) {}
+  if (!res || res.ok !== true) {
+    button.disabled = false;
+    setStatus(tr("opt.annot.removeFailed", key), true);
+    return;
+  }
+  const at = button.closest("ul") ? [...button.closest("ul").querySelectorAll(".word-del")].indexOf(button) : 0;
+  const words = annotateKnown && annotateKnown[lang];
+  if (words && words.includes(key)) words.splice(words.indexOf(key), 1);
+  renderAnnotateKnown();
+  // The focused button is gone: move focus to its neighbour so keyboard users can keep deleting.
+  const rest = document.querySelectorAll('#annotateList .known-group[data-lang="' + lang + '"] .word-del');
+  const next = rest[Math.min(at, rest.length - 1)];
+  if (next) next.focus();
+  else if ($("annotateDetails").hidden) $("annotateEnabled").focus();
+  else $("annotateDetails").querySelector("summary").focus();
+  setStatus(tr("opt.annot.removed", key));
+}
+
+async function clearKnownWords() {
+  if (!clearArmed) {
+    clearArmed = true;
+    clearArmedAt = Date.now();
+    $("annotateClear").textContent = tr("opt.annot.clearConfirm");
+    setStatus(tr("opt.annot.clearArmed"));
+    clearTimer = setTimeout(disarmClear, ANNOTATE_CONFIRM_MS);
+    return;
+  }
+  if (Date.now() - clearArmedAt < ANNOTATE_CONFIRM_MIN_MS) return;
+  disarmClear();
+  let res = null;
+  try {
+    res = await chrome.runtime.sendMessage({ type: "BILI_ANNOTATE_CLEAR" });
+  } catch (_) {}
+  if (!res || res.ok !== true) {
+    setStatus(tr("opt.annot.clearFailed"), true);
+    return;
+  }
+  for (const lang of ANNOTATE_LANGS) annotateExpanded[lang] = false;
+  await loadAnnotateKnown();
+  setStatus(tr("opt.annot.cleared"));
+}
+
+function onAnnotateListClick(e) {
+  const target = e.target instanceof Element ? e.target : null;
+  const del = target && target.closest("button.word-del");
+  if (del) {
+    removeKnownWord(del);
+    return;
+  }
+  const more = target && target.closest("button.known-more");
+  if (more) {
+    annotateExpanded[more.dataset.lang] = true;
+    renderAnnotateKnown();
+    const head = document.querySelector('#annotateList .known-group[data-lang="' + more.dataset.lang + '"] strong');
+    if (head) head.focus();
+  }
 }
 
 function ensureSelectValue(select, val) {
@@ -205,6 +423,7 @@ function fillForm(s, localCfg) {
   ensureSelectValue($("immersiveModel"), s.immersiveModel || DEFAULTS.immersiveModel);
   ensureSelectValue($("visionModel"), s.visionModel || DEFAULTS.visionModel);
   $("glossary").value = (localCfg && localCfg.glossary) || "";
+  fillAnnotate(localCfg);
   syncGlossaryBadge();
   syncApiTypeUi();
 }
@@ -229,7 +448,8 @@ function readForm() {
     },
     local: {
       glossary: $("glossary").value.replace(/\r\n/g, "\n").trim(),
-      key: $("key").value.trim()
+      key: $("key").value.trim(),
+      ...readAnnotate()
     }
   };
 }
@@ -321,10 +541,14 @@ document.addEventListener("DOMContentLoaded", async () => {
     save();
   });
   $("test").addEventListener("click", test);
+  $("annotateList").addEventListener("click", onAnnotateListClick);
+  $("annotateClear").addEventListener("click", clearKnownWords);
+  loadAnnotateKnown();
   $("reset").addEventListener("click", async () => {
     fillForm(DEFAULTS, LOCAL_DEFAULTS);
     await chrome.storage.sync.set(DEFAULTS);
+    // LOCAL_DEFAULTS turns annotation off and restores the levels; the saved words are not touched.
     if (chrome.storage.local) await chrome.storage.local.set(LOCAL_DEFAULTS);
-    setStatus(tr("opt.reset"));
+    setStatus(tr("opt.reset") + (annotateTotal() > 0 ? "\n" + tr("opt.annot.resetKept") : ""));
   });
 });

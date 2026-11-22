@@ -5,6 +5,10 @@
 const I18N =
   typeof module !== "undefined" && module.exports ? require("./i18n.js") : (importScripts("i18n.js"), globalThis.BiliI18n);
 
+// Pure functions of "annotate hard words only" mode (word picking, prompt, reply parsing). Loaded like i18n.js.
+const ANNOTATE =
+  typeof module !== "undefined" && module.exports ? require("./annotate.js") : (importScripts("annotate.js"), globalThis.BiliAnnotate);
+
 const DEFAULTS = {
   base: "https://index-translate.bilibili.com/v1",
   proxy: "",
@@ -28,6 +32,22 @@ const LOCAL_DEFAULTS = {
   glossary: "",
   key: "bili"
 };
+
+// "Annotate hard words only" settings, kept in chrome.storage.local and read separately from
+// LOCAL_DEFAULTS. annotateLevels: zh is an HSK level (1-7), en/es a frequency-rank cut-off. annotateKnown
+// holds base-form keys only: words the reader marked as known, never sentences or addresses.
+const ANNOTATE_DEFAULTS = {
+  annotateEnabled: false,
+  annotateLevels: { zh: 4, en: 5000, es: 5000 },
+  annotateKnown: { v: 1, zh: [], en: [], es: [] }
+};
+const ANNOTATE_LANGS = ["zh", "en", "es"];
+const ANNOTATE_WORDLIST_FILES = { zh: "data/hsk30.txt", en: "data/freq-en.txt", es: "data/freq-es.txt" };
+const ANNOTATE_OFFICIAL_HOST = "index-translate.bilibili.com";
+const ANNOTATE_OFFICIAL_MODEL = "Index-Translate-9B";
+const ANNOTATE_MERGE_MAX_WORDS = 24;
+const ANNOTATE_MAX_KNOWN = 50000;
+const ANNOTATE_MAX_KEY = 32;
 
 const MENU_ID = "bili-translate-selection";
 const MENU_STUDY_ID = "bili-study-selection";
@@ -67,6 +87,8 @@ const MEM_CACHE_LIMIT = 64;
 const volatileTranslateCache = new Map();
 const volatileStudyCache = new Map();
 const volatileVisionCache = new Map();
+// Annotate mode: "model|target|base|glossLang|paragraph" -> { key: { w, gloss } }.
+const volatileAnnotateCache = new Map();
 
 // Parsed glossary cache in RAM (rebuilt only when user edits options).
 let cachedGlossaryRaw = null;
@@ -1727,7 +1749,9 @@ async function fetchImageAsDataUrl(srcUrl, timeoutMs = TIMEOUT_MS) {
   }
 }
 
-async function callChatCompletion(messages, s, temperature = 0.0, activeModel = "", maxTokens = undefined) {
+// options.signal cancels the request; options.retry retries rate limits and temporary server errors
+// (RETRY_POLICY), as the streaming paths do. The result carries finishReason ("" when the reply has none).
+async function callChatCompletion(messages, s, temperature = 0.0, activeModel = "", maxTokens = undefined, options = undefined) {
   const model = String(activeModel || s.model || DEFAULTS.model).trim();
   const base = stripSlashes(s.base);
   const relay = stripSlashes(s.proxy);
@@ -1745,7 +1769,12 @@ async function callChatCompletion(messages, s, temperature = 0.0, activeModel = 
   if (maxTokens) body.max_tokens = maxTokens;
 
   const via = relay ? "relay" : "direct";
-  const r = await postChat(relay || base, s.key, body);
+  const signal = options && options.signal;
+  const send = () => postChat(relay || base, s.key, body, signal);
+  const r =
+    options && options.retry
+      ? await retryRequest(send, { retryAfter: (x) => x.retryAfter, signal: signal })
+      : await send();
 
   if (!r.ok) {
     return { ok: false, status: r.status, body: r.raw.slice(0, MAX_ERROR_BODY), via: via };
@@ -1774,7 +1803,8 @@ async function callChatCompletion(messages, s, temperature = 0.0, activeModel = 
     };
   }
 
-  return { ok: true, content: stripThink(content), model: model, via: via };
+  const finishReason = choice && typeof choice.finish_reason === "string" ? choice.finish_reason : "";
+  return { ok: true, content: stripThink(content), model: model, via: via, finishReason: finishReason };
 }
 
 async function readCompletionContent(res) {
@@ -2122,6 +2152,382 @@ async function streamImmersiveBatch(rawItems, modelOverride, onProgress, externa
   });
 }
 
+// ---- Annotate-only mode ---------------------------------------------------------------------
+// Instead of translating a paragraph, the model glosses only the words the reader may not know.
+// Word picking, the prompt and reply parsing live in annotate.js; this part does settings, word
+// lists, requests, fallbacks, the cache and the stored "known" words.
+
+const emptyAnnotateKnown = () => ({ v: 1, zh: [], en: [], es: [] });
+
+// A key is a word, never a phrase or an address: Han characters only for zh; for en/es a lower-case
+// word of letters and combining marks with apostrophes inside (don't), as annotate.js produces them.
+function validAnnotateKey(lang, key) {
+  if (typeof key !== "string" || key.length === 0 || key.length > ANNOTATE_MAX_KEY) return false;
+  if (lang === "zh") return /^\p{Script=Han}+$/u.test(key);
+  if (lang === "en" || lang === "es") return /^\p{L}[\p{L}\p{M}']*$/u.test(key) && key === key.toLowerCase();
+  return false;
+}
+
+// Storage is user-writable and older builds may have stored other shapes: keep what is usable, drop the rest.
+function normalizeAnnotateKnown(raw) {
+  const out = emptyAnnotateKnown();
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return out;
+  for (const lang of ANNOTATE_LANGS) {
+    if (!Array.isArray(raw[lang])) continue;
+    const seen = new Set();
+    for (const key of raw[lang]) {
+      if (out[lang].length >= ANNOTATE_MAX_KNOWN) break;
+      if (!validAnnotateKey(lang, key) || seen.has(key)) continue;
+      seen.add(key);
+      out[lang].push(key);
+    }
+  }
+  return out;
+}
+
+function normalizeAnnotateLevels(raw) {
+  const def = ANNOTATE_DEFAULTS.annotateLevels;
+  const src = raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {};
+  const pick = (value, fallback, min, max) => {
+    const n = typeof value === "number" ? value : typeof value === "string" && value.trim() !== "" ? Number(value) : NaN;
+    return Number.isFinite(n) ? Math.min(max, Math.max(min, Math.round(n))) : fallback;
+  };
+  return {
+    zh: pick(src.zh, def.zh, 1, 7),
+    en: pick(src.en, def.en, 1, 50000),
+    es: pick(src.es, def.es, 1, 50000)
+  };
+}
+
+// withKnown false leaves the stored words unread (the switch is off, or only the switch is needed).
+async function getAnnotateConfig(withKnown = true) {
+  const defaults = { annotateEnabled: ANNOTATE_DEFAULTS.annotateEnabled, annotateLevels: ANNOTATE_DEFAULTS.annotateLevels };
+  if (withKnown) defaults.annotateKnown = ANNOTATE_DEFAULTS.annotateKnown;
+  const raw = await chrome.storage.local.get(defaults);
+  return {
+    annotateEnabled: raw.annotateEnabled === true,
+    annotateLevels: normalizeAnnotateLevels(raw.annotateLevels),
+    annotateKnown: withKnown ? normalizeAnnotateKnown(raw.annotateKnown) : null
+  };
+}
+
+function annotateAvailable(s, annotateCfg) {
+  if (!annotateCfg || annotateCfg.annotateEnabled !== true) return false;
+  if (textEngine(s)) return false;
+  return ANNOTATE.glossLangForTarget(s && s.target) !== null;
+}
+
+// The official address always uses 9B (2B follows the format too unreliably); any other address uses the model the user set.
+function annotateModelFor(s) {
+  let host = "";
+  try {
+    host = new URL(stripSlashes(s.base)).hostname.toLowerCase();
+  } catch (_) {}
+  return host === ANNOTATE_OFFICIAL_HOST ? ANNOTATE_OFFICIAL_MODEL : String(s.model || DEFAULTS.model).trim();
+}
+
+// Word lists load on first use, one language at a time, and stay in RAM as Maps.
+let annotateTables = {};
+let annotateTableLoads = {};
+
+// For tests: tables is { zh, en, es } of Maps (or list text), null clears them.
+function setAnnotateWordlists(tables) {
+  annotateTables = {};
+  annotateTableLoads = {};
+  if (!tables) return;
+  for (const lang of ANNOTATE_LANGS) {
+    if (tables[lang] === undefined) continue;
+    annotateTables[lang] = tables[lang] instanceof Map ? tables[lang] : ANNOTATE.parseWordlist(lang, tables[lang]);
+  }
+}
+
+function loadAnnotateTable(lang) {
+  if (annotateTables[lang]) return Promise.resolve(annotateTables[lang]);
+  if (!annotateTableLoads[lang]) {
+    annotateTableLoads[lang] = (async () => {
+      const res = await fetch(chrome.runtime.getURL(ANNOTATE_WORDLIST_FILES[lang]));
+      if (!res.ok) throw new Error("word list " + lang + ": HTTP " + res.status);
+      const map = ANNOTATE.parseWordlist(lang, await res.text());
+      if (map.size === 0) throw new Error("word list " + lang + " is empty");
+      annotateTables[lang] = map;
+      return map;
+    })().finally(() => {
+      delete annotateTableLoads[lang];
+    });
+  }
+  return annotateTableLoads[lang];
+}
+
+async function loadAnnotateTables(langs) {
+  const out = {};
+  await Promise.all(langs.map(async (lang) => (out[lang] = await loadAnnotateTable(lang))));
+  return out;
+}
+
+const annotateKnownSets = (known) => ({ zh: new Set(known.zh), en: new Set(known.en), es: new Set(known.es) });
+
+// items: [{ text, lang }] (lang is the page's lang attribute, may be empty). exclude: { zh, en, es } keys
+// already annotated on this page. Result: { ok, segments, notes, model }; a paragraph appears in one of
+// segments and notes. An HTTP error or a timeout fails the whole batch instead of falling back step by step.
+async function streamAnnotateBatch(rawItems, exclude, onProgress, signal) {
+  const items = Array.isArray(rawItems)
+    ? rawItems.map((x) => ({ text: String((x && x.text) || "").trim(), lang: String((x && x.lang) || "") }))
+    : [];
+  const texts = items.map((x) => x.text);
+  const s = await getSettings();
+  const cfg = await getAnnotateConfig(false).catch(() => null);
+  if (items.length === 0 || !annotateAvailable(s, cfg)) return streamImmersiveBatch(texts, "", onProgress, signal);
+
+  const cancelled = () => ({ ok: false, cancelled: true, status: 0, body: "Cancelled" });
+  const isCancelled = () => !!(signal && signal.aborted);
+  const glossLang = ANNOTATE.glossLangForTarget(s.target);
+  const model = annotateModelFor(s);
+  const base = stripSlashes(s.base);
+  const cacheKey = (text) => model + "|" + s.target + "|" + base + "|" + glossLang + "|" + text;
+
+  const langs = items.map((x) => ANNOTATE.detectLang(x.text, x.lang));
+  const fallback = new Set(); // paragraphs that get a whole-paragraph translation
+  langs.forEach((lang, i) => {
+    if (!ANNOTATE_LANGS.includes(lang)) fallback.add(i);
+  });
+
+  let tables = null;
+  let known = null;
+  const wanted = ANNOTATE_LANGS.filter((lang) => langs.includes(lang));
+  if (wanted.length > 0) {
+    try {
+      tables = await loadAnnotateTables(wanted);
+      known = annotateKnownSets((await getAnnotateConfig(true)).annotateKnown);
+    } catch (_) {
+      tables = null; // no word list or no stored words: this batch is translated instead
+    }
+    if (!tables) langs.forEach((_, i) => fallback.add(i));
+  }
+
+  try {
+    // Pick words. Keys picked for earlier paragraphs are excluded from later ones (one gloss per word per page).
+    const skip = { zh: new Set(), en: new Set(), es: new Set() };
+    if (exclude && typeof exclude === "object") {
+      for (const lang of ANNOTATE_LANGS) if (Array.isArray(exclude[lang])) for (const k of exclude[lang]) skip[lang].add(String(k));
+    }
+    const picks = {};
+    const levels = cfg.annotateLevels;
+    for (let i = 0; i < items.length; i++) {
+      if (fallback.has(i)) continue;
+      const lang = langs[i];
+      const picked = ANNOTATE.pickCandidates({
+        text: items[i].text,
+        lang,
+        tables,
+        level: levels[lang],
+        known: known[lang],
+        exclude: skip[lang]
+      });
+      for (const c of picked) skip[lang].add(c.key);
+      picks[i] = picked;
+    }
+
+    const rawNotes = {};
+    const noteOf = (i, p, gloss) => ({ w: p.w, gloss: gloss, key: p.key, lang: langs[i] });
+    const todo = [];
+    for (const i of Object.keys(picks).map(Number)) {
+      if (picks[i].length === 0) {
+        rawNotes[i] = [];
+        continue;
+      }
+      const cached = lruGet(volatileAnnotateCache, cacheKey(items[i].text));
+      // A word whose gloss was dropped is cached with gloss "" so that the paragraph still counts as answered.
+      if (cached && picks[i].every((p) => cached[p.key])) {
+        rawNotes[i] = picks[i].map((p) => noteOf(i, p, cached[p.key].gloss)).filter((n) => n.gloss);
+      } else {
+        todo.push(i);
+      }
+    }
+
+    // Asks for one group of paragraphs. Returns { fail } for an HTTP error, { bad: true } for an unusable
+    // reply, otherwise { glosses } (one list per paragraph).
+    const ask = async (group) => {
+      if (isCancelled()) return { fail: cancelled() };
+      const words = group.flatMap((i) => picks[i].map((p) => p.w));
+      const { messages } = ANNOTATE.buildAnnotatePrompt(
+        group.map((i) => ({ text: items[i].text, words: picks[i].map((p) => p.w) })),
+        glossLang
+      );
+      const res = await callChatCompletion(messages, s, 0, model, group.length > 1 ? 1500 : 600, { signal, retry: true });
+      if (isCancelled()) return { fail: cancelled() };
+      // A 2xx reply that is not usable (not JSON, no content) is a format failure, not an HTTP error.
+      if (!res.ok) return res.status >= 200 && res.status < 300 ? { bad: true } : { fail: res };
+      const parsed = ANNOTATE.parseAnnotateReply(res.content, words, { finishReason: res.finishReason, glossLang });
+      if (!parsed.ok) return { bad: true };
+      let at = 0;
+      return { glosses: group.map((i) => parsed.glosses.slice(at, (at += picks[i].length))) };
+    };
+
+    const accept = (i, glosses) => {
+      const all = picks[i].map((p, n) => noteOf(i, p, glosses[n] || ""));
+      rawNotes[i] = all.filter((n) => n.gloss);
+      const entry = { ...(lruGet(volatileAnnotateCache, cacheKey(items[i].text)) || {}) };
+      for (const n of all) entry[n.key] = { w: n.w, gloss: n.gloss };
+      if (Object.keys(entry).length > 0) lruSet(volatileAnnotateCache, cacheKey(items[i].text), entry);
+    };
+
+    const askSingle = async (i) => {
+      const r = await ask([i]);
+      if (r.fail) return r.fail;
+      if (r.bad) fallback.add(i);
+      else accept(i, r.glosses[0]);
+      return null;
+    };
+
+    // Groups in page order, each with at most ANNOTATE_MERGE_MAX_WORDS words.
+    const groups = [];
+    let current = [];
+    let count = 0;
+    for (const i of todo) {
+      if (current.length > 0 && count + picks[i].length > ANNOTATE_MERGE_MAX_WORDS) {
+        groups.push(current);
+        current = [];
+        count = 0;
+      }
+      current.push(i);
+      count += picks[i].length;
+    }
+    if (current.length > 0) groups.push(current);
+
+    for (const group of groups) {
+      if (group.length === 1) {
+        const failed = await askSingle(group[0]);
+        if (failed) return failed;
+        continue;
+      }
+      const r = await ask(group);
+      if (r.fail) return r.fail;
+      if (r.bad) {
+        for (const i of group) {
+          const failed = await askSingle(i);
+          if (failed) return failed;
+        }
+      } else {
+        group.forEach((i, n) => accept(i, r.glosses[n]));
+      }
+    }
+
+    // Paragraphs that could not be annotated are translated whole.
+    const segments = {};
+    let translatedModel = "";
+    const order = [...fallback].sort((a, b) => a - b);
+    if (order.length > 0) {
+      if (isCancelled()) return cancelled();
+      const r = await streamImmersiveBatch(
+        order.map((i) => texts[i]),
+        "",
+        typeof onProgress === "function"
+          ? (p) => {
+              const mapped = {};
+              for (const [j, text] of Object.entries((p && p.segments) || {})) mapped[order[j]] = text;
+              onProgress({ ...p, segments: mapped });
+            }
+          : undefined,
+        signal
+      );
+      if (!r.ok) return r;
+      order.forEach((i, j) => {
+        segments[i] = (r.segments && r.segments[j]) || "";
+      });
+      translatedModel = r.model || "";
+    }
+
+    // The reader may have marked words as known while the requests were running.
+    // If the switch was turned off meanwhile, the stored words are not read again.
+    let latest = known;
+    try {
+      if ((await getAnnotateConfig(false)).annotateEnabled) {
+        latest = annotateKnownSets((await getAnnotateConfig(true)).annotateKnown);
+      }
+    } catch (_) {}
+    const notes = {};
+    for (const [i, list] of Object.entries(rawNotes)) {
+      if (fallback.has(Number(i))) continue;
+      notes[i] = list.filter(
+        (n) => n.gloss && validAnnotateKey(n.lang, n.key) && !(latest && latest[n.lang] && latest[n.lang].has(n.key))
+      );
+    }
+    const annotated = Object.keys(notes).length > 0;
+    return { ok: true, segments, notes, model: annotated || !translatedModel ? model : translatedModel };
+  } catch (err) {
+    if (isCancelled()) return cancelled();
+    return { ok: false, status: 0, body: String((err && err.message) || err) };
+  }
+}
+
+// Every change of annotateKnown (mark, undo, clear) is a read-modify-write run one after the other on
+// this chain, so two tabs marking at once cannot overwrite each other. A failed step does not block the next.
+let annotateWriteChain = Promise.resolve();
+
+// fn(cfg) returns { known, result }: known (if any) is written, result is the answer. With requireEnabled
+// the switch is checked first and, when it is off, the stored words are not read at all.
+function updateAnnotateKnown(fn, { requireEnabled = false } = {}) {
+  const run = annotateWriteChain.then(async () => {
+    if (requireEnabled && !(await getAnnotateConfig(false)).annotateEnabled) return { ok: false };
+    const cfg = await getAnnotateConfig(true);
+    const out = fn(cfg);
+    if (out.known) await chrome.storage.local.set({ annotateKnown: out.known });
+    return out.result;
+  });
+  annotateWriteChain = run.catch(() => {});
+  return run;
+}
+
+// From a page (content.js): mark or undo, only while the switch is on.
+async function annotateMark(msg) {
+  const lang = msg && msg.lang;
+  const key = msg && msg.key;
+  if (!ANNOTATE_LANGS.includes(lang) || !validAnnotateKey(lang, key)) return { ok: false, error: "invalid" };
+  if (msg.known !== undefined && typeof msg.known !== "boolean") return { ok: false, error: "invalid" };
+  const mark = msg.known !== false;
+  return updateAnnotateKnown((cfg) => {
+    const list = cfg.annotateKnown[lang];
+    const at = list.indexOf(key);
+    let changed = false;
+    if (mark && at < 0) {
+      if (list.length >= ANNOTATE_MAX_KNOWN) return { result: { ok: false, error: "limit" } };
+      list.push(key);
+      changed = true;
+    } else if (!mark && at >= 0) {
+      list.splice(at, 1);
+      changed = true;
+    }
+    return { known: changed ? cfg.annotateKnown : null, result: { ok: true, count: list.length } };
+  }, { requireEnabled: true });
+}
+
+// From the options page: remove one stored word. Works with the switch off too, like clearing, so the
+// reader can still manage what was kept. Any stored string can be removed, valid or not.
+async function annotateRemove(msg) {
+  const lang = msg && msg.lang;
+  const key = msg && msg.key;
+  if (!ANNOTATE_LANGS.includes(lang) || typeof key !== "string" || key.length === 0) return { ok: false, error: "invalid" };
+  return updateAnnotateKnown((cfg) => {
+    const list = cfg.annotateKnown[lang];
+    const at = list.indexOf(key);
+    if (at >= 0) list.splice(at, 1);
+    return { known: at >= 0 ? cfg.annotateKnown : null, result: { ok: true, count: list.length } };
+  });
+}
+
+function annotateClear() {
+  return updateAnnotateKnown(() => ({ known: emptyAnnotateKnown(), result: { ok: true } }));
+}
+
+// Waits for the writes queued so far, so the list shows them.
+async function annotateList() {
+  await annotateWriteChain;
+  const { annotateKnown } = await getAnnotateConfig(true);
+  const counts = {};
+  for (const lang of ANNOTATE_LANGS) counts[lang] = annotateKnown[lang].length;
+  return { ok: true, words: { zh: annotateKnown.zh, en: annotateKnown.en, es: annotateKnown.es }, counts };
+}
+
 async function streamStudyCard(text, modelOverride, onPartial, externalSignal) {
   text = String(text || "").trim();
   if (!text) return { ok: false, status: 0, body: tr("bg.nothingToAnalyze") };
@@ -2258,6 +2664,14 @@ const STREAM_PORTS = {
     segments: true,
     run: (msg, onProgress, signal) => streamImmersiveBatch(msg.items, msg.modelOverride, onProgress, signal)
   },
+  "bili-annotate-stream": {
+    start: "START_ANNOTATE_BATCH",
+    progress: "BATCH_DELTA",
+    done: "BATCH_DONE",
+    // Only translated paragraphs travel as progress; `notes` is only in the final message.
+    segments: true,
+    run: (msg, onProgress, signal) => streamAnnotateBatch(msg.items, msg.exclude, onProgress, signal)
+  },
   "bili-study-stream": {
     start: "START_STUDY_STREAM",
     progress: "PARTIAL",
@@ -2371,6 +2785,10 @@ const MESSAGE_SENDERS = {
   BILI_CAPTURE_TAB: [fromTabScript],
   BILI_GET_IMMERSIVE_PREFS: [fromTabScript],
   BILI_PURGE_VOLATILE: [fromTabScript],
+  BILI_ANNOTATE_MARK: [fromTabScript],
+  BILI_ANNOTATE_REMOVE: [fromExtensionPage],
+  BILI_ANNOTATE_CLEAR: [fromExtensionPage],
+  BILI_ANNOTATE_LIST: [fromExtensionPage],
   BILI_TRANSLATE: [fromExtensionPage, fromTabScript]
 };
 
@@ -2411,17 +2829,30 @@ if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.onMessage)
     }
 
     if (msg.type === "BILI_GET_IMMERSIVE_PREFS") {
-      getSettings()
-        .then((s) => {
+      Promise.all([getSettings(), getAnnotateConfig(false).catch(() => null)])
+        .then(([s, annotateCfg]) => {
           const textOnly = textEngine(s);
           sendResponse({
             ok: true,
             immersiveModel: textOnly ? textOnly.label : s.immersiveModel || DEFAULTS.immersiveModel,
             modelSwitch: !textOnly,
-            target: s.target || DEFAULTS.target
+            target: s.target || DEFAULTS.target,
+            annotate: annotateAvailable(s, annotateCfg)
           });
         })
         .catch(() => sendResponse({ ok: false }));
+      return true;
+    }
+
+    const annotateOps = {
+      BILI_ANNOTATE_MARK: () => annotateMark(msg),
+      BILI_ANNOTATE_REMOVE: () => annotateRemove(msg),
+      BILI_ANNOTATE_CLEAR: () => annotateClear(),
+      BILI_ANNOTATE_LIST: () => annotateList()
+    };
+    if (Object.prototype.hasOwnProperty.call(annotateOps, msg.type)) {
+      const run = annotateOps[msg.type]();
+      run.then(sendResponse, () => sendResponse({ ok: false }));
       return true;
     }
 
@@ -2451,6 +2882,7 @@ if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.onMessage)
       volatileTranslateCache.clear();
       volatileStudyCache.clear();
       volatileVisionCache.clear();
+      volatileAnnotateCache.clear();
       sendResponse({ ok: true });
       return false;
     }
@@ -2475,7 +2907,14 @@ if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.onMessage)
   }
 
   chrome.storage.onChanged.addListener((changes, area) => {
+    // Marking a word as known changes nothing a translation depends on, and happens often: keep every
+    // cache. The stored words are read from storage when a batch needs them, so there is nothing to refresh.
+    if (area === "local" && changes) {
+      const keys = Object.keys(changes);
+      if (keys.length > 0 && keys.every((k) => k === "annotateKnown")) return;
+    }
     noMergedBatch.clear();
+    volatileAnnotateCache.clear();
     cachedGlossaryRaw = null;
     cachedGlossaryEntries = [];
     volatileTranslateCache.clear();
@@ -2626,6 +3065,13 @@ if (typeof module !== "undefined" && module.exports) {
     streamTranslation,
     streamVisionTranslation,
     streamImmersiveBatch,
+    streamAnnotateBatch,
+    ANNOTATE_DEFAULTS,
+    getAnnotateConfig,
+    annotateAvailable,
+    annotateModelFor,
+    setAnnotateWordlists,
+    volatileAnnotateCache,
     streamStudyCard,
     translate,
     generateStudyCard
