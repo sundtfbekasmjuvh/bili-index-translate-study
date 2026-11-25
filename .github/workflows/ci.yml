@@ -143,7 +143,7 @@ jobs:
           dotnet publish src/BiliIndexTranslate.App/BiliIndexTranslate.App.csproj -c Release -r win-x64 --self-contained true -o $publish
           if ($LASTEXITCODE -ne 0) { throw "dotnet publish failed with exit code $LASTEXITCODE" }
 
-          vpk pack --packId BiliIndexTranslate.Desktop --packVersion $version --packDir $publish --mainExe BiliIndexTranslate.exe --packTitle "Bili Index Translate" --icon src/BiliIndexTranslate.App/Assets/app.ico --noPortable --outputDir $out
+          vpk pack --packId BiliIndexTranslate.Desktop --packVersion $version --packDir $publish --mainExe BiliIndexTranslate.exe --packTitle "Bili Index Translate" --icon src/BiliIndexTranslate.App/Assets/app.ico --runtime win-x64 --channel win --noPortable --outputDir $out
           if ($LASTEXITCODE -ne 0) { throw "vpk pack failed with exit code $LASTEXITCODE" }
 
           if (-not (Test-Path (Join-Path $out "*-Setup.exe"))) { throw "vpk produced no Setup.exe in $out" }
