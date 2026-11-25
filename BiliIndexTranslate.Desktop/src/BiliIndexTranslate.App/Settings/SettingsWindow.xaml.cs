@@ -3,15 +3,23 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
 using BiliIndexTranslate.App.Input;
+using BiliIndexTranslate.App.Startup;
 using BiliIndexTranslate.Core.Settings;
+using BiliIndexTranslate.Core.Updates;
 using BiliIndexTranslate.Core.Translation;
 using BiliIndexTranslate.App.Localization;
 using BiliIndexTranslate.Core.Localization;
 
 namespace BiliIndexTranslate.App.Settings;
 
+/// <summary>What the Settings window needs for its update section: whether this build can update, its version, and the manual check.</summary>
+public sealed record SettingsUpdateInfo(bool Supported, string VersionText, Func<Task<UpdateCheckOutcome>> CheckNow);
+
 public partial class SettingsWindow : Window
 {
+    private readonly SettingsUpdateInfo _updates;
+    /// <summary>Whether the Run entry started this exe when the window opened (or after the last successful change).</summary>
+    private bool _autoStartInitial;
     private readonly AppSettings _original;
     private readonly ObservableCollection<string> _excluded;
     private readonly Func<AppSettings, CancellationToken, Task<(bool Ok, string Message)>> _tester;
@@ -23,9 +31,11 @@ public partial class SettingsWindow : Window
 
     public SettingsWindow(AppSettings current, string settingsPath,
         Func<AppSettings, CancellationToken, Task<(bool Ok, string Message)>> tester,
-        Func<AppSettings, string?> save)
+        Func<AppSettings, string?> save,
+        SettingsUpdateInfo updates)
     {
         InitializeComponent();
+        _updates = updates;
         _original = current.Clone();
         _excluded = new ObservableCollection<string>(current.ExcludedProcesses);
         _tester = tester;
@@ -95,6 +105,80 @@ public partial class SettingsWindow : Window
         UiaEventsBox.IsChecked = s.UseUiaSelectionEvents;
         FileLoggingBox.IsChecked = s.DiagnosticsFileLogging;
         SettingsPathRun.Text = _settingsPath;
+
+        // The Run entry decides the start-up box; an entry that points to another exe shows as not set.
+        _autoStartInitial = AutoStart.IsRegisteredForCurrentExe();
+        RunAtStartupBox.IsChecked = _autoStartInitial;
+        AutoCheckUpdatesBox.IsChecked = s.AutoCheckForUpdates;
+        VersionRun.Text = _updates.VersionText;
+        AutoCheckUpdatesBox.IsEnabled = CheckUpdatesButton.IsEnabled = _updates.Supported;
+        UpdatesHelpText.Visibility = _updates.Supported ? Visibility.Visible : Visibility.Collapsed;
+        UpdatesPortableText.Visibility = _updates.Supported ? Visibility.Collapsed : Visibility.Visible;
+    }
+
+    /// <summary>Writes or deletes the Run entry when the box differs from what the registry had. Returns the error text, or null.</summary>
+    private string? ApplyStartupChoice()
+    {
+        var want = RunAtStartupBox.IsChecked == true;
+        if (want == _autoStartInitial) return null;
+        try
+        {
+            if (want) AutoStart.Register();
+            else AutoStart.Unregister();
+            _autoStartInitial = want;
+            return null;
+        }
+        catch (Exception ex)
+        {
+            return Loc.T("Settings_StartupFailed", ex.GetType().Name);
+        }
+    }
+
+    private async void OnCheckUpdates(object sender, RoutedEventArgs e)
+    {
+        CheckUpdatesButton.IsEnabled = false;
+        ShowUpdateResult(Loc.T("Settings_Checking"), UpdateTone.Neutral);
+        try
+        {
+            ShowUpdateOutcome(await _updates.CheckNow());
+        }
+        catch (Exception ex)
+        {
+            ShowUpdateResult(Loc.T("Update_Failed", UpdateErrorText.Describe(ex)), UpdateTone.Error);
+        }
+        finally
+        {
+            CheckUpdatesButton.IsEnabled = _updates.Supported;
+        }
+    }
+
+    /// <summary>The result of a manual check, as text in the window.</summary>
+    public void ShowUpdateOutcome(UpdateCheckOutcome outcome)
+    {
+        switch (outcome.Status)
+        {
+            case UpdateCheckStatus.UpToDate: ShowUpdateResult(Loc.T("Update_UpToDate"), UpdateTone.Good); break;
+            case UpdateCheckStatus.Downloading: ShowUpdateResult(Loc.T("Update_Found", outcome.Version), UpdateTone.Neutral); break;
+            case UpdateCheckStatus.Downloaded: ShowUpdateResult(Loc.T("Update_Ready", outcome.Version), UpdateTone.Good); break;
+            case UpdateCheckStatus.Failed: ShowUpdateResult(Loc.T("Update_Failed", outcome.Reason), UpdateTone.Error); break;
+            case UpdateCheckStatus.Busy: ShowUpdateResult(Loc.T("Update_Busy"), UpdateTone.Neutral); break;
+            case UpdateCheckStatus.NotInstalled: ShowUpdateResult(Loc.T("Settings_UpdatesPortable"), UpdateTone.Neutral); break;
+            default: UpdateResultText.Visibility = Visibility.Collapsed; break;
+        }
+    }
+
+    /// <summary>The background download that followed a manual check has finished.</summary>
+    public void ShowUpdateDownloaded(string version) => ShowUpdateResult(Loc.T("Update_Ready", version), UpdateTone.Good);
+
+    public void ShowUpdateDownloadFailed(string reason) => ShowUpdateResult(Loc.T("Update_DownloadFailed", reason), UpdateTone.Error);
+
+    private enum UpdateTone { Neutral, Good, Error }
+
+    private void ShowUpdateResult(string text, UpdateTone tone)
+    {
+        UpdateResultText.Text = text;
+        UpdateResultText.Foreground = (Brush)FindResource(tone switch { UpdateTone.Good => "Ui.Success", UpdateTone.Error => "Ui.Error", _ => "Ui.TextSecondary" });
+        UpdateResultText.Visibility = Visibility.Visible;
     }
 
     /// <summary>Builds a settings object from what is currently on screen (not what was saved).</summary>
@@ -133,6 +217,7 @@ public partial class SettingsWindow : Window
         s.StabilizationDelayMs = (int)DelaySlider.Value;
         s.UseUiaSelectionEvents = UiaEventsBox.IsChecked == true;
         s.DiagnosticsFileLogging = FileLoggingBox.IsChecked == true;
+        s.AutoCheckForUpdates = AutoCheckUpdatesBox.IsChecked == true;
 
         if (!EndpointResolver.TryResolve(s.ApiFormat, s.BaseUrl, s.UseRelay, s.RelayPrefix, s.ApiKey, out var endpoint, out var epError))
         {
@@ -159,6 +244,7 @@ public partial class SettingsWindow : Window
     {
         var s = ReadForm(out var error);
         if (s is null) { ShowStatus(error!, isError: true); return; }
+        if (ApplyStartupChoice() is { } startupError) { ShowStatus(startupError, isError: true); return; }
         // The window stays open when the file could not be written, so that the reason is seen.
         if (_save(s) is { } saveError) { ShowStatus(saveError, isError: true); return; }
         Close();
@@ -168,6 +254,7 @@ public partial class SettingsWindow : Window
     {
         var s = ReadForm(out var error);
         if (s is null) { ShowStatus(error!, isError: true); return; }
+        if (ApplyStartupChoice() is { } startupError) { ShowStatus(startupError, isError: true); return; }
         var saveError = _save(s);
 
         _testCts?.Cancel();

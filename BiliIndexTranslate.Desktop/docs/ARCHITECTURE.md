@@ -15,6 +15,7 @@
 | Interface language | `Core/Localization/UiText`, `Core/Localization/InterfaceLanguage`, `App/Localization/Loc` | Text of both languages in one table with the same keys. XAML reads it through `{loc:Tr Key}`, a binding to `Loc`'s indexer, so open windows follow a language change; code uses `Loc.T` / `Loc.Bind`. A unit test checks that every key the app uses exists and that every key is used. |
 | Diagnostics | `Core/Diagnostics/*`, `App/Diagnostics/DiagnosticsWindow` | 300-entry ring buffer, p50/p95 per timing category, per-app compatibility registry. |
 | Tray / lifetime | `App/Tray/TrayIcon`, `App/Program`, `App/AppHost` | Single instance (mutex + named event), explicit shutdown, ordered disposal. |
+| Updates / start-up | `Core/Updates/*`, `Core/Startup/AutoStartValue`, `App/Updates/UpdateService`, `App/Startup/AutoStart` | Velopack installer and updater; the Run-key entry for "Start with Windows". Rules that can be tested (schedule, value format, error text) are in Core. See "Updates and start-up" below. |
 
 ## Threads
 
@@ -129,3 +130,42 @@ state is `Loading` and the id is current; the state stays `Loading`. Anything el
 Info log. The popup shows the partial text with copy/pin disabled, the study button hidden and a
 "streaming…" caption; the final `ShowTranslation` restores the normal card. Growth in height goes
 through the existing `SizeChanged → Replace` path.
+
+## Updates and start-up
+
+**Packaging.** The release workflow publishes a self-contained, non-single-file win-x64 build and runs
+`vpk pack` with pack id `BiliIndexTranslate.Desktop`. The installer puts the app in
+`%LocalAppData%\BiliIndexTranslate.Desktop` (the exe runs from `current\`); settings and logs stay in
+`%LocalAppData%\BiliIndexTranslate` (`Program.DataDirectory`). The two must never be the same folder,
+or uninstalling and updating would touch the settings. `Program.Main` begins with
+`VelopackApp.Build()....Run()`, before the single-instance check: the installer starts the exe with
+special arguments and `Run()` handles them and exits.
+
+**UpdateService** (App) wraps `UpdateManager` with a `GithubSource` for this repository: no access
+token, no pre-releases, so only *published* releases are seen (a draft is invisible until published).
+It is active only when `IsInstalled` is true; a portable zip or a development run never contacts
+GitHub. Like the rest of `AppHost` it works on the UI thread: the check and the download run on the
+thread pool, results come back through `Post`, and `Dispose` cancels whatever is running.
+
+* *When.* `UpdateSchedule.Next(isInstalled, enabled, lastCheck, now)` (Core, pure) answers none / now /
+  after a delay: 60 s after start, then 24 h after the last check. A `DispatcherTimer` carries the delay;
+  the setting `AutoCheckForUpdates` (default on, so an older settings file needs no migration) turns it
+  off, and `Configure` ignores an unchanged value so that unrelated settings saves do not restart the timer.
+* *What.* A found version is downloaded at once. When the download ends, `UpdateReady` makes `AppHost` show
+  the tray menu item "Restart and update" and one tray notice. An update downloaded in an earlier run
+  (`UpdatePendingRestart`) shows the menu item without the notice.
+* *Applying.* "Restart and update" disposes the host first (settings saved, hooks and tray gone) and then calls
+  `ApplyUpdatesAndRestart`, which ends the process. A normal exit from the tray calls
+  `WaitExitThenApplyUpdates(asset, silent: true, restart: false)` after the host is disposed: the updater
+  installs once the process has gone, and nothing is started.
+* *Manual check.* The Settings button calls `CheckNowAsync` and shows the outcome (`UpdateCheckOutcome`) in
+  the window; only this path shows a failure to the user. Automatic checks write a diagnostics line only.
+  Errors pass through `UpdateErrorText`, which keeps a short reason (an HTTP status or an exception name) and
+  replaces every URL, so neither the log nor the window carries a token or a download address.
+
+**Start with Windows** (`App/Startup/AutoStart`, value format in `Core/Startup/AutoStartValue`). The entry is
+`HKCU\Software\Microsoft\Windows\CurrentVersion\Run`, value `BiliIndexTranslate`, the quoted
+`Environment.ProcessPath`. The registry is the only source of truth: Settings reads it when it opens
+(an entry that points to another exe counts as not set) and writes or deletes it on Save; nothing is stored in
+`settings.json`. The path `...\current\BiliIndexTranslate.exe` is the same before and after an update. The
+Velopack hook `OnBeforeUninstallFastCallback` deletes the value when it points to the exe being uninstalled.

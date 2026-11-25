@@ -13,6 +13,7 @@ using BiliIndexTranslate.App.Themes;
 using BiliIndexTranslate.App.Tracking;
 using BiliIndexTranslate.App.Tray;
 using BiliIndexTranslate.App.Uia;
+using BiliIndexTranslate.App.Updates;
 using BiliIndexTranslate.Core.Diagnostics;
 using BiliIndexTranslate.Core.Geometry;
 using BiliIndexTranslate.Core.Selection;
@@ -64,6 +65,7 @@ internal sealed class AppHost : IDisposable
     private InputHookThread _hooks = null!;
     private SourceWindowTracker _tracker = null!;
     private TrayIcon _tray = null!;
+    private UpdateService _updates = null!;
 
     private readonly DispatcherTimer _stabTimer = new(DispatcherPriority.Input);
     private readonly DispatcherTimer _probeWatchdog = new(DispatcherPriority.Background);
@@ -226,6 +228,14 @@ internal sealed class AppHost : IDisposable
 
         if (!_hooks.HooksInstalled)
             _tray.ShowNotice("Bili Index Translate", Loc.T("App_HooksFailed"), warning: true);
+
+        // Updates: only an installed (Velopack) build ever contacts GitHub; for a portable or development run Configure does nothing.
+        _updates = new UpdateService(Post, _log);
+        _updates.UpdateReady += OnUpdateReady;
+        _updates.DownloadFailed += (reason, manual) => { if (manual) _settingsWindow?.ShowUpdateDownloadFailed(reason); };
+        _tray.RestartUpdateRequested += RestartAndUpdate;
+        if (_updates.ReadyVersion is not null) _tray.SetUpdateReady(true); // downloaded in an earlier run, not installed yet
+        _updates.Configure(_settings.AutoCheckForUpdates);
 
         _log.Info("app", $"ready · auto={_settings.AutoTranslate} delay={_settings.StabilizationDelayMs}ms target={_settings.TargetLanguage} model={_settings.Model} relay={_settings.UseRelay}");
         if (_forceWelcome || !_settings.OnboardingCompleted) OpenWelcome(force: false);
@@ -833,6 +843,7 @@ internal sealed class AppHost : IDisposable
         _theme.Apply(_settings.Theme);
         _popup.Configure(_settings.TextScale, _settings.ShowOriginalByDefault);
         _tray.SetAutoTranslate(_settings.AutoTranslate);
+        _updates?.Configure(_settings.AutoCheckForUpdates);
         if (previous.Hotkey != _settings.Hotkey || previous.HotkeyEnabled != _settings.HotkeyEnabled) ApplyHotkey();
         if (previous.SnipHotkey != _settings.SnipHotkey || previous.SnipHotkeyEnabled != _settings.SnipHotkeyEnabled) ApplySnipHotkey();
         if (previous.UseUiaSelectionEvents != _settings.UseUiaSelectionEvents) _observer.SetSelectionEvents(_settings.UseUiaSelectionEvents);
@@ -959,7 +970,8 @@ internal sealed class AppHost : IDisposable
             _settingsWindow.Activate();
             return;
         }
-        _settingsWindow = new SettingsWindow(_settings, _store.FilePath, TestConnectionAsync, s => ApplySettings(s, notifySession: true, notifySaveFailure: false));
+        _settingsWindow = new SettingsWindow(_settings, _store.FilePath, TestConnectionAsync, s => ApplySettings(s, notifySession: true, notifySaveFailure: false),
+            new SettingsUpdateInfo(_updates.IsInstalled, _updates.CurrentVersionText, _updates.CheckNowAsync));
         _settingsWindow.SetHotkeyStatus(_hotkeyError);
         _settingsWindow.SetSnipHotkeyStatus(_snipHotkeyError);
         _settingsWindow.Closed += (_, _) => _settingsWindow = null;
@@ -1028,7 +1040,25 @@ internal sealed class AppHost : IDisposable
     {
         _log.Info("app", "exit requested");
         Dispose();
+        // A downloaded update is installed by the updater once this process has ended; no restart.
+        _updates?.ApplyOnExit();
         _app.Shutdown();
+    }
+
+    private void OnUpdateReady(string version)
+    {
+        _tray.SetUpdateReady(true);
+        _tray.ShowNotice("Bili Index Translate", Loc.T("Update_Ready", version));
+        _settingsWindow?.ShowUpdateDownloaded(version);
+    }
+
+    /// <summary>Tray: "Restart and update". Everything is stopped and saved first, because Velopack ends the process at once.</summary>
+    private void RestartAndUpdate()
+    {
+        _log.Info("app", "restart for update requested");
+        Dispose();
+        if (_updates.ApplyAndRestart()) return;
+        _app.Shutdown(); // the updater could not be started: leave the app as a normal exit would
     }
 
     public void Dispose()
@@ -1056,6 +1086,7 @@ internal sealed class AppHost : IDisposable
         SafeDispose(_popup);
         try { _settingsWindow?.Close(); _diagnosticsWindow?.Close(); _welcomeWindow?.Close(); } catch (Exception) { }
         SafeDispose(_tray);
+        SafeDispose(_updates);
         SafeDispose(_transport);
         SafeDispose(_theme);
         _log.Info("app", "stopped");

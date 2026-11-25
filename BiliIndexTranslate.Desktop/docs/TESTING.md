@@ -185,6 +185,39 @@ Not exercised on Windows yet:
 - The real Index-Translate endpoint answers a streamed request with `text/event-stream`. Check this direct, through the relay, and with the HTTP 412 hint.
 - A cache hit shows the final translation at once, without a streaming caption.
 
+## Installer, start-up entry and updates (2026-11-25)
+
+Velopack (1.2.161) installer and auto-update, plus the "Start with Windows" option.
+
+Checked on Linux (.NET SDK 10): `dotnet build BiliIndexTranslate.sln -c Release -warnaserror` gives 0 errors and
+0 warnings, and `dotnet test tests/BiliIndexTranslate.Core.Tests -c Release` passes **349** tests (the 318 before plus
+`UpdateAndStartupTests.cs`: when the next automatic check happens, the quoted start-up value and the "does this value
+start this exe" rule, update error text without URLs or tokens, and the `autoCheckForUpdates` setting with an old
+settings file). CI also runs "Velopack pack (dry run)", which publishes the self-contained build, runs `vpk pack` and
+checks that `*-Setup.exe` and the full package exist. None of the following can be done on Linux, and the dry run does
+not install or start anything. Walk through these on Windows, with a build that has a version number higher than the
+one you start from:
+
+| # | Check | Expected |
+|---|---|---|
+| 1 | Run `BiliIndexTranslate.Desktop-win-Setup.exe` from a release build on a user without admin rights | Installs without a UAC prompt into `%LocalAppData%\BiliIndexTranslate.Desktop`; `current\BiliIndexTranslate.exe` exists; Start menu and desktop shortcuts; the app starts and shows its tray icon. `%LocalAppData%\BiliIndexTranslate` (settings, logs) is a different folder |
+| 2 | Open Settings in the installed app | "Start with Windows" is not ticked (default); "Check for updates automatically" is ticked; the version shown is the installed one; the update controls are enabled |
+| 3 | Tick "Start with Windows", Save, then look at `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` | Value `BiliIndexTranslate` = `"%LocalAppData%\BiliIndexTranslate.Desktop\current\BiliIndexTranslate.exe"` with the quotes. `settings.json` has no start-up field. Sign out and in: the app starts by itself |
+| 4 | Change the value to another path by hand, reopen Settings | The box is not ticked. Tick it and Save: the value is the current exe path again |
+| 5 | Untick the box and Save | The value is gone; reopening Settings shows it unticked |
+| 6 | Publish a draft release of a higher version (assets uploaded by the release workflow), publish it, and press "Check for updates" in Settings | The window says a new version was found and is downloading; a tray notice "Version x has been downloaded and will be installed when you exit." appears once; the tray menu shows "Restart and update" |
+| 7 | With the draft **unpublished**, press "Check for updates" | "You have the latest version." (drafts are invisible to the updater) |
+| 8 | Wait for the automatic check: set "Check for updates automatically" on, start the app, and watch Diagnostics (turn on file logging) | A `check` line about 60 s after start, no more until 24 h later (or after sleep and wake past 24 h); with the option off, no `update` lines at all |
+| 9 | Tray → Restart and update | The app exits, the new version installs and starts; Settings shows the new version; the start-up value still points to the same `current\` path and the app still starts at sign-in |
+| 10 | Download an update again, then Tray → Exit | No window or restart; within a few seconds the new version is installed (check the version after starting it again) |
+| 11 | Cut the network (or block `api.github.com`) and press "Check for updates" | The window shows a short failure reason (no URL, no token). The automatic check in the same situation shows nothing and only writes a diagnostics line |
+| 12 | Run the portable zip build | The "Start with Windows" box works; "Check for updates automatically" and the button are disabled and the note "The portable build does not support automatic updates…" is shown; Wireshark/Fiddler shows no request to GitHub |
+| 13 | Tick "Start with Windows", then uninstall in Windows Settings → Apps | The Run value `BiliIndexTranslate` is deleted; `%LocalAppData%\BiliIndexTranslate.Desktop` is gone; `%LocalAppData%\BiliIndexTranslate\settings.json` is still there |
+| 14 | Install a second time over a running copy | Setup closes or replaces the running app cleanly; one tray icon after the start |
+
+Not verified at all before the first release: the delta package (needs two Velopack releases), and that the
+first release works with no earlier Velopack release to download.
+
 ## UI tests (FlaUI)
 
 `tests/BiliIndexTranslate.App.UiTests` (xunit, FlaUI.UIA3) drives the real app on a real desktop. It runs in

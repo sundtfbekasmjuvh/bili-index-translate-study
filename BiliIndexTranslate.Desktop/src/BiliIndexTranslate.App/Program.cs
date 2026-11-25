@@ -1,7 +1,9 @@
 using System.IO;
 using System.Windows;
 using System.Windows.Threading;
+using BiliIndexTranslate.App.Startup;
 using BiliIndexTranslate.Core.Startup;
+using Velopack;
 
 namespace BiliIndexTranslate.App;
 
@@ -24,6 +26,12 @@ public static class Program
     [STAThread]
     public static int Main(string[] args)
     {
+        // Must run first, before the single-instance check: the Velopack installer starts the exe with special
+        // arguments (install, update, uninstall); Run() handles them and exits. In a normal start it returns at once.
+        // The install directory is %LocalAppData%\BiliIndexTranslate.Desktop (the pack id), apart from DataDirectory,
+        // so uninstalling and updating never touch the settings.
+        VelopackApp.Build().OnBeforeUninstallFastCallback(_ => AutoStart.RemoveOnUninstall()).Run();
+
         var options = StartupOptions.Parse(args);
         var mutexName = MutexName;
         if (options.DataDirectory is not null)

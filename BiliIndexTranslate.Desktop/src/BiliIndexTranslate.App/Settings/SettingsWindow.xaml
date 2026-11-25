@@ -207,6 +207,20 @@
         </DockPanel>
         <TextBlock x:Name="HotkeyStatus" Style="{StaticResource HintText}" Text="{loc:Tr Settings_HotkeyHelp}" />
 
+        <!-- Startup and updates -->
+        <TextBlock Style="{StaticResource GroupTitle}" Text="{loc:Tr Settings_GroupUpdates}" />
+        <CheckBox x:Name="RunAtStartupBox" Content="{loc:Tr Settings_RunAtStartup}" />
+        <CheckBox x:Name="AutoCheckUpdatesBox" Content="{loc:Tr Settings_AutoCheckUpdates}" />
+        <DockPanel Margin="0,6,0,0">
+          <Button x:Name="CheckUpdatesButton" DockPanel.Dock="Right" Style="{StaticResource SecondaryButton}" Content="{loc:Tr Settings_CheckUpdates}" Padding="10,3" Margin="6,0,0,0" Click="OnCheckUpdates" />
+          <TextBlock VerticalAlignment="Center" Foreground="{DynamicResource Ui.Text}">
+            <Run Text="{loc:Tr Settings_Version}" /><Run x:Name="VersionRun" />
+          </TextBlock>
+        </DockPanel>
+        <TextBlock x:Name="UpdateResultText" Style="{StaticResource HintText}" Margin="0,4,0,0" Visibility="Collapsed" />
+        <TextBlock x:Name="UpdatesPortableText" Style="{StaticResource HintText}" Text="{loc:Tr Settings_UpdatesPortable}" Visibility="Collapsed" />
+        <TextBlock x:Name="UpdatesHelpText" Style="{StaticResource HintText}" Text="{loc:Tr Settings_UpdatesHelp}" />
+
         <!-- Advanced -->
         <TextBlock Style="{StaticResource GroupTitle}" Text="{loc:Tr Settings_GroupAdvanced}" />
         <DockPanel>

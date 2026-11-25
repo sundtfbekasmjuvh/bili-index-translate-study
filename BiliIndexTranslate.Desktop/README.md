@@ -17,11 +17,14 @@ Built fresh in C# / .NET 10 (WPF for the card, UI Automation for reading selecti
 
 ## Run
 
-Requirements: Windows 10 1809+ / Windows 11, [.NET 10 Desktop Runtime](https://dotnet.microsoft.com/download/dotnet/10.0)
-(x64). To build from source you need the .NET 10 SDK.
+Requirements: Windows 10 1809+ / Windows 11 (x64). The installer and the self-contained zip bring their own
+runtime; the framework-dependent zip needs the [.NET 10 Desktop Runtime](https://dotnet.microsoft.com/download/dotnet/10.0).
+To build from source you need the .NET 10 SDK.
 
 | What | How |
 |---|---|
+| **Installed version** (recommended) | Run `BiliIndexTranslate.Desktop-win-Setup.exe` from the [Releases](https://github.com/sundtfbekasmjuvh/bili-index-translate-study/releases) page. It installs for the current user only (no administrator rights) into `%LocalAppData%\BiliIndexTranslate.Desktop`, adds Start menu and desktop shortcuts, starts the app, and updates itself (see [Upgrading](#upgrading)). Uninstall it in Windows Settings → Apps. |
+| Portable version (no installer) | Unzip `BiliIndexTranslate-Desktop-win-x64-selfcontained-vX.Y.Z.zip` (or the lighter framework-dependent `BiliIndexTranslate-Desktop-win-x64-vX.Y.Z.zip`) and run `BiliIndexTranslate.exe`. It never checks for or downloads updates. |
 | Prebuilt (framework-dependent) | `publish\BiliIndexTranslate.exe` |
 | Build and run from source | `tools\run.cmd` (add `--welcome` to force the welcome window) |
 | Build a release folder | `tools\build.cmd` → `publish\` (runs the tests first) |
@@ -34,7 +37,8 @@ background save reports it once through a tray notice; [docs/TESTING.md](docs/TE
 one cause (a checkout under a directory with a Low integrity label).
 
 The app lives in the notification area. Right-click the icon for: automatic translation on/off,
-"Don't translate in *app*", translate clipboard text, Settings, Diagnostics, Welcome, Exit.
+"Don't translate in *app*", translate clipboard text, Settings, Diagnostics, Welcome, Exit (and, while a
+downloaded update is waiting, Restart and update).
 A second instance does not start twice; it opens the Settings window of the running one.
 
 ## Using it
@@ -74,8 +78,19 @@ translates the copied text. Automatic mode never touches the clipboard.
 * **Applications** – per-process exclusions (also reachable from the tray menu).
 * **Fallback shortcut** – enable/disable, change the key. Registration conflicts are reported in
   the tray and in Settings; automatic mode is unaffected.
+* **Startup and updates** – "Start with Windows" (off by default; see below), "Check for updates
+  automatically" (on by default, installed version only), the current version and a **Check for
+  updates** button that reports the result in the window. In the portable version the update
+  controls are disabled with a note.
 * **Advanced** – settle delay (120–800 ms), UI Automation selection events on/off, diagnostics file
   logging.
+
+**Start with Windows.** Ticking the box writes the value `BiliIndexTranslate` (the quoted path of the
+running exe) under `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`; clearing it deletes the value.
+The state is read from the registry each time Settings opens and is not kept in `settings.json`. A
+value that points to another exe (a portable copy, say) shows as not ticked; ticking it rewrites the
+value with this exe's path. The installed exe lives in `...\BiliIndexTranslate.Desktop\current\`, a
+path that does not change when the app updates. Uninstalling removes the value.
 
 **DeepLX format.** The endpoint is the complete translate URL and is used as entered, for example
 `https://host/translate?token={apiKey}` or `http://localhost:1188/translate`. `{apiKey}` is replaced
@@ -104,8 +119,15 @@ Settings file: `%LocalAppData%\BiliIndexTranslate\settings.json`. Malformed file
 ## Privacy
 
 Only the selected text and request metadata (model, target language) are sent to the configured
-endpoint. No telemetry, no history, no persisted cache; diagnostics never contain selected text,
-translations, or keys (only lengths and a short fingerprint).
+translation endpoint. No telemetry, no history, no persisted cache; diagnostics never contain selected
+text, translations, or keys (only lengths and a short fingerprint).
+
+The installed version also contacts GitHub on its own: by default it regularly asks GitHub
+(`api.github.com`, and the download address of the Releases assets) whether a newer version exists and
+downloads it. Those requests carry no personal information and no usage data (no selected text, no
+settings, no identifiers; no access token is used). You can turn this off in Settings → "Check for
+updates automatically", and "Check for updates" then only runs when you press it. The portable
+(zip) version never sends such requests.
 
 ## Project layout
 
@@ -121,5 +143,23 @@ docs/TESTING.md               18 validation scenarios, app compatibility table, 
 
 ## Upgrading
 
-Replace the `publish` folder (or rebuild). Settings and the encrypted key are kept; the schema is
-versioned and unknown fields are ignored. Nothing else is written to disk unless file logging is on.
+**Installed version.** It updates itself: about a minute after start and then every 24 hours the app
+checks the published GitHub releases of this repository, downloads a newer version in the background
+(only the changed parts when a delta package exists), and tells you once in the tray. The tray menu
+then offers **Restart and update**; if you simply exit the app from the tray, the update is installed
+right after it closes, and the next start runs the new version. The **Check for updates** button in
+Settings does the same on demand. The app is installed in `%LocalAppData%\BiliIndexTranslate.Desktop`,
+apart from the settings and logs in `%LocalAppData%\BiliIndexTranslate`, so updating and uninstalling
+leave your settings alone. To update by hand, run the newer `Setup.exe` over the old install.
+
+**Portable version.** Replace the exe (or the `publish` folder when you rebuild). It does not
+check for updates; download new versions from the Releases page.
+
+In both cases settings and the encrypted key are kept; the schema is versioned and unknown fields
+are ignored. Apart from the update packages of the installed version, nothing else is written to disk
+unless file logging is on.
+
+**Publishing (maintainers).** The release workflow builds the zips, `SHA256SUMS.txt` and the Velopack
+files (`*-Setup.exe`, `*-full.nupkg`, a `*-delta.nupkg` when there is an earlier Velopack release,
+`releases.win.json`) into one **draft** release. Installed apps read only *published* releases, so an
+update reaches users only after the draft has been reviewed and published.

@@ -98,6 +98,13 @@ public sealed class AppSettings
     public bool DiagnosticsFileLogging { get; set; }
     public bool OnboardingCompleted { get; set; }
 
+    /// <summary>
+    /// Installed (Velopack) builds look for a new version about a minute after start and then every 24 hours.
+    /// A settings file written before this option existed has no such field and keeps this default, so no
+    /// schema migration is needed. Running at Windows start-up is not stored here: the registry is the source of truth.
+    /// </summary>
+    public bool AutoCheckForUpdates { get; set; } = true;
+
     public AppSettings Clone()
     {
         var c = (AppSettings)MemberwiseClone();

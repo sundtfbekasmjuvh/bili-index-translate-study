@@ -128,3 +128,24 @@ jobs:
 
       - name: Package release assets (dry run)
         run: ../.github/scripts/package-release.ps1 -OutDir "$env:RUNNER_TEMP/dist"
+
+      # Builds the installer and the update packages exactly as the release workflow does, without uploading anything.
+      - name: Velopack pack (dry run)
+        run: |
+          $version = (Select-Xml -LiteralPath Directory.Build.props -XPath "//Version").Node.InnerText
+          if ($version -notmatch '^\d+\.\d+\.\d+$') { throw "Directory.Build.props Version '$version' is not MAJOR.MINOR.PATCH" }
+          $publish = Join-Path $env:RUNNER_TEMP "velopack-publish"
+          $out = Join-Path $env:RUNNER_TEMP "velopack-out"
+
+          dotnet tool install -g vpk --version 1.2.161
+          if ($LASTEXITCODE -ne 0) { throw "dotnet tool install vpk failed with exit code $LASTEXITCODE" }
+
+          dotnet publish src/BiliIndexTranslate.App/BiliIndexTranslate.App.csproj -c Release -r win-x64 --self-contained true -o $publish
+          if ($LASTEXITCODE -ne 0) { throw "dotnet publish failed with exit code $LASTEXITCODE" }
+
+          vpk pack --packId BiliIndexTranslate.Desktop --packVersion $version --packDir $publish --mainExe BiliIndexTranslate.exe --packTitle "Bili Index Translate" --icon src/BiliIndexTranslate.App/Assets/app.ico --noPortable --outputDir $out
+          if ($LASTEXITCODE -ne 0) { throw "vpk pack failed with exit code $LASTEXITCODE" }
+
+          if (-not (Test-Path (Join-Path $out "*-Setup.exe"))) { throw "vpk produced no Setup.exe in $out" }
+          if (-not (Test-Path (Join-Path $out "BiliIndexTranslate.Desktop-$version-full.nupkg"))) { throw "vpk produced no full package for $version in $out" }
+          Get-ChildItem -LiteralPath $out -File | ForEach-Object { "{0}  {1:N0} bytes" -f $_.Name, $_.Length }
