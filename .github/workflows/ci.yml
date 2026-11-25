@@ -84,7 +84,7 @@ jobs:
           retention-days: 7
 
   desktop:
-    name: Desktop (.NET 8, Windows)
+    name: Desktop (.NET 10, Windows)
     runs-on: windows-latest
     timeout-minutes: 20
     env:
@@ -100,7 +100,7 @@ jobs:
 
       - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
         with:
-          dotnet-version: 8.0.x
+          dotnet-version: 10.0.x
 
       - name: Restore
         run: dotnet restore BiliIndexTranslate.sln

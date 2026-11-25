@@ -4,7 +4,7 @@ A quiet reading companion for Windows. Select text in another program; a small c
 Chinese translation appears above the selection and goes away when you clear the selection, click
 elsewhere, or press Esc. No visible window otherwise, no shortcut needed for normal use.
 
-Built fresh in C# / .NET 8 (WPF for the card, UI Automation for reading selections).
+Built fresh in C# / .NET 10 (WPF for the card, UI Automation for reading selections).
 
 > **Status.** The code compiles cleanly on Windows (0 warnings) and the platform-independent core —
 > state machine, placement math, translation client, vision and study-card parsers, cache, settings —
@@ -17,8 +17,8 @@ Built fresh in C# / .NET 8 (WPF for the card, UI Automation for reading selectio
 
 ## Run
 
-Requirements: Windows 10 1809+ / Windows 11, [.NET 8 Desktop Runtime](https://dotnet.microsoft.com/download/dotnet/8.0)
-(x64). To build from source you need the .NET 8 SDK.
+Requirements: Windows 10 1809+ / Windows 11, [.NET 10 Desktop Runtime](https://dotnet.microsoft.com/download/dotnet/10.0)
+(x64). To build from source you need the .NET 10 SDK.
 
 | What | How |
 |---|---|
@@ -110,8 +110,8 @@ translations, or keys (only lengths and a short fingerprint).
 
 ```
 src/BiliIndexTranslate.Core   platform-independent: session state machine, geometry/placement,
-                              translation client, cache, settings, diagnostics (net8.0)
-src/BiliIndexTranslate.App    WPF app: UIA observer, input hooks, popup, tray, settings UI (net8.0-windows)
+                              translation client, cache, settings, diagnostics (net10.0)
+src/BiliIndexTranslate.App    WPF app: UIA observer, input hooks, popup, tray, settings UI (net10.0-windows)
 tests/…Core.Tests             xunit tests for Core (run on any OS)
 tools/                        run.cmd, build.cmd, build-selfcontained.cmd, test.cmd, make-icon.py
 docs/ARCHITECTURE.md          boundaries, threads, state model, race handling

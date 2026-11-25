@@ -4,7 +4,7 @@
 
 基于 Bilibili OpenAI 兼容多模态与文本翻译接口（`Index-Translate-35B-A3B` / `9B` / `2B`）构建的**双平台极简翻译与按需语言学习私教**：
 - **网页端（Chrome / Edge MV3）**：无需本地 Python 代理、无需第三方 OCR 或中转，通过 MV3 `declarativeNetRequest` 原生直连 B 站接口；同时支持 **划词流式翻译**、**`Alt+S` 零 OCR 框选图片/漫画/视频字幕帧直译 + 生词卡闭环**、**图片右键一键直译**、**`Alt+A` 视口流式双语对照全页**、**官方 `instTrans` 动态术语表/免译锁定** 与 **按 `S` 并排展开零留痕词典级学习卡片**。
-- **Windows 桌面端（.NET 8 WPF + UIA + Per-Monitor DPI 识图框选）**：跨任意桌面应用的非抢焦点全局划词气泡 + **`Alt+Shift+S` 全屏跨显示器框选识图直译（支持游戏 HUD、扫描版 PDF、视频硬字幕与剪贴板截图）** + `instTrans` 自定义术语表 + 伴随语言学习卡片。
+- **Windows 桌面端（.NET 10 WPF + UIA + Per-Monitor DPI 识图框选）**：跨任意桌面应用的非抢焦点全局划词气泡 + **`Alt+Shift+S` 全屏跨显示器框选识图直译（支持游戏 HUD、扫描版 PDF、视频硬字幕与剪贴板截图）** + `instTrans` 自定义术语表 + 伴随语言学习卡片。
 
 > **开箱即用下载**：可直接前往右侧 [**Releases**](https://github.com/sundtfbekasmjuvh/bili-index-translate-study/releases) 下载打包好的 Chrome/Edge 扩展 ZIP 与 Windows 桌面版可执行程序。
 
@@ -15,7 +15,7 @@
 | 目录 | 说明 | 状态 |
 |---|---|---|
 | [`bili-index-translate/`](bili-index-translate/) | **Chrome / Edge / Brave / Arc 浏览器扩展（Manifest V3）**：MV3 原生直连 + `Alt+S` 零 OCR 识图框选/右键图片直译 + `Alt+A` 视口流式双语对照 + `instTrans` 动态术语表 + 划词与伴随语言学习卡片 | 可直接加载未打包扩展或下载 Release ZIP |
-| [`BiliIndexTranslate.Desktop/`](BiliIndexTranslate.Desktop/) | **Windows 桌面全局划词与屏幕识图端（C# / .NET 8, WPF + UI Automation）**：跨应用非抢焦点浮窗翻译 + `Alt+Shift+S` 跨屏冻结框选识图直译/剪贴板截图直译 + `instTrans` 术语表 + 伴随学习卡片 | `0 warnings` 编译通过，`263/263` xUnit 核心单测通过（见 [`BiliIndexTranslate.Desktop/README.md`](BiliIndexTranslate.Desktop/README.md)） |
+| [`BiliIndexTranslate.Desktop/`](BiliIndexTranslate.Desktop/) | **Windows 桌面全局划词与屏幕识图端（C# / .NET 10, WPF + UI Automation）**：跨应用非抢焦点浮窗翻译 + `Alt+Shift+S` 跨屏冻结框选识图直译/剪贴板截图直译 + `instTrans` 术语表 + 伴随学习卡片 | `0 warnings` 编译通过，`263/263` xUnit 核心单测通过（见 [`BiliIndexTranslate.Desktop/README.md`](BiliIndexTranslate.Desktop/README.md)） |
 | [`bili-study-sandbox/`](bili-study-sandbox/) | **零依赖本地浏览器预览沙盒（Node.js 标准库）**：无需重载扩展即可在本地 `http://localhost:3001` 实时体验划词、学习卡片、`Alt+S` 画布框选识图、术语表与 `Alt+A` 双语对照 | 运行 `node bili-study-sandbox/server.js` 即可启动，默认只监听 `127.0.0.1` |
 
 ---
@@ -65,7 +65,7 @@
 ## 快速安装指南
 
 1. **Chrome / Edge 浏览器扩展**：下载 Release 中的 `bili-index-translate-chrome-v1.5.0.zip` 解压 → 打开 `chrome://extensions` 开启右上角**开发者模式** → **加载已解压的扩展程序** 选择 `bili-index-translate/` 目录。
-2. **Windows 桌面端（.NET 8 WPF）**：下载 Release 中的 `BiliIndexTranslate-Desktop-win-x64-selfcontained-v1.5.0.zip`（自带运行时单文件免安装版）或 `BiliIndexTranslate-Desktop-win-x64-v1.5.0.zip`（轻量版），解压运行 `BiliIndexTranslate.exe`。
+2. **Windows 桌面端（.NET 10 WPF）**：下载 Release 中的 `BiliIndexTranslate-Desktop-win-x64-selfcontained-v1.5.0.zip`（自带运行时单文件免安装版）或 `BiliIndexTranslate-Desktop-win-x64-v1.5.0.zip`（轻量版），解压运行 `BiliIndexTranslate.exe`。
 3. **本地预览沙盒**：运行 `node bili-study-sandbox/server.js` 并访问 `http://localhost:3001`。
    沙盒默认只监听本机 `127.0.0.1`，并且只应答用本机名字（`localhost`、`127.0.0.1`）寻址、由沙盒页面自己发出的请求；确需局域网访问时设置环境变量 `HOST=0.0.0.0`（此时不做这项检查；注意局域网里任何人都能通过它使用服务器上配置的 key，启动时会打印警告），端口用 `PORT` 修改。
 
