@@ -185,6 +185,36 @@ Not exercised on Windows yet:
 - The real Index-Translate endpoint answers a streamed request with `text/event-stream`. Check this direct, through the relay, and with the HTTP 412 hint.
 - A cache hit shows the final translation at once, without a streaming caption.
 
+## UI tests (FlaUI)
+
+`tests/BiliIndexTranslate.App.UiTests` (xunit, FlaUI.UIA3) drives the real app on a real desktop. It runs in
+CI on `windows-latest` after the unit tests and cannot run on Linux (the solution only compiles there).
+
+What each test does: it starts an in-process mock service (`HttpListener` on `http://localhost:<free port>/`),
+the target window `tests/BiliIndexTranslate.UiTestTarget` (a read-only multi-line `TextBox`, AutomationId
+`SourceText`) and the app with `--data-dir <temp dir>`. The temp dir holds a `settings.json` written with
+`SettingsStore` (mock `BaseUrl`, OpenAI format, model `Index-Translate-9B`, auto-translate on, onboarding done,
+English UI, both hotkeys off, diagnostics log on). `--data-dir` also gives that instance its own single-instance
+mutex, so a running copy of the app on the same machine does not interfere.
+
+| # | Test | Checks |
+|---|---|---|
+| 1 | `Select_shows_streamed_card_and_escape_closes_it` | Ctrl+A in the target → card (`TranslationText`) ends with the three streamed segments joined; the one request had `stream: true` and `model: Index-Translate-9B`; Esc hides the card |
+| 2 | `Card_fills_in_while_streaming` | at least one state with only part of the text, and the caption (`Caption`) shows "streaming" |
+| 3 | `Same_selection_again_is_served_from_the_cache` | after Esc, a click and a new Ctrl+A, the card shows the complete text from its first frame and the mock sees no second request |
+| 4 | `Http_412_shows_an_error_card` | mock answers 412 → error card whose text contains `412` |
+
+The card's translation text is read from the element's UIA `HelpText` (set in `PopupWindow.ShowTranslation`),
+because its `Name` is the fixed label "Translation". Error title/message and the caption are read from their `Name`.
+
+Run on a local Windows machine: `tools\test-ui.cmd` (builds the solution, then runs the tests). Do not touch the
+mouse or keyboard while they run; the machine must be unlocked. The executables are found under
+`src\BiliIndexTranslate.App\bin\Release\net10.0-windows*\` and
+`tests\BiliIndexTranslate.UiTestTarget\bin\Release\net10.0-windows*\`; set `BIT_APP_EXE` / `BIT_TARGET_EXE`
+to use other builds. On failure a full-screen screenshot plus the app's `diagnostics.log`, `crash.log` and
+`settings.json` are saved to `TestResults\ui-screenshots\` (CI uploads that folder and the trx file). The temp
+data dir and both processes are removed after every test.
+
 ## Scenarios
 
 Status key: ✅ verified on Windows · ◐ partial · ❌ failed · ⬜ not tested yet.

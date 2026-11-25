@@ -124,6 +124,9 @@ public partial class PopupWindow : Window, IPopupSurface
         CurrentTranslation = partial ? null : translation;
         _layout = ReadingLayoutClassifier.Classify(hasSource ? snapshot.Text : translation, translation);
         TranslationText.Text = translation;
+        // The element's UIA Name is the fixed label "Translation", so the text itself is not readable by
+        // UI Automation clients (the UI tests); expose it as help text.
+        System.Windows.Automation.AutomationProperties.SetHelpText(TranslationText, translation);
         OriginalText.Text = hasSource ? snapshot.Text.Trim() : string.Empty;
         LoadingPanel.Visibility = Visibility.Collapsed;
         ErrorPanel.Visibility = Visibility.Collapsed;

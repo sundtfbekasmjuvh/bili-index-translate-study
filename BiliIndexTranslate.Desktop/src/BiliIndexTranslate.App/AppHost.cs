@@ -219,7 +219,7 @@ internal sealed class AppHost : IDisposable
 
         try
         {
-            _activateEvent = new EventWaitHandle(false, EventResetMode.AutoReset, Program.ActivateEventName);
+            _activateEvent = new EventWaitHandle(false, EventResetMode.AutoReset, Program.ActivateName);
             _activateWait = ThreadPool.RegisterWaitForSingleObject(_activateEvent, (_, _) => Post(() => { _log.Info("app", "second instance signalled; opening settings"); OpenSettings(); }), null, -1, false);
         }
         catch (Exception ex) { _log.Warn("app", $"activation event unavailable: {ex.GetType().Name}"); }

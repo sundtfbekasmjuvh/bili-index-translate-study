@@ -111,5 +111,20 @@ jobs:
       - name: Test
         run: dotnet test tests/BiliIndexTranslate.Core.Tests/BiliIndexTranslate.Core.Tests.csproj -c Release --no-build --logger "console;verbosity=normal"
 
+      - name: UI tests
+        timeout-minutes: 8
+        run: dotnet test tests/BiliIndexTranslate.App.UiTests/BiliIndexTranslate.App.UiTests.csproj -c Release --no-build --logger "trx;LogFileName=ui-tests.trx" --logger "console;verbosity=normal" --results-directory TestResults
+
+      - name: Upload UI test evidence
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ui-test-results
+          path: |
+            BiliIndexTranslate.Desktop/TestResults/ui-screenshots/
+            BiliIndexTranslate.Desktop/TestResults/*.trx
+          if-no-files-found: warn
+          retention-days: 7
+
       - name: Package release assets (dry run)
         run: ../.github/scripts/package-release.ps1 -OutDir "$env:RUNNER_TEMP/dist"

@@ -26,7 +26,8 @@ Requirements: Windows 10 1809+ / Windows 11, [.NET 10 Desktop Runtime](https://d
 | Build and run from source | `tools\run.cmd` (add `--welcome` to force the welcome window) |
 | Build a release folder | `tools\build.cmd` → `publish\` (runs the tests first) |
 | Self-contained single exe (no runtime install) | `tools\build-selfcontained.cmd` → `publish-sc\` (~139 MB) |
-| Unit tests | `tools\test.cmd` or `dotnet test` |
+| Unit tests | `tools\test.cmd` or `dotnet test tests\BiliIndexTranslate.Core.Tests` (a bare `dotnet test` on the solution would also start the UI tests) |
+| UI tests (select → streamed card → Esc; needs a Windows desktop) | `tools\test-ui.cmd`, see [docs/TESTING.md](docs/TESTING.md#ui-tests-flaui) |
 
 If the settings file cannot be written, the Settings window says so and stays open, and a
 background save reports it once through a tray notice; [docs/TESTING.md](docs/TESTING.md) describes
