@@ -93,7 +93,7 @@ jobs:
       - name: Velopack pack
         run: |
           $version = $env:TAG.Substring(1)
-          vpk pack --packId BiliIndexTranslate.Desktop --packVersion $version --packDir "$env:RUNNER_TEMP/velopack-publish" --mainExe BiliIndexTranslate.exe --packTitle "Bili Index Translate" --icon BiliIndexTranslate.Desktop/src/BiliIndexTranslate.App/Assets/app.ico --noPortable --outputDir "$env:RUNNER_TEMP/velopack-out"
+          vpk pack --packId BiliIndexTranslate.Desktop --packVersion $version --packDir "$env:RUNNER_TEMP/velopack-publish" --mainExe BiliIndexTranslate.exe --packTitle "Bili Index Translate" --icon BiliIndexTranslate.Desktop/src/BiliIndexTranslate.App/Assets/app.ico --runtime win-x64 --channel win --noPortable --outputDir "$env:RUNNER_TEMP/velopack-out"
           if ($LASTEXITCODE -ne 0) { throw "vpk pack failed with exit code $LASTEXITCODE" }
 
       # The release stays a draft so its notes can be reviewed before it is published.
