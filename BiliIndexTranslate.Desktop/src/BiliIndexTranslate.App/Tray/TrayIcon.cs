@@ -14,6 +14,8 @@ internal sealed class TrayIcon : IDisposable
     private readonly ContextMenuStrip _menu;
     private readonly ToolStripMenuItem _autoItem;
     private readonly ToolStripMenuItem _appItem;
+    private readonly ToolStripMenuItem _updateItem;
+    private readonly ToolStripSeparator _updateSeparator;
     private readonly Icon _normal;
     private readonly Icon _paused;
     private Func<string?>? _currentAppProvider;
@@ -31,6 +33,8 @@ internal sealed class TrayIcon : IDisposable
 
         var snip = new ToolStripMenuItem(Loc.T("Tray_Snip"));
         snip.Click += (_, _) => SnipRegionRequested?.Invoke();
+        var ocrCopy = new ToolStripMenuItem(Loc.T("Tray_OcrCopy"));
+        ocrCopy.Click += (_, _) => OcrCopyRequested?.Invoke();
         var clipboard = new ToolStripMenuItem(Loc.T("Tray_Clipboard"));
         clipboard.Click += (_, _) => TranslateClipboardRequested?.Invoke();
         var settings = new ToolStripMenuItem(Loc.T("Tray_Settings"));
@@ -42,10 +46,16 @@ internal sealed class TrayIcon : IDisposable
         var exit = new ToolStripMenuItem(Loc.T("Tray_Exit"));
         exit.Click += (_, _) => ExitRequested?.Invoke();
 
+        // Shown only while a downloaded update waits to be installed.
+        _updateItem = new ToolStripMenuItem(Loc.T("Tray_RestartUpdate")) { Visible = false };
+        _updateItem.Click += (_, _) => RestartUpdateRequested?.Invoke();
+        _updateSeparator = new ToolStripSeparator { Visible = false };
+
         _menu.Items.AddRange(new ToolStripItem[]
         {
+            _updateItem, _updateSeparator,
             _autoItem, _appItem, new ToolStripSeparator(),
-            snip, clipboard, new ToolStripSeparator(),
+            snip, ocrCopy, clipboard, new ToolStripSeparator(),
             settings, diagnostics, welcome, new ToolStripSeparator(),
             exit,
         });
@@ -66,11 +76,13 @@ internal sealed class TrayIcon : IDisposable
             if (e.PropertyName != nameof(Loc.Language)) return;
             _autoItem.Text = Loc.T("Tray_Auto");
             snip.Text = Loc.T("Tray_Snip");
+            ocrCopy.Text = Loc.T("Tray_OcrCopy");
             clipboard.Text = Loc.T("Tray_Clipboard");
             settings.Text = Loc.T("Tray_Settings");
             diagnostics.Text = Loc.T("Tray_Diagnostics");
             welcome.Text = Loc.T("Tray_Welcome");
             exit.Text = Loc.T("Tray_Exit");
+            _updateItem.Text = Loc.T("Tray_RestartUpdate");
             _icon.Text = _autoItem.Checked ? "Bili Index Translate" : Loc.T("Tray_Paused");
             RefreshAppItem();
         };
@@ -79,11 +91,20 @@ internal sealed class TrayIcon : IDisposable
     public event Action<bool>? AutoTranslateToggled;
     public event Action<string, bool>? ExcludeAppToggled;
     public event Action? SnipRegionRequested;
+    public event Action? OcrCopyRequested;
     public event Action? TranslateClipboardRequested;
     public event Action? SettingsRequested;
     public event Action? DiagnosticsRequested;
     public event Action? WelcomeRequested;
     public event Action? ExitRequested;
+    public event Action? RestartUpdateRequested;
+
+    /// <summary>Shows or hides the "Restart and update" item (a downloaded update is waiting).</summary>
+    public void SetUpdateReady(bool ready)
+    {
+        _updateItem.Visible = ready;
+        _updateSeparator.Visible = ready;
+    }
 
     /// <summary>Supplies the name of the application the user is most likely referring to (last probed / foreground).</summary>
     public void SetCurrentAppProvider(Func<string?> provider) => _currentAppProvider = provider;

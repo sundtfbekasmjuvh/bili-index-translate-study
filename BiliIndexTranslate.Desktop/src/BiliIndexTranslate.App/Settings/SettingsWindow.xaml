@@ -164,6 +164,19 @@
           <ComboBox x:Name="VisionModelBox" Grid.Column="1" IsEditable="True" HorizontalAlignment="Left" MinWidth="220" />
         </Grid>
         <TextBlock Style="{StaticResource HintText}" Text="{loc:Tr Settings_VisionHelp}" />
+        <Grid Margin="0,6,0,0">
+          <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="120" />
+            <ColumnDefinition Width="*" />
+          </Grid.ColumnDefinitions>
+          <TextBlock Style="{StaticResource FieldLabel}" Text="{loc:Tr Settings_VisionMode}" />
+          <ComboBox x:Name="VisionModeBox" Grid.Column="1" HorizontalAlignment="Left" MinWidth="220">
+            <ComboBoxItem Content="{loc:Tr Settings_VisionModeAuto}" />
+            <ComboBoxItem Content="{loc:Tr Settings_VisionModeLocal}" />
+            <ComboBoxItem Content="{loc:Tr Settings_VisionModeCloud}" />
+          </ComboBox>
+        </Grid>
+        <TextBlock Style="{StaticResource HintText}" Text="{loc:Tr Settings_VisionModeHelp}" />
         <CheckBox x:Name="RelayBox" Content="{loc:Tr Settings_UseRelay}" Margin="0,8,0,2" Checked="OnRelayToggled" Unchecked="OnRelayToggled" />
         <TextBox x:Name="RelayBox2" Margin="0,2,0,0" />
         <TextBlock Style="{StaticResource HintText}" Text="{loc:Tr Settings_RelayHelp}" />
@@ -206,6 +219,20 @@
           <TextBox x:Name="HotkeyBox" Width="140" HorizontalAlignment="Left" />
         </DockPanel>
         <TextBlock x:Name="HotkeyStatus" Style="{StaticResource HintText}" Text="{loc:Tr Settings_HotkeyHelp}" />
+
+        <!-- Startup and updates -->
+        <TextBlock Style="{StaticResource GroupTitle}" Text="{loc:Tr Settings_GroupUpdates}" />
+        <CheckBox x:Name="RunAtStartupBox" Content="{loc:Tr Settings_RunAtStartup}" />
+        <CheckBox x:Name="AutoCheckUpdatesBox" Content="{loc:Tr Settings_AutoCheckUpdates}" />
+        <DockPanel Margin="0,6,0,0">
+          <Button x:Name="CheckUpdatesButton" DockPanel.Dock="Right" Style="{StaticResource SecondaryButton}" Content="{loc:Tr Settings_CheckUpdates}" Padding="10,3" Margin="6,0,0,0" Click="OnCheckUpdates" />
+          <TextBlock VerticalAlignment="Center" Foreground="{DynamicResource Ui.Text}">
+            <Run Text="{loc:Tr Settings_Version}" /><Run x:Name="VersionRun" />
+          </TextBlock>
+        </DockPanel>
+        <TextBlock x:Name="UpdateResultText" Style="{StaticResource HintText}" Margin="0,4,0,0" Visibility="Collapsed" />
+        <TextBlock x:Name="UpdatesPortableText" Style="{StaticResource HintText}" Text="{loc:Tr Settings_UpdatesPortable}" Visibility="Collapsed" />
+        <TextBlock x:Name="UpdatesHelpText" Style="{StaticResource HintText}" Text="{loc:Tr Settings_UpdatesHelp}" />
 
         <!-- Advanced -->
         <TextBlock Style="{StaticResource GroupTitle}" Text="{loc:Tr Settings_GroupAdvanced}" />

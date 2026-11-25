@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Net.Http;
 using System.Net.Sockets;
+using System.Text;
 
 namespace BiliIndexTranslate.Core.Translation;
 
@@ -21,7 +22,11 @@ public sealed class OpenAiCompatibleTranslator
         _timeout = timeout ?? TimeSpan.FromSeconds(20);
     }
 
-    public async Task<TranslationResult> TranslateAsync(TranslationRequest request, CancellationToken ct)
+    /// <param name="onPartial">
+    /// Receives the text that may be shown so far while a reply streams in (chat format over a transport
+    /// that can stream only; otherwise never called). Runs on the thread reading the stream.
+    /// </param>
+    public async Task<TranslationResult> TranslateAsync(TranslationRequest request, CancellationToken ct, Action<string>? onPartial = null)
     {
         var format = request.Format;
         if (!EndpointResolver.TryResolve(format, request.BaseUrl, request.UseRelay, request.RelayPrefix, request.ApiKey, out var endpoint, out var cfgError))
@@ -47,6 +52,9 @@ public sealed class OpenAiCompatibleTranslator
 
         // Only the chat format has a prompt that can carry glossary constraints.
         var hitCount = format == ApiFormat.OpenAi ? GlossaryEngine.MatchHits(request.GlossaryText, request.Text).Count : 0;
+        var canStream = format == ApiFormat.OpenAi && onPartial is not null && _transport is ISseTranslationTransport;
+        var streamedContent = new StringBuilder();
+        var lastShown = string.Empty;
         var body = format switch
         {
             ApiFormat.Deeplx => DeeplxProtocol.BuildRequestJson(request.Text, request.SourceLanguage, request.TargetLanguageCode),
@@ -55,7 +63,7 @@ public sealed class OpenAiCompatibleTranslator
                 request.Text,
                 request.TargetLanguagePromptName,
                 request.SourceLanguage,
-                stream: false,
+                stream: canStream,
                 baseUrl: request.BaseUrl,
                 glossaryText: request.GlossaryText),
             _ => string.Empty,
@@ -66,9 +74,34 @@ public sealed class OpenAiCompatibleTranslator
         TransportResponse response;
         try
         {
-            response = customRequest is not null
-                ? await ((IRawTranslationTransport)_transport).SendAsync(customRequest.Method, customRequest.Url, customRequest.Headers, customRequest.Body, _timeout, ct).ConfigureAwait(false)
-                : await _transport.PostJsonAsync(endpoint.ChatCompletionsUrl, apiKey, body, _timeout, ct).ConfigureAwait(false);
+            if (customRequest is not null)
+            {
+                response = await ((IRawTranslationTransport)_transport).SendAsync(customRequest.Method, customRequest.Url, customRequest.Headers, customRequest.Body, _timeout, ct).ConfigureAwait(false);
+            }
+            else if (canStream && _transport is ISseTranslationTransport sse)
+            {
+                response = await sse.PostSseAsync(
+                    endpoint.ChatCompletionsUrl,
+                    apiKey,
+                    body,
+                    _timeout,
+                    dataJson =>
+                    {
+                        var delta = ChatCompletionParser.ReadStreamDelta(dataJson, out var streamError);
+                        if (streamError is not null) throw ChatCompletionParser.StreamFailure(streamError, route);
+                        if (delta.Length == 0) return;
+                        streamedContent.Append(delta);
+                        var visible = ChatCompletionParser.VisibleStreamingText(streamedContent.ToString());
+                        if (visible.Length == 0 || string.Equals(visible, lastShown, StringComparison.Ordinal)) return;
+                        lastShown = visible;
+                        onPartial!(visible);
+                    },
+                    ct).ConfigureAwait(false);
+            }
+            else
+            {
+                response = await _transport.PostJsonAsync(endpoint.ChatCompletionsUrl, apiKey, body, _timeout, ct).ConfigureAwait(false);
+            }
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -127,6 +160,10 @@ public sealed class OpenAiCompatibleTranslator
         {
             parsed = CustomApiProtocol.TryParseResult(custom!, response.Body, 1, out var translations, out parseError);
             translation = parsed ? translations[0] : string.Empty;
+        }
+        else if (canStream && string.Equals(response.ContentType, "text/event-stream", StringComparison.OrdinalIgnoreCase))
+        {
+            parsed = ChatCompletionParser.TryFinalize(streamedContent.ToString(), out translation, out parseError);
         }
         else
         {

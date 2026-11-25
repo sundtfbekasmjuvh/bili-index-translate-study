@@ -156,6 +156,15 @@ internal sealed class PopupPresenter : IDisposable
         _timings.Record(TimingCategory.Render, sw.Elapsed.TotalMilliseconds);
     }
 
+    /// <summary>Text that is still being generated. Not timed: render time is recorded for the final result only.</summary>
+    public void ShowPartialTranslation(SelectionSnapshot snapshot, string partial, string? caption)
+    {
+        if (snapshot.Anchor is null) return;
+        var w = Window;
+        w.ShowTranslation(snapshot, partial, caption, partial: true);
+        Present(snapshot.Anchor, firstShow: !_visible);
+    }
+
     public void ShowVisionTranslation(SelectionSnapshot snapshot, string translation, string? caption)
     {
         if (snapshot.Anchor is null) return;

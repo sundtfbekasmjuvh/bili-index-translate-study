@@ -106,17 +106,19 @@ public class SseTimeoutTests
         try
         {
             var port = ((IPEndPoint)listener.LocalEndpoint).Port;
-            // Five chunks 400 ms apart: 2 s in total, twice the timeout, but never idle for longer than it.
-            var server = ServeSlowlyAsync(listener, chunks: 5, gap: TimeSpan.FromMilliseconds(400), finish: true);
+            // Ten chunks 250 ms apart: 2.5 s in total, longer than the 1.5 s timeout, but never idle for
+            // longer than it. The gap leaves 1.25 s of slack, so a busy machine (the whole suite running in
+            // parallel right after a build) does not stretch one gap past the limit.
+            var server = ServeSlowlyAsync(listener, chunks: 10, gap: TimeSpan.FromMilliseconds(250), finish: true);
 
             using var transport = new HttpTranslationTransport();
             var lines = new List<string>();
             var response = await transport.PostSseAsync(
                 new Uri($"http://127.0.0.1:{port}/v1/chat/completions"), "bili", "{}",
-                TimeSpan.FromSeconds(1), lines.Add, CancellationToken.None);
+                TimeSpan.FromMilliseconds(1500), lines.Add, CancellationToken.None);
 
             Assert.Equal(200, response.StatusCode);
-            Assert.Equal(5, lines.Count);
+            Assert.Equal(10, lines.Count);
             await server;
         }
         finally

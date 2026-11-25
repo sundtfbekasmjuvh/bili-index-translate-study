@@ -1,7 +1,8 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
-    <TargetFramework>net8.0-windows</TargetFramework>
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <SupportedOSPlatformVersion>10.0.17763.0</SupportedOSPlatformVersion>
     <UseWPF>true</UseWPF>
     <UseWindowsForms>true</UseWindowsForms>
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
@@ -9,8 +10,10 @@
     <RootNamespace>BiliIndexTranslate.App</RootNamespace>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>Assets/app.ico</ApplicationIcon>
-    <!-- DPI awareness comes from app.manifest (PerMonitorV2); WinForms is only used for the tray icon. -->
-    <NoWarn>$(NoWarn);WFAC010</NoWarn>
+    <!-- DPI awareness comes from app.manifest (PerMonitorV2): WPF reads it from there, while the
+         ApplicationHighDpiMode property that WFO0003 asks for only configures WinForms, which is used
+         for the tray icon alone. (WFO0003 was WFAC010 before .NET 9.) -->
+    <NoWarn>$(NoWarn);WFO0003</NoWarn>
     <StartupObject>BiliIndexTranslate.App.Program</StartupObject>
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
     <InvariantGlobalization>false</InvariantGlobalization>
@@ -28,6 +31,8 @@
 
   <ItemGroup>
     <PackageReference Include="Interop.UIAutomationClient" Version="10.19041.0" />
+    <!-- Installer and auto-update. Pinned to the vpk version used in the workflows (1.3 is still a preview). -->
+    <PackageReference Include="Velopack" Version="1.2.161" />
   </ItemGroup>
 
   <ItemGroup>

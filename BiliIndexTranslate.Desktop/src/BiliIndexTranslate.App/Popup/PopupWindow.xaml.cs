@@ -115,24 +115,28 @@ public partial class PopupWindow : Window, IPopupSurface
         ApplyTypography();
     }
 
-    public void ShowTranslation(SelectionSnapshot snapshot, string translation, string? caption)
+    /// <param name="partial">The text is still being generated: copy and pin stay off and the study card is hidden until the final call.</param>
+    public void ShowTranslation(SelectionSnapshot snapshot, string translation, string? caption, bool partial = false)
     {
         StopLoadingPulse();
         var hasSource = !string.IsNullOrWhiteSpace(snapshot.Text);
         CurrentSource = hasSource ? snapshot.Text : null;
-        CurrentTranslation = translation;
+        CurrentTranslation = partial ? null : translation;
         _layout = ReadingLayoutClassifier.Classify(hasSource ? snapshot.Text : translation, translation);
         TranslationText.Text = translation;
+        // The element's UIA Name is the fixed label "Translation", so the text itself is not readable by
+        // UI Automation clients (the UI tests); expose it as help text.
+        System.Windows.Automation.AutomationProperties.SetHelpText(TranslationText, translation);
         OriginalText.Text = hasSource ? snapshot.Text.Trim() : string.Empty;
         LoadingPanel.Visibility = Visibility.Collapsed;
         ErrorPanel.Visibility = Visibility.Collapsed;
         BodyScroll.Visibility = Visibility.Visible;
-        BodyScroll.ScrollToTop();
+        if (!partial) BodyScroll.ScrollToTop();
         Footer.Visibility = Visibility.Visible;
-        StudyButton.Visibility = hasSource ? Visibility.Visible : Visibility.Collapsed;
+        StudyButton.Visibility = hasSource && !partial ? Visibility.Visible : Visibility.Collapsed;
         Caption.Text = caption ?? string.Empty;
-        CopyButton.IsEnabled = true;
-        PinButton.IsEnabled = !IsPinned;
+        CopyButton.IsEnabled = !partial;
+        PinButton.IsEnabled = !partial && !IsPinned;
         OriginalPanel.Visibility = (_showOriginal || snapshot.Origin == SelectionOrigin.ScreenSnip) && hasSource
             ? Visibility.Visible
             : Visibility.Collapsed;

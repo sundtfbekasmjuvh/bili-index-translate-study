@@ -4,9 +4,9 @@
 
 基于 Bilibili OpenAI 兼容多模态与文本翻译接口（`Index-Translate-35B-A3B` / `9B` / `2B`）构建的**双平台极简翻译与按需语言学习私教**：
 - **网页端（Chrome / Edge MV3）**：无需本地 Python 代理、无需第三方 OCR 或中转，通过 MV3 `declarativeNetRequest` 原生直连 B 站接口；同时支持 **划词流式翻译**、**`Alt+S` 零 OCR 框选图片/漫画/视频字幕帧直译 + 生词卡闭环**、**图片右键一键直译**、**`Alt+A` 视口流式双语对照全页**、**官方 `instTrans` 动态术语表/免译锁定** 与 **按 `S` 并排展开零留痕词典级学习卡片**。
-- **Windows 桌面端（.NET 8 WPF + UIA + Per-Monitor DPI 识图框选）**：跨任意桌面应用的非抢焦点全局划词气泡 + **`Alt+Shift+S` 全屏跨显示器框选识图直译（支持游戏 HUD、扫描版 PDF、视频硬字幕与剪贴板截图）** + `instTrans` 自定义术语表 + 伴随语言学习卡片。
+- **Windows 桌面端（.NET 10 WPF + UIA + Per-Monitor DPI 识图框选）**：跨任意桌面应用的非抢焦点全局划词气泡 + **`Alt+Shift+S` 全屏跨显示器框选识图直译（支持游戏 HUD、扫描版 PDF、视频硬字幕与剪贴板截图）** + `instTrans` 自定义术语表 + 伴随语言学习卡片；DeepLX 和自定义接口的框选识图改用 Windows 自带的离线 OCR 先识别文字再翻译（截图不上传），并新增托盘“识别屏幕文字并复制”。
 
-> **开箱即用下载**：可直接前往右侧 [**Releases**](https://github.com/sundtfbekasmjuvh/bili-index-translate-study/releases) 下载打包好的 Chrome/Edge 扩展 ZIP 与 Windows 桌面版可执行程序。
+> **开箱即用下载**：可直接前往右侧 [**Releases**](https://github.com/sundtfbekasmjuvh/bili-index-translate-study/releases) 下载打包好的 Chrome/Edge 扩展 ZIP 与 Windows 桌面版（安装程序 `Setup.exe` 或免安装 ZIP）。
 
 ---
 
@@ -15,7 +15,7 @@
 | 目录 | 说明 | 状态 |
 |---|---|---|
 | [`bili-index-translate/`](bili-index-translate/) | **Chrome / Edge / Brave / Arc 浏览器扩展（Manifest V3）**：MV3 原生直连 + `Alt+S` 零 OCR 识图框选/右键图片直译 + `Alt+A` 视口流式双语对照 + `instTrans` 动态术语表 + 划词与伴随语言学习卡片 | 可直接加载未打包扩展或下载 Release ZIP |
-| [`BiliIndexTranslate.Desktop/`](BiliIndexTranslate.Desktop/) | **Windows 桌面全局划词与屏幕识图端（C# / .NET 8, WPF + UI Automation）**：跨应用非抢焦点浮窗翻译 + `Alt+Shift+S` 跨屏冻结框选识图直译/剪贴板截图直译 + `instTrans` 术语表 + 伴随学习卡片 | `0 warnings` 编译通过，`263/263` xUnit 核心单测通过（见 [`BiliIndexTranslate.Desktop/README.md`](BiliIndexTranslate.Desktop/README.md)） |
+| [`BiliIndexTranslate.Desktop/`](BiliIndexTranslate.Desktop/) | **Windows 桌面全局划词与屏幕识图端（C# / .NET 10, WPF + UI Automation）**：跨应用非抢焦点浮窗翻译 + `Alt+Shift+S` 跨屏冻结框选识图直译/剪贴板截图直译 + `instTrans` 术语表 + 伴随学习卡片 | `0 warnings` 编译通过，`263/263` xUnit 核心单测通过（见 [`BiliIndexTranslate.Desktop/README.md`](BiliIndexTranslate.Desktop/README.md)） |
 | [`bili-study-sandbox/`](bili-study-sandbox/) | **零依赖本地浏览器预览沙盒（Node.js 标准库）**：无需重载扩展即可在本地 `http://localhost:3001` 实时体验划词、学习卡片、`Alt+S` 画布框选识图、术语表与 `Alt+A` 双语对照 | 运行 `node bili-study-sandbox/server.js` 即可启动，默认只监听 `127.0.0.1` |
 
 ---
@@ -65,7 +65,9 @@
 ## 快速安装指南
 
 1. **Chrome / Edge 浏览器扩展**：下载 Release 中的 `bili-index-translate-chrome-v1.5.0.zip` 解压 → 打开 `chrome://extensions` 开启右上角**开发者模式** → **加载已解压的扩展程序** 选择 `bili-index-translate/` 目录。
-2. **Windows 桌面端（.NET 8 WPF）**：下载 Release 中的 `BiliIndexTranslate-Desktop-win-x64-selfcontained-v1.5.0.zip`（自带运行时单文件免安装版）或 `BiliIndexTranslate-Desktop-win-x64-v1.5.0.zip`（轻量版），解压运行 `BiliIndexTranslate.exe`。
+2. **Windows 桌面端（.NET 10 WPF）**，两种方式任选其一：
+   - **安装程序（推荐）**：下载 Release 中的 `BiliIndexTranslate.Desktop-win-Setup.exe` 并运行。只为当前用户安装（不需要管理员权限），自带运行时，会创建开始菜单和桌面快捷方式，并且能自动更新（设置里可关闭自动检查，也可以随时点“检查更新”）。可在 Windows 设置的“应用”里卸载。安装版会定期访问 GitHub（`api.github.com` 和 Releases 的下载地址）检查并下载更新，请求里不带任何个人信息或使用数据。
+   - **免安装 ZIP**：下载 `BiliIndexTranslate-Desktop-win-x64-selfcontained-v1.5.0.zip`（自带运行时单文件版）或 `BiliIndexTranslate-Desktop-win-x64-v1.5.0.zip`（轻量版），解压运行 `BiliIndexTranslate.exe`。免安装版不会检查更新，请从 GitHub 下载新版本。
 3. **本地预览沙盒**：运行 `node bili-study-sandbox/server.js` 并访问 `http://localhost:3001`。
    沙盒默认只监听本机 `127.0.0.1`，并且只应答用本机名字（`localhost`、`127.0.0.1`）寻址、由沙盒页面自己发出的请求；确需局域网访问时设置环境变量 `HOST=0.0.0.0`（此时不做这项检查；注意局域网里任何人都能通过它使用服务器上配置的 key，启动时会打印警告），端口用 `PORT` 修改。
 
@@ -227,5 +229,5 @@
 - `tests/extension/` 覆盖术语表解析、提示词构造、识图双轨解析、段落锚点、学习卡 JSON 修复与流式解析，四条流式请求路径的分块、取消和 JSON 回退，并用模拟的 `fetch` 验证 412 时只发一次请求、不自动改走中继；`deeplx.test.js` 和 `custom.test.js` 覆盖 DeepLX 格式与自定义模板的请求构造、占位符转义、响应解析和各条功能路径；`settings.test.js` 覆盖 API key 从同步存储到本机存储的迁移；`image-fetch.test.js` 覆盖右键图片下载的 8 MB 上限和超时；`i18n.test.js` 检查两种界面语言的文案键、占位符和选项页标记一致，以及后台的菜单标题和错误文案跟随设置；`ports.test.js` 覆盖流式端口：进度消息的合并、`Alt+A` 只发有变化的段落、请求发出前失败也给出最终消息、端口断开时取消上游；`streaming.test.js` 还覆盖没有换行结尾的最后一行、流里的 `error` 事件，以及超时按空闲时间计（一直有数据的长回复不被切断，停滞的流报超时）；`direct-rule.test.js` 覆盖直连规则的内容和只在缺失或不同时写入；`retry.test.js` 覆盖遇到 429 和 5xx 时的自动重试（等待时间、`Retry-After`、取消、不该重试的情形）。单测在 Node 里没有浏览器语言，界面文案按英文断言。
 - `tests/e2e/` 在无头 Chromium 里加载未打包的扩展，后端换成 `tests/support/mock-upstream.js`（本地 OpenAI 兼容模拟服务，按提示词返回确定的译文、词卡和识图结果）。用例覆盖划词流式与取消、术语表注入、412 与显式中继、学习卡片快捷键、`Alt+A` 双语对照（视口优先、跳过中文和代码、滚动续翻、900 段的长页面上跳转后续翻、页面持续变动时仍会扫描、页面改写或重建已翻译段落后的重译与放回、仅译与模型切换、无损还原）、后台一端断开时面板报错、`Alt+S` 框选裁剪、右键图片（含超过 8 MB 时中断下载）、选项页（含旧版本 API key 的迁移）、上游先返回 429 再恢复时划词仍显示译文、DeepLX 接口格式（模拟服务的 `/translate` 端点）和自定义模板（模拟服务里一个形状自拟的 `/custom-api` 端点）。每个用例结束时检查没有请求离开 `127.0.0.1`。`network.spec.js` 让浏览器把官方域名解析到本机的模拟服务，检查直连规则只改扩展自己发往官方地址的请求：网页发往同一地址的请求、扩展发往其他地址的请求都保持原样。`sandbox.spec.js` 在不装扩展的浏览器里打开预览沙盒，检查它引用的扩展文件都能加载、内容脚本运行无报错（不触发翻译，沙盒的翻译请求会发往真实接口），以及沙盒拒绝用别的主机名寻址或由别的网站发起的请求。夹具把界面语言固定为简体中文（浏览器自身语言随机器而不同），`i18n.spec.js` 另在英文和「自动」下走一遍面板、学习卡片、双语对照条和选项页，并检查设置改变后已打开的页面随之切换。右键菜单和扩展快捷键无法在 Playwright 里直接点击，用例在 service worker 里派发与 Chrome 相同的事件。
 - 图标：扩展的 `icons/icon16|32|48|128.png` 和桌面端的 `app.ico` 由同一个脚本 `BiliIndexTranslate.Desktop/tools/make-icon.py` 画出（只用 Python 标准库），改图标后重新运行它；`tests/extension/manifest.test.js` 检查 manifest 引用的文件和图标尺寸。
-- GitHub Actions（`.github/workflows/ci.yml`）在推送到 `main`、所有 PR 和手动触发时运行以上检查（`npm run perf` 页面开销测量不在 CI 里）；端到端测试失败时上传 Playwright 报告和 trace，桌面端在 `windows-latest` 上构建、测试，并试打一次发布包。Dependabot（`.github/dependabot.yml`）每周检查 Actions、npm 和 NuGet 依赖。
-- 发布：先把 `bili-index-translate/manifest.json` 的 `version` 和 `BiliIndexTranslate.Desktop/Directory.Build.props` 的 `<Version>` 改成同一个版本号并合入 `main`，再推送 `vX.Y.Z` tag。`.github/workflows/release.yml` 会跑全部单测，用 `.github/scripts/package-release.ps1` 打出 3 个 ZIP 和 `SHA256SUMS.txt`，建成草稿 Release，核对说明后手动发布。发布流程会先完整跑一遍 CI（含端到端），并要求 tag 指向 `main` 上的提交，任何一项不满足都不会打包。tag 与两处版本号不一致或工作区有未提交改动时脚本直接失败。本地预演：`pwsh .github/scripts/package-release.ps1 -OutDir <空目录>`。
+- GitHub Actions（`.github/workflows/ci.yml`）在推送到 `main`、所有 PR 和手动触发时运行以上检查（`npm run perf` 页面开销测量不在 CI 里）；端到端测试失败时上传 Playwright 报告和 trace，桌面端在 `windows-latest` 上构建、测试，并试打一次发布包和一次 Velopack 安装包（都不上传）。Dependabot（`.github/dependabot.yml`）每周检查 Actions、npm 和 NuGet 依赖。
+- 发布：先把 `bili-index-translate/manifest.json` 的 `version` 和 `BiliIndexTranslate.Desktop/Directory.Build.props` 的 `<Version>` 改成同一个版本号并合入 `main`，再推送 `vX.Y.Z` tag。`.github/workflows/release.yml` 会跑全部单测，用 `.github/scripts/package-release.ps1` 打出 3 个 ZIP 和 `SHA256SUMS.txt`，再用 `vpk`（Velopack 1.2.161）打出桌面端的安装程序 `*-Setup.exe`、`*-full.nupkg`、`releases.win.json`（仓库里已有 Velopack 版本时还有增量包 `*-delta.nupkg`），一起建成同一个草稿 Release，核对说明后手动发布。**安装版的自动更新只读取已发布（非草稿）的 Release，所以只有点了“发布”之后，已安装的用户才会收到这个版本。**发布流程会先完整跑一遍 CI（含端到端），并要求 tag 指向 `main` 上的提交，任何一项不满足都不会打包。tag 与两处版本号不一致或工作区有未提交改动时脚本直接失败。本地预演：`pwsh .github/scripts/package-release.ps1 -OutDir <空目录>`。

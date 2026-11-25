@@ -50,12 +50,40 @@ public static class ChatCompletionParser
                 content = textEl.GetString();
 
             if (content is null) { error = "Response has no message content."; return false; }
-            var cleaned = StripThink(content);
-            if (cleaned.Length == 0) { error = "The service returned an empty translation."; return false; }
-
-            translation = cleaned;
-            return true;
+            return TryFinalize(content, out translation, out error);
         }
+    }
+
+    /// <summary>
+    /// The cleaning and validation every finished translation goes through, whether it arrived as one
+    /// JSON body or was accumulated from a stream: strip reasoning blocks and whitespace, reject empty.
+    /// </summary>
+    public static bool TryFinalize(string? content, out string translation, out string? error)
+    {
+        translation = string.Empty;
+        error = null;
+        var cleaned = StripThink(content);
+        if (cleaned.Length == 0) { error = "The service returned an empty translation."; return false; }
+        translation = cleaned;
+        return true;
+    }
+
+    /// <summary>
+    /// What may be shown while a reply is still arriving: nothing while a reasoning block is open (or
+    /// the text could still turn into one), otherwise the text after the last closing tag, trimmed.
+    /// </summary>
+    public static string VisibleStreamingText(string? accumulated)
+    {
+        if (string.IsNullOrEmpty(accumulated)) return string.Empty;
+        const string open = "<think>";
+        const string close = "</think>";
+        var closeIdx = accumulated.LastIndexOf(close, StringComparison.OrdinalIgnoreCase);
+        if (closeIdx >= 0) return accumulated[(closeIdx + close.Length)..].Trim();
+
+        var s = accumulated.TrimStart();
+        if (s.StartsWith(open, StringComparison.OrdinalIgnoreCase)) return string.Empty;
+        if (s.Length > 0 && s.Length < open.Length && open.StartsWith(s, StringComparison.OrdinalIgnoreCase)) return string.Empty;
+        return s.TrimEnd();
     }
 
     /// <summary>

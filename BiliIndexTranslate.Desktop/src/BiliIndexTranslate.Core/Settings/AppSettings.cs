@@ -74,6 +74,10 @@ public sealed class AppSettings
     public string BaseUrl { get; set; } = DefaultBaseUrl;
     public string Model { get; set; } = DefaultModel;
     public string VisionModel { get; set; } = DefaultVisionModel;
+
+    /// <summary>Cloud vision model or local OCR for screen snips. A file without this field keeps Auto.</summary>
+    [JsonConverter(typeof(VisionModeJsonConverter))]
+    public VisionMode VisionMode { get; set; } = VisionMode.Auto;
     public bool UseRelay { get; set; }
     public string RelayPrefix { get; set; } = DefaultRelayPrefix;
     public string GlossaryText { get; set; } = string.Empty;
@@ -97,6 +101,13 @@ public sealed class AppSettings
     // Diagnostics / lifecycle
     public bool DiagnosticsFileLogging { get; set; }
     public bool OnboardingCompleted { get; set; }
+
+    /// <summary>
+    /// Installed (Velopack) builds look for a new version about a minute after start and then every 24 hours.
+    /// A settings file written before this option existed has no such field and keeps this default, so no
+    /// schema migration is needed. Running at Windows start-up is not stored here: the registry is the source of truth.
+    /// </summary>
+    public bool AutoCheckForUpdates { get; set; } = true;
 
     public AppSettings Clone()
     {
@@ -130,6 +141,7 @@ public sealed class AppSettings
             .ToList();
 
         if (!Enum.IsDefined(ApiFormat)) ApiFormat = ApiFormat.OpenAi;
+        if (!Enum.IsDefined(VisionMode)) VisionMode = VisionMode.Auto;
         CustomName = (CustomName ?? string.Empty).Trim();
         CustomMethod = string.Equals(CustomMethod?.Trim(), "GET", StringComparison.OrdinalIgnoreCase) ? "GET" : "POST";
         CustomHeaders = (CustomHeaders ?? string.Empty).Replace("\r\n", "\n").Trim();

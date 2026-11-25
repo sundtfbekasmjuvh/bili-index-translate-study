@@ -49,6 +49,7 @@ public sealed class ReadingSession
             case SessionEvent.StabilizationElapsed s: OnStabilizationElapsed(s.TimerId); break;
             case SessionEvent.ProbeCompleted p: OnProbeCompleted(p.ProbeId, p.Outcome); break;
             case SessionEvent.TranslationCompleted r: OnTranslationCompleted(r.RequestId, r.Outcome); break;
+            case SessionEvent.TranslationProgress tp: OnTranslationProgress(tp.RequestId, tp.PartialText); break;
             case SessionEvent.GeometryRefreshed g: OnGeometryRefreshed(g.SelectionId, g.Update); break;
             case SessionEvent.GeometryGraceElapsed g: OnGeometryGraceElapsed(g.SelectionId); break;
             case SessionEvent.OutsideClick: DismissByUser(DismissReason.OutsideClick); break;
@@ -194,6 +195,16 @@ public sealed class ReadingSession
                 State = SessionState.ShowingError;
                 break;
         }
+    }
+
+    private void OnTranslationProgress(long requestId, string partialText)
+    {
+        if (requestId != _requestId || _current is null || State != SessionState.Loading)
+        {
+            Report(DiagnosticLevel.Info, "session", $"ignored stale translation progress #{requestId}");
+            return;
+        }
+        Emit(new SessionEffect.ShowPartialTranslation(_selectionId, _current, partialText));
     }
 
     private void OnRetry()
