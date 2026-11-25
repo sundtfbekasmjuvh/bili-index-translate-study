@@ -105,3 +105,27 @@ Custom format (`apiFormat: Custom`): the request comes from a template in the se
 sent; the request goes through `IRawTranslationTransport.SendAsync`, which adds no credential of
 its own. The cache key holds a hash of method, headers, body and result path instead of a model.
 Study Card and image translation are refused as for DeepLX.
+
+### Streaming the selection card
+
+Only the chat format streams, and only when the caller passes `onPartial` and the transport is an
+`ISseTranslationTransport` (`stream: true`, same line reader and idle timeout as image translation).
+DeepLX, Custom and transports without SSE behave exactly as before. After each delta the translator
+computes the *displayable* text (`ChatCompletionParser.VisibleStreamingText`): nothing while a
+`<think>` block is open or the text could still become one, otherwise what follows the last
+`</think>`, trimmed. A partial is reported only when it is non-empty and differs from the last one.
+The final text goes through the same `ChatCompletionParser.TryFinalize` (strip think, trim, empty →
+`EmptyResult`) as a non-streamed body; a server that ignores `stream` and answers with JSON is parsed
+the old way. Error mapping is unchanged (an error inside the stream becomes an HTTP error).
+
+`TranslationCoordinator.Start(..., onPartial)` gives each request a `LatestValueRelay<string>` that
+runs through `postPartial` (the app uses `DispatcherPriority.Background`; default is `post`). A
+partial is delivered only while the request is still in `_active` with the same CTS; the relay is
+cleared before the final result is posted and again when it is delivered, so a queued partial can never
+draw over it. Cancelled or superseded requests deliver nothing. Only the final success is cached.
+
+In the session, `TranslationProgress(requestId, text)` yields `ShowPartialTranslation` only while the
+state is `Loading` and the id is current; the state stays `Loading`. Anything else is ignored with an
+Info log. The popup shows the partial text with copy/pin disabled, the study button hidden and a
+"streaming…" caption; the final `ShowTranslation` restores the normal card. Growth in height goes
+through the existing `SizeChanged → Replace` path.

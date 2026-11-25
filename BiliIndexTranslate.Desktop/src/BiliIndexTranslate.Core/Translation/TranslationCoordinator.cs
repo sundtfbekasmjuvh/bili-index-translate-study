@@ -20,6 +20,7 @@ public sealed class TranslationCoordinator : IDisposable
     private readonly OpenAiCompatibleTranslator _translator;
     private readonly TranslationCache _cache;
     private readonly Action<Action> _post;
+    private readonly Action<Action> _postPartial;
     private readonly TimingStats? _timings;
     private readonly DiagnosticsLog? _log;
     private readonly SemaphoreSlim _concurrency;
@@ -33,11 +34,13 @@ public sealed class TranslationCoordinator : IDisposable
         Action<Action> post,
         TimingStats? timings = null,
         DiagnosticsLog? log = null,
-        int maxConcurrency = 2)
+        int maxConcurrency = 2,
+        Action<Action>? postPartial = null)
     {
         _translator = translator;
         _cache = cache;
         _post = post;
+        _postPartial = postPartial ?? post;
         _timings = timings;
         _log = log;
         _concurrency = new SemaphoreSlim(Math.Max(1, maxConcurrency));
@@ -55,7 +58,12 @@ public sealed class TranslationCoordinator : IDisposable
     }
 
     /// <summary>Starts a network translation. The callback fires at most once, via <c>post</c>, unless cancelled first.</summary>
-    public void Start(long requestId, TranslationRequest request, Action<long, TranslationOutcome> onCompleted)
+    /// <remarks>
+    /// <paramref name="onPartial"/> receives the newest displayable text while the reply streams in; it
+    /// is delivered via <c>postPartial</c>, only while this request is still the active one, and never
+    /// after the final outcome has been handed over.
+    /// </remarks>
+    public void Start(long requestId, TranslationRequest request, Action<long, TranslationOutcome> onCompleted, Action<long, string>? onPartial = null)
     {
         var cts = new CancellationTokenSource();
         lock (_gate)
@@ -64,7 +72,24 @@ public sealed class TranslationCoordinator : IDisposable
             if (_active.Remove(requestId, out var old)) { old.Cancel(); old.Dispose(); }
             _active[requestId] = cts;
         }
-        _ = RunAsync(requestId, request, cts, onCompleted);
+
+        LatestValueRelay<string>? relay = null;
+        Action<string>? partialSink = null;
+        if (onPartial is not null)
+        {
+            relay = new LatestValueRelay<string>(_postPartial, text =>
+            {
+                bool valid;
+                lock (_gate) valid = _active.TryGetValue(requestId, out var current) && ReferenceEquals(current, cts);
+                if (valid) onPartial(requestId, text);
+            });
+            var r = relay;
+            partialSink = text =>
+            {
+                if (!cts.IsCancellationRequested) r.Offer(text);
+            };
+        }
+        _ = RunAsync(requestId, request, cts, onCompleted, relay, partialSink);
     }
 
     public void Cancel(long requestId)
@@ -89,7 +114,13 @@ public sealed class TranslationCoordinator : IDisposable
         foreach (var c in all) { c.Cancel(); c.Dispose(); }
     }
 
-    private async Task RunAsync(long requestId, TranslationRequest request, CancellationTokenSource cts, Action<long, TranslationOutcome> onCompleted)
+    private async Task RunAsync(
+        long requestId,
+        TranslationRequest request,
+        CancellationTokenSource cts,
+        Action<long, TranslationOutcome> onCompleted,
+        LatestValueRelay<string>? relay,
+        Action<string>? partialSink)
     {
         var token = cts.Token;
         TranslationOutcome outcome;
@@ -98,7 +129,7 @@ public sealed class TranslationCoordinator : IDisposable
         {
             await _concurrency.WaitAsync(token).ConfigureAwait(false);
             acquired = true;
-            var result = await _translator.TranslateAsync(request, token).ConfigureAwait(false);
+            var result = await _translator.TranslateAsync(request, token, partialSink).ConfigureAwait(false);
             _cache.Set(CacheKey.For(request), result.Translation, result.Route);
             _timings?.Record(TimingCategory.Http, result.ElapsedMs);
             _log?.Info("translate", $"ok #{requestId} via {result.Route} {result.ElapsedMs:0} ms, {request.Text.Length} chars → {result.Translation.Length} chars");
@@ -129,9 +160,15 @@ public sealed class TranslationCoordinator : IDisposable
         {
             stillActive = _active.Remove(requestId, out var current) && ReferenceEquals(current, cts);
         }
-        if (!stillActive) return; // cancelled or superseded: never deliver
+        if (!stillActive) { relay?.Clear(); return; } // cancelled or superseded: never deliver
         cts.Dispose();
-        _post(() => onCompleted(requestId, outcome));
+        relay?.Clear();
+        // Cleared again when the final result is delivered, so a partial that was queued meanwhile cannot draw over it.
+        _post(() =>
+        {
+            relay?.Clear();
+            onCompleted(requestId, outcome);
+        });
     }
 
     public void Dispose()

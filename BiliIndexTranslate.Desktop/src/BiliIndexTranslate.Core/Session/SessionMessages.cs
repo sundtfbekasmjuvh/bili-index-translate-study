@@ -42,6 +42,7 @@ public abstract record SessionEvent
     public sealed record StabilizationElapsed(long TimerId) : SessionEvent;
     public sealed record ProbeCompleted(long ProbeId, ProbeOutcome Outcome) : SessionEvent;
     public sealed record TranslationCompleted(long RequestId, TranslationOutcome Outcome) : SessionEvent;
+    public sealed record TranslationProgress(long RequestId, string PartialText) : SessionEvent;
     public sealed record GeometryRefreshed(long SelectionId, GeometryUpdate Update) : SessionEvent;
     public sealed record GeometryGraceElapsed(long SelectionId) : SessionEvent;
     public sealed record OutsideClick : SessionEvent;
@@ -64,6 +65,7 @@ public abstract record SessionEffect
     public sealed record StartTranslation(long RequestId, long SelectionId, SelectionSnapshot Snapshot) : SessionEffect;
     public sealed record CancelTranslation(long RequestId) : SessionEffect;
     public sealed record ShowTranslation(long SelectionId, SelectionSnapshot Snapshot, TranslationOutcome.Success Result) : SessionEffect;
+    public sealed record ShowPartialTranslation(long SelectionId, SelectionSnapshot Snapshot, string PartialText) : SessionEffect;
     public sealed record ShowError(long SelectionId, SelectionSnapshot Snapshot, TranslationError Error) : SessionEffect;
     public sealed record HidePopup(DismissReason Reason) : SessionEffect;
     public sealed record BeginTracking(long SelectionId, SelectionSnapshot Snapshot) : SessionEffect;

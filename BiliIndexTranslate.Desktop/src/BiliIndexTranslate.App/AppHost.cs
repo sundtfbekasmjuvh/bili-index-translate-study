@@ -109,7 +109,7 @@ internal sealed class AppHost : IDisposable
         _translator = new OpenAiCompatibleTranslator(_transport, TimeSpan.FromSeconds(20));
         _studyService = new StudyCardService(_transport, TimeSpan.FromSeconds(30));
         _visionService = new VisionTranslationService(_transport, TimeSpan.FromSeconds(35));
-        _coordinator = new TranslationCoordinator(_translator, _cache, Post, _timings, _log, maxConcurrency: 2);
+        _coordinator = new TranslationCoordinator(_translator, _cache, Post, _timings, _log, maxConcurrency: 2, postPartial: PostBackground);
         _theme = new ThemeManager(app);
     }
 
@@ -117,6 +117,13 @@ internal sealed class AppHost : IDisposable
     {
         if (_disposed) return;
         _dispatcher.BeginInvoke(DispatcherPriority.Normal, action);
+    }
+
+    /// <summary>Streamed partial text yields to pending rendering and input, so it never starves the UI.</summary>
+    private void PostBackground(Action action)
+    {
+        if (_disposed) return;
+        _dispatcher.BeginInvoke(DispatcherPriority.Background, action);
     }
 
     // ---- startup ----------------------------------------------------------------------------------
@@ -291,6 +298,10 @@ internal sealed class AppHost : IDisposable
 
             case SessionEffect.ShowTranslation show:
                 _popup.ShowTranslation(show.Snapshot, show.Result, Caption(show.Snapshot, show.Result.Route, show.Result.FromCache));
+                break;
+
+            case SessionEffect.ShowPartialTranslation partial:
+                _popup.ShowPartialTranslation(partial.Snapshot, partial.PartialText, Caption(partial.Snapshot, null, false, streaming: true));
                 break;
 
             case SessionEffect.ShowError err:
@@ -525,12 +536,17 @@ internal sealed class AppHost : IDisposable
             Dispatch(new SessionEvent.TranslationCompleted(requestId, cached));
             return;
         }
-        _coordinator.Start(requestId, request, (id, outcome) => Dispatch(new SessionEvent.TranslationCompleted(id, outcome)));
+        _coordinator.Start(
+            requestId,
+            request,
+            (id, outcome) => Dispatch(new SessionEvent.TranslationCompleted(id, outcome)),
+            (id, text) => Dispatch(new SessionEvent.TranslationProgress(id, text)));
     }
 
-    private string? Caption(SelectionSnapshot snapshot, RequestRoute? route, bool fromCache)
+    private string? Caption(SelectionSnapshot snapshot, RequestRoute? route, bool fromCache, bool streaming = false)
     {
-        var parts = new List<string>(3);
+        var parts = new List<string>(4);
+        if (streaming) parts.Add(Loc.T("Caption_Streaming"));
         if (fromCache) parts.Add(Loc.T("Caption_Cached"));
         if (route == RequestRoute.Relay || (route is null && _settings.UseRelay)) parts.Add(Loc.T("Caption_Relay"));
         if (snapshot.Origin == SelectionOrigin.Clipboard) parts.Add(Loc.T("Caption_Clipboard"));

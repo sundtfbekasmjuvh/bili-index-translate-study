@@ -123,6 +123,7 @@ public static partial class UiText
         ["App_HooksWarning"] = "Input hooks are unavailable on this system, so selections cannot be detected automatically. The fallback shortcut may still work.",
 
         ["Caption_Cached"] = "cached",
+        ["Caption_Streaming"] = "streaming…",
         ["Caption_Relay"] = "relay",
         ["Caption_Clipboard"] = "clipboard",
         ["Caption_NearPointer"] = "near pointer",
@@ -329,6 +330,7 @@ public static partial class UiText
         ["App_HooksWarning"] = "此系统上无法使用输入钩子，因此不能自动检测选中内容。备用快捷键可能仍然可用。",
 
         ["Caption_Cached"] = "缓存",
+        ["Caption_Streaming"] = "生成中…",
         ["Caption_Relay"] = "中继",
         ["Caption_Clipboard"] = "剪贴板",
         ["Caption_NearPointer"] = "指针附近",

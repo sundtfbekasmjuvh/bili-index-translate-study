@@ -166,6 +166,25 @@ through `LatestValueRelay` at `DispatcherPriority.Background`. The relay itself 
 the popup still updates smoothly while an image translation streams, and that the final result is
 never overwritten by a late delta, should be confirmed with scenario walkthroughs on Windows.
 
+## Checked on Linux (2026-11-25): .NET 10 and the streaming selection card
+
+.NET SDK 10.0.404. The app now targets .NET 10, and the selection card shows the translation while it
+is generated (chat format only; DeepLX and custom templates are unchanged).
+
+| Check | Result |
+|---|---|
+| `dotnet build BiliIndexTranslate.sln -c Release -warnaserror` | 0 errors, 0 warnings |
+| `dotnet test tests/BiliIndexTranslate.Core.Tests -c Release` | **310 passed, 0 failed** (the 266 above plus `StreamingTranslationTests.cs`: partial text from the translator, `<think>` filtering, a server that ignores `stream`, in-stream errors, cancellation; the coordinator delivering partial text only while the request is current and never after the final result; the session showing it only while loading) |
+
+Not exercised on Windows yet:
+
+- The card fills in while the translation streams, with no stutter and without delaying input or rendering.
+- A card above the selection grows upward without jumping or flickering (`SizeChanged` → `Replace`).
+- The caption shows "生成中…" / "streaming…" while text arrives. When the final result lands, Copy, Pin and the Study Card button come back.
+- Esc, an outside click or a new selection during streaming closes or replaces the card, and no older partial text is drawn afterwards.
+- The real Index-Translate endpoint answers a streamed request with `text/event-stream`. Check this direct, through the relay, and with the HTTP 412 hint.
+- A cache hit shows the final translation at once, without a streaming caption.
+
 ## Scenarios
 
 Status key: ✅ verified on Windows · ◐ partial · ❌ failed · ⬜ not tested yet.
