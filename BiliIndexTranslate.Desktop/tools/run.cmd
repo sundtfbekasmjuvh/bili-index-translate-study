@@ -4,5 +4,5 @@ setlocal
 cd /d "%~dp0.."
 dotnet --version >nul 2>&1 || (echo .NET 10 SDK not found. Install from https://dotnet.microsoft.com/download/dotnet/10.0 & exit /b 1)
 dotnet build src\BiliIndexTranslate.App\BiliIndexTranslate.App.csproj -c Release --nologo -v q || exit /b 1
-start "" "src\BiliIndexTranslate.App\bin\Release\net10.0-windows\BiliIndexTranslate.exe" %*
+start "" "src\BiliIndexTranslate.App\bin\Release\net10.0-windows10.0.19041.0\BiliIndexTranslate.exe" %*
 endlocal

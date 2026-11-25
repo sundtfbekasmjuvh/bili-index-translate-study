@@ -18,7 +18,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\BiliIndexTranslate.Core\BiliIndexTranslate.Core.csproj" />
     <!-- Build order only: the tests start these executables, they do not load them. -->
-    <ProjectReference Include="..\..\src\BiliIndexTranslate.App\BiliIndexTranslate.App.csproj" ReferenceOutputAssembly="false" />
+    <ProjectReference Include="..\..\src\BiliIndexTranslate.App\BiliIndexTranslate.App.csproj" ReferenceOutputAssembly="false" SkipGetTargetFrameworkProperties="true" />
     <ProjectReference Include="..\BiliIndexTranslate.UiTestTarget\BiliIndexTranslate.UiTestTarget.csproj" ReferenceOutputAssembly="false" />
   </ItemGroup>
 </Project>

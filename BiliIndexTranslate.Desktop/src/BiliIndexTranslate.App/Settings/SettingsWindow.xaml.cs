@@ -88,6 +88,7 @@ public partial class SettingsWindow : Window
         ModelBox.Text = s.Model;
         foreach (var vm in AppSettings.KnownVisionModels) VisionModelBox.Items.Add(vm);
         VisionModelBox.Text = s.VisionModel;
+        VisionModeBox.SelectedIndex = (int)s.VisionMode;
         RelayBox.IsChecked = s.UseRelay;
         RelayBox2.Text = s.RelayPrefix;
         RelayBox2.IsEnabled = s.UseRelay;
@@ -205,6 +206,7 @@ public partial class SettingsWindow : Window
         s.ApiKey = _keyRevealed ? ApiKeyPlainBox.Text : ApiKeyBox.Password;
         s.Model = ModelBox.Text.Trim();
         s.VisionModel = VisionModelBox.Text.Trim();
+        s.VisionMode = (VisionMode)Math.Max(0, VisionModeBox.SelectedIndex);
         s.UseRelay = RelayBox.IsChecked == true;
         s.RelayPrefix = RelayBox2.Text.Trim();
         s.GlossaryText = GlossaryBox.Text;

@@ -131,6 +131,38 @@ Info log. The popup shows the partial text with copy/pin disabled, the study but
 "streaming…" caption; the final `ShowTranslation` restores the normal card. Growth in height goes
 through the existing `SizeChanged → Replace` path.
 
+## Screen snip: cloud vision or local OCR
+
+The App project targets `net10.0-windows10.0.19041.0` (with `SupportedOSPlatformVersion` 10.0.17763.0, Windows 10
+1809) so that `Windows.Media.Ocr` and `Windows.Graphics.Imaging` are available; Core stays platform-independent.
+The UI test project references the App for build order only (`SkipGetTargetFrameworkProperties`), so it keeps its own
+target framework.
+
+`VisionRouting.Decide(VisionMode, ApiFormat)` in Core returns Cloud, Local or Unsupported: Auto → Cloud for the chat
+format and Local for DeepLX/Custom; Local → always Local; Cloud → Cloud for the chat format, otherwise Unsupported.
+`VisionMode` is stored as a name in `settings.json`; `VisionModeJsonConverter` turns a missing, unknown or oddly typed
+value into Auto instead of rejecting the whole file.
+
+`AppHost.BeginVisionCapture` branches on it. Cloud is the old `RunVisionRequestAsync` path. Unsupported shows an error
+card without a request. Local runs `RunLocalVisionAsync` under the same state as the cloud path: `_visionCts` cancels
+it, and `_visionSeq` / `_visionActive` make every `Post` callback drop a result that arrives after the card was closed
+or replaced (`DismissVisionPopup` and the retry key are unchanged). Steps: `WindowsOcr.RecognizeAsync` (PNG data URL →
+`BitmapDecoder` over an `InMemoryRandomAccessStream` → `SoftwareBitmap`, scaled down in proportion when an edge exceeds
+`OcrEngine.MaxImageDimension` → `OcrEngine.TryCreateFromUserProfileLanguages().RecognizeAsync`) → `OcrText.Join` →
+`OpenAiCompatibleTranslator.TranslateAsync` with `onPartial` through a `LatestValueRelay<string>` (the same text
+translation path as a selection, so DeepLX and Custom work and the chat format streams). The recognized text is the
+snapshot's text, which the card shows as the original. Everything stays in memory; only lengths reach the log.
+
+`OcrText.Join` (pure, tested) joins lines: CJK next to CJK without a space, a trailing `-` between two Latin letters is
+dropped, otherwise one space, blank lines skipped. `OcrText.JoinWords` rebuilds a line from the engine's words, because
+for Chinese and Japanese the engine separates words with spaces. A failed engine creation, an empty result, an
+undecodable image or an exception becomes an `EmptyResult` error card (the hint to add an OCR language pack is part of
+the message); exceptions are reported by type name only.
+
+"Recognize screen text and copy" (`StartScreenOcrCopy`) uses the same capture and `WindowsOcr`, has its own
+cancellation token (`_ocrCopyCts`, no popup, no `_visionSeq`), writes the text with `ClipboardFallback.TryWriteText` and
+reports through one tray notice. It never touches the translation transport.
+
 ## Updates and start-up
 
 **Packaging.** The release workflow publishes a self-contained, non-single-file win-x64 build and runs

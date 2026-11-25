@@ -60,6 +60,30 @@ Optional fallback: `Alt+Q` (configurable, can be disabled) asks for a translatio
 UI Automation cannot read the selection, this — and only this — sends a single Ctrl+C and
 translates the copied text. Automatic mode never touches the clipboard.
 
+### Screen snip: how the image is read
+
+The tray menu and `Alt+Shift+S` snip a screen region (a clipboard image goes the same way). The setting
+**Image reading** (Settings → Service) decides how the picture becomes a translation:
+
+* **Automatic** (default) – with an OpenAI-compatible endpoint the image goes to the cloud vision
+  model, as before. With a DeepLX or custom endpoint the text is read on this PC and only that text is
+  translated, so snip works with every API format.
+* **Always local OCR** – every format reads the image on this PC first (Windows' built-in
+  `Windows.Media.Ocr`, offline), then translates the recognized text. The screenshot is not uploaded.
+* **Always cloud vision model** – the image goes to the vision model. With DeepLX or a custom API the
+  card says it is not supported and suggests Automatic or Local OCR; nothing is sent.
+
+Local OCR recognizes the languages whose **OCR language packs** are installed in Windows (it uses your
+Windows profile languages). If nothing is recognized, or no OCR engine can be created, the card says
+so and points to Windows Settings → Time & language → Language & region, where you add the language
+(with its OCR option). Complex layouts, stylized text and game HUDs usually read worse than with the
+cloud vision model. The card shows the recognized text as the original and the translation below it,
+with the caption "local OCR".
+
+**Recognize screen text and copy** (tray menu) snips a region, recognizes the text locally and copies
+it to the clipboard; the tray shows "Copied N characters" once, or the reason when no text was found.
+It works with any API format and sends no request at all.
+
 ## Settings (tray → Settings…)
 
 * **Reading** – automatic translation, target language (简体中文 / 繁體中文 / English / 日本語 / 한국어),
@@ -74,7 +98,9 @@ translates the copied text. Automatic mode never touches the clipboard.
   (`Index-Translate-2B` / `9B` / `35B-A3B`, default 9B, free text for other OpenAI-compatible
   servers), relay toggle. **Save and test** saves what is on screen and tests exactly that.
   HTTP 412 from the direct endpoint is shown as a rejection with a hint about the relay; the app
-  never switches routes by itself.
+  never switches routes by itself. **Image reading** (Automatic / Always local OCR / Always cloud
+  vision model) sits below the vision model; the `visionMode` field of `settings.json` holds it, and
+  a file without the field or with an unknown value means Automatic.
 * **Applications** – per-process exclusions (also reachable from the tray menu).
 * **Fallback shortcut** – enable/disable, change the key. Registration conflicts are reported in
   the tray and in Settings; automatic mode is unaffected.
@@ -98,8 +124,9 @@ with the API key; without the placeholder the key is sent as a Bearer token, and
 no credential. The request body is
 `{"text", "source_lang", "target_lang"}` and the translation is read from `data`; an HTTP error or
 a non-200 `code` in the body is shown as an error. This format only translates selected text: the
-glossary and the model choices have no effect, and Study Card and screen snip report that they need
-an OpenAI-compatible endpoint without sending a request. With the relay enabled, the relay URL must
+glossary and the model choices have no effect, and Study Card reports that it needs an
+OpenAI-compatible endpoint without sending a request. Screen snip reads the image with the local
+OCR instead (setting **Image reading**, see above) and translates the recognized text. With the relay enabled, the relay URL must
 be the complete relayed translate URL.
 
 **Custom format.** Any service that answers with JSON can be described by a template instead of by
@@ -122,6 +149,13 @@ Only the selected text and request metadata (model, target language) are sent to
 translation endpoint. No telemetry, no history, no persisted cache; diagnostics never contain selected
 text, translations, or keys (only lengths and a short fingerprint).
 
+Screen snip with local OCR (Automatic with a DeepLX or custom endpoint, or Always local OCR) does not
+upload the screenshot: the image is recognized in memory by Windows and only the recognized text is
+sent to the translation endpoint. **Recognize screen text and copy** sends no request at all. Neither
+the screenshot nor the recognized text is written to a file or to the diagnostics log (lengths only).
+With the cloud vision model (OpenAI-compatible endpoint, Automatic or Always cloud) the screenshot is
+sent to that endpoint, as before.
+
 The installed version also contacts GitHub on its own: by default it regularly asks GitHub
 (`api.github.com`, and the download address of the Releases assets) whether a newer version exists and
 downloads it. Those requests carry no personal information and no usage data (no selected text, no
@@ -134,7 +168,7 @@ updates automatically", and "Check for updates" then only runs when you press it
 ```
 src/BiliIndexTranslate.Core   platform-independent: session state machine, geometry/placement,
                               translation client, cache, settings, diagnostics (net10.0)
-src/BiliIndexTranslate.App    WPF app: UIA observer, input hooks, popup, tray, settings UI (net10.0-windows)
+src/BiliIndexTranslate.App    WPF app: UIA observer, input hooks, popup, tray, settings UI, local OCR (net10.0-windows10.0.19041.0, runs on Windows 10 1809+)
 tests/…Core.Tests             xunit tests for Core (run on any OS)
 tools/                        run.cmd, build.cmd, build-selfcontained.cmd, test.cmd, make-icon.py
 docs/ARCHITECTURE.md          boundaries, threads, state model, race handling

@@ -218,6 +218,35 @@ one you start from:
 Not verified at all before the first release: the delta package (needs two Velopack releases), and that the
 first release works with no earlier Velopack release to download.
 
+## Local OCR screen snip (added on Linux, not yet run on Windows)
+
+Written and compiled on Linux (`-warnaserror`: 0 warnings; Core tests **385**, the 349 before plus
+`VisionModeTests.cs`: routing table, old/unknown `visionMode` values, line and word joining). The App now targets
+`net10.0-windows10.0.19041.0`; `dotnet publish -r win-x64 -p:PublishSingleFile=true --self-contained false` succeeds on
+Linux. `Windows.Media.Ocr` cannot run here, so every row below is **unverified** until done on Windows (do it on a
+machine with only the English OCR pack and, separately, with the Chinese or Japanese pack added):
+
+| # | Check | Expected |
+|---|---|---|
+| 1 | Settings → Service → Image reading | Three entries, default Automatic; the hint text is shown; the choice survives Save and a restart (`visionMode` in `settings.json`); delete the field or write `"visionMode": "x"` and the app opens with Automatic and the rest of the file intact |
+| 2 | OpenAI-compatible endpoint, Automatic, snip a paragraph | Same as before: cloud vision model, caption "image", the screenshot is sent |
+| 3 | DeepLX endpoint, Automatic, snip English text | No "not supported" card; loading "Recognizing text on this PC…", then the card with the recognized text as the original and the translation, caption "DeepLX · local OCR · direct"; the mock receives one request holding only text (check it with a proxy: no image bytes) |
+| 4 | Custom API endpoint, Automatic, same | Same as row 3 with the custom API's label |
+| 5 | OpenAI endpoint, Always local OCR | Recognized text is translated with the chat model and streams in; caption "<model> · local OCR"; no `image_url` in the request |
+| 6 | DeepLX, Always cloud vision model | Error card "not supported" plus the hint to choose Automatic or Local OCR; no request leaves |
+| 7 | Snip a region without text (a plain colour), local OCR | Error card "No text was recognized…" with the hint to add the language in Windows Settings > Time & language > Language & region |
+| 8 | Remove all OCR language packs (or use an account whose profile languages have none), snip | The "no OCR language pack" error card, no crash |
+| 9 | Snip Chinese / Japanese text with that language's pack installed | No spaces between characters in the original shown on the card; lines of a paragraph are joined without spaces; mixed Latin words keep one space |
+| 10 | Snip a hyphenated English paragraph ("inter-" / "national") | Joined as "international" |
+| 11 | Snip very large regions (4K, several monitors) and a clipboard image larger than `OcrEngine.MaxImageDimension` | Recognized without an error (scaled down); no visible freeze of the UI |
+| 12 | Close the card (Esc or click out) while "Recognizing…" or translating; start a second snip while the first is loading | The closed card stays closed; only the newest snip's result is shown; the retry key repeats the last snip |
+| 13 | Tray → Recognize screen text and copy, snip a paragraph | One tray notice "Copied N characters" (N = characters, not UTF-16 units); Ctrl+V pastes the text; no popup card; no network traffic at all (proxy) |
+| 14 | Same on a region without text; with the clipboard locked by another program | A warning notice with the reason; no clipboard change |
+| 15 | Same with a DeepLX/custom endpoint and with an endpoint that is unreachable | Works the same (no request is made) |
+| 16 | Diagnostics (file logging on) after rows 3, 7 and 13 | Only lengths and failure kinds (`local OCR ok, chars=…`); no screenshot data and no recognized text |
+| 17 | Windows 10 1809 / 1903 (lowest supported) and Windows 11 | The app starts and local OCR works; check that the self-contained and the framework-dependent single-file builds both start |
+| 18 | Switch the interface language to English / 简体中文 with the tray menu closed | The new tray item, the Settings entries and the OCR messages follow the language |
+
 ## UI tests (FlaUI)
 
 `tests/BiliIndexTranslate.App.UiTests` (xunit, FlaUI.UIA3) drives the real app on a real desktop. It runs in

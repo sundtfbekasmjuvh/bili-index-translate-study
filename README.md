@@ -4,7 +4,7 @@
 
 基于 Bilibili OpenAI 兼容多模态与文本翻译接口（`Index-Translate-35B-A3B` / `9B` / `2B`）构建的**双平台极简翻译与按需语言学习私教**：
 - **网页端（Chrome / Edge MV3）**：无需本地 Python 代理、无需第三方 OCR 或中转，通过 MV3 `declarativeNetRequest` 原生直连 B 站接口；同时支持 **划词流式翻译**、**`Alt+S` 零 OCR 框选图片/漫画/视频字幕帧直译 + 生词卡闭环**、**图片右键一键直译**、**`Alt+A` 视口流式双语对照全页**、**官方 `instTrans` 动态术语表/免译锁定** 与 **按 `S` 并排展开零留痕词典级学习卡片**。
-- **Windows 桌面端（.NET 10 WPF + UIA + Per-Monitor DPI 识图框选）**：跨任意桌面应用的非抢焦点全局划词气泡 + **`Alt+Shift+S` 全屏跨显示器框选识图直译（支持游戏 HUD、扫描版 PDF、视频硬字幕与剪贴板截图）** + `instTrans` 自定义术语表 + 伴随语言学习卡片。
+- **Windows 桌面端（.NET 10 WPF + UIA + Per-Monitor DPI 识图框选）**：跨任意桌面应用的非抢焦点全局划词气泡 + **`Alt+Shift+S` 全屏跨显示器框选识图直译（支持游戏 HUD、扫描版 PDF、视频硬字幕与剪贴板截图）** + `instTrans` 自定义术语表 + 伴随语言学习卡片；DeepLX 和自定义接口的框选识图改用 Windows 自带的离线 OCR 先识别文字再翻译（截图不上传），并新增托盘“识别屏幕文字并复制”。
 
 > **开箱即用下载**：可直接前往右侧 [**Releases**](https://github.com/sundtfbekasmjuvh/bili-index-translate-study/releases) 下载打包好的 Chrome/Edge 扩展 ZIP 与 Windows 桌面版（安装程序 `Setup.exe` 或免安装 ZIP）。
 

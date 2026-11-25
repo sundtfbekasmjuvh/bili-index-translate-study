@@ -43,6 +43,24 @@ internal static class ClipboardFallback
         return null;
     }
 
+    /// <summary>Puts text on the clipboard; false when the clipboard stays busy.</summary>
+    public static bool TryWriteText(string text)
+    {
+        for (var attempt = 0; attempt < 4; attempt++)
+        {
+            try
+            {
+                Clipboard.SetDataObject(text, true);
+                return true;
+            }
+            catch (COMException)
+            {
+                Thread.Sleep(40); // clipboard busy
+            }
+        }
+        return false;
+    }
+
     private static uint SendCtrlC()
     {
         // Release Alt/Shift/Win if the hotkey still holds them so the target sees a clean Ctrl+C.

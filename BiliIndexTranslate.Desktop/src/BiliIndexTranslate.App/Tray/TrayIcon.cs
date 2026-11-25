@@ -33,6 +33,8 @@ internal sealed class TrayIcon : IDisposable
 
         var snip = new ToolStripMenuItem(Loc.T("Tray_Snip"));
         snip.Click += (_, _) => SnipRegionRequested?.Invoke();
+        var ocrCopy = new ToolStripMenuItem(Loc.T("Tray_OcrCopy"));
+        ocrCopy.Click += (_, _) => OcrCopyRequested?.Invoke();
         var clipboard = new ToolStripMenuItem(Loc.T("Tray_Clipboard"));
         clipboard.Click += (_, _) => TranslateClipboardRequested?.Invoke();
         var settings = new ToolStripMenuItem(Loc.T("Tray_Settings"));
@@ -53,7 +55,7 @@ internal sealed class TrayIcon : IDisposable
         {
             _updateItem, _updateSeparator,
             _autoItem, _appItem, new ToolStripSeparator(),
-            snip, clipboard, new ToolStripSeparator(),
+            snip, ocrCopy, clipboard, new ToolStripSeparator(),
             settings, diagnostics, welcome, new ToolStripSeparator(),
             exit,
         });
@@ -74,6 +76,7 @@ internal sealed class TrayIcon : IDisposable
             if (e.PropertyName != nameof(Loc.Language)) return;
             _autoItem.Text = Loc.T("Tray_Auto");
             snip.Text = Loc.T("Tray_Snip");
+            ocrCopy.Text = Loc.T("Tray_OcrCopy");
             clipboard.Text = Loc.T("Tray_Clipboard");
             settings.Text = Loc.T("Tray_Settings");
             diagnostics.Text = Loc.T("Tray_Diagnostics");
@@ -88,6 +91,7 @@ internal sealed class TrayIcon : IDisposable
     public event Action<bool>? AutoTranslateToggled;
     public event Action<string, bool>? ExcludeAppToggled;
     public event Action? SnipRegionRequested;
+    public event Action? OcrCopyRequested;
     public event Action? TranslateClipboardRequested;
     public event Action? SettingsRequested;
     public event Action? DiagnosticsRequested;
