@@ -83,6 +83,7 @@ internal sealed class AppHost : IDisposable
     private PxPoint _lastPointer;
     private long _lastPointerTick;
     private long _triggerTimestamp;
+    private long _requestStartTimestamp; // network requests only (not cache hits); cleared once the first text is on screen
     private bool _anchorFromPointer;
     private string? _lastProcessName;
     private string? _hotkeyError;
@@ -312,10 +313,12 @@ internal sealed class AppHost : IDisposable
 
             case SessionEffect.ShowTranslation show:
                 _popup.ShowTranslation(show.Snapshot, show.Result, Caption(show.Snapshot, show.Result.Route, show.Result.FromCache));
+                LogFirstText("final");
                 break;
 
             case SessionEffect.ShowPartialTranslation partial:
                 _popup.ShowPartialTranslation(partial.Snapshot, partial.PartialText, Caption(partial.Snapshot, null, false, streaming: true));
+                LogFirstText("streaming");
                 break;
 
             case SessionEffect.ShowError err:
@@ -550,14 +553,24 @@ internal sealed class AppHost : IDisposable
         var request = BuildRequest(snapshot.Text, _settings);
         if (_coordinator.TryGetCached(request) is { } cached)
         {
+            _requestStartTimestamp = 0;
             Dispatch(new SessionEvent.TranslationCompleted(requestId, cached));
             return;
         }
+        _requestStartTimestamp = Stopwatch.GetTimestamp();
         _coordinator.Start(
             requestId,
             request,
             (id, outcome) => Dispatch(new SessionEvent.TranslationCompleted(id, outcome)),
             (id, text) => Dispatch(new SessionEvent.TranslationProgress(id, text)));
+    }
+
+    /// <summary>Logs, once per network request, how long it took from starting the request to text on the card.</summary>
+    private void LogFirstText(string kind)
+    {
+        if (_requestStartTimestamp == 0) return;
+        _log.Info("translate", $"first text on the card {Stopwatch.GetElapsedTime(_requestStartTimestamp).TotalMilliseconds:0} ms after the request started ({kind})");
+        _requestStartTimestamp = 0;
     }
 
     private string? Caption(SelectionSnapshot snapshot, RequestRoute? route, bool fromCache, bool streaming = false)

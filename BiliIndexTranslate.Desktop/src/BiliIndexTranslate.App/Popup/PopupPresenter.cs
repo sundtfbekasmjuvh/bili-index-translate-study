@@ -140,10 +140,13 @@ internal sealed class PopupPresenter : IDisposable
     public void ShowLoading(SelectionSnapshot snapshot, string? caption)
     {
         if (snapshot.Anchor is null) return;
+        var created = _window is null;
+        var sw = Stopwatch.StartNew();
         var w = Window;
         if (_studyVisible && ReferenceEquals(_studyOwner, w)) HideStudy();
         w.ShowLoading(snapshot, caption);
         Present(snapshot.Anchor, firstShow: !_visible);
+        if (created) _log.Info("render", $"card window created and shown in {sw.Elapsed.TotalMilliseconds:0} ms");
     }
 
     public void ShowTranslation(SelectionSnapshot snapshot, TranslationOutcome.Success result, string? caption)
