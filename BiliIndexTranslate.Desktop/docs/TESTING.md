@@ -247,6 +247,24 @@ machine with only the English OCR pack and, separately, with the Chinese or Japa
 | 17 | Windows 10 1809 / 1903 (lowest supported) and Windows 11 | The app starts and local OCR works; check that the self-contained and the framework-dependent single-file builds both start |
 | 18 | Switch the interface language to English / 简体中文 with the tray menu closed | The new tray item, the Settings entries and the OCR messages follow the language |
 
+## Baseline on the CI runner (2026-11-26)
+
+Measured by UI tests 6–8 below on the `windows-latest` runner (Windows NT 10.0.26100, 4 logical processors) in CI
+run 45792315547 (commit `6d04571`). The app runs from the Release build output (framework-dependent), not from the
+single-file or installed build. Shared runners are noisy: read these as orders of magnitude and compare trends.
+
+| Measure | Result |
+|---|---|
+| Ctrl+A → card with the text, cache hit (n = 10) | min 376 / median 414 / max 439 ms. 320 ms of that is the settle delay for a UIA selection event (250 ms + 70 ms); a mouse release waits 250 ms |
+| Ctrl+A → first text, cache miss (first selection after start) | 815 ms; full text at 1521 ms (the mock sends the second and third segment 400 ms apart). The mock sends the first segment at once, so the first selection is about 400 ms slower than a cache hit. Cause not located yet (first card window, first HTTP request, JIT) |
+| Loading state | not observed: "first card visible" equals "first text". The loading text is either too short-lived to catch or not exposed to UIA |
+| Process start → `ready` | 404–419 ms over 3 runs (polled every 200 ms); 19–21 ms from the app's first log line to `ready` |
+| 100 selections (cache hits) | handles 750–766 (−2), GDI objects 32 (0), USER objects 66–67 (−1), private bytes 54–63 MB (+0.3 MB), working set 126–151 MB (−7.5 MB): no growth |
+| Core unit-test coverage (coverlet) | lines 86.9 %, branches 71.7 % |
+
+The walkthrough on 2026-11-06 measured a working set of about 85 MB on a real machine with .NET 8. The runner shows
+126–151 MB with .NET 10; the two were not measured on the same machine, and private bytes are the steadier figure.
+
 ## UI tests (FlaUI)
 
 `tests/BiliIndexTranslate.App.UiTests` (xunit, FlaUI.UIA3) drives the real app on a real desktop. It runs in
