@@ -113,7 +113,7 @@ jobs:
 
       - name: UI tests
         timeout-minutes: 8
-        run: dotnet test tests/BiliIndexTranslate.App.UiTests/BiliIndexTranslate.App.UiTests.csproj -c Release --no-build --logger "trx;LogFileName=ui-tests.trx" --logger "console;verbosity=normal" --results-directory TestResults
+        run: dotnet test tests/BiliIndexTranslate.App.UiTests/BiliIndexTranslate.App.UiTests.csproj -c Release --no-build --logger "trx;LogFileName=ui-tests.trx" --logger "console;verbosity=detailed" --results-directory TestResults
 
       - name: Upload UI test evidence
         if: failure()
