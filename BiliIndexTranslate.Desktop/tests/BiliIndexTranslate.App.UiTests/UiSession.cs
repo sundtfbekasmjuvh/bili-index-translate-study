@@ -117,6 +117,9 @@ public sealed class UiSession : IDisposable
         if (!ready.Success) throw new TimeoutException("app did not log 'ready' within 30 s");
     }
 
+    /// <summary>The app's diagnostics.log so far (empty when it cannot be read).</summary>
+    public string DiagnosticsLog() => LogText();
+
     private string LogText()
     {
         try

@@ -33,7 +33,9 @@ public class EdgeSelectionTests
             }
             catch (TimeoutException ex)
             {
-                _output.WriteLine("triple click gave no card (" + ex.Message + "); falling back to Ctrl+A");
+                _output.WriteLine("triple click gave no card (" + ex.Message + "); error card: " + (ui.ErrorText() ?? "none")
+                                  + "; chat requests so far: " + ui.Mock.ChatRequests.Count + "; falling back to Ctrl+A");
+                _output.WriteLine("app log after the triple click:" + Environment.NewLine + ui.DiagnosticsLog());
                 how = EdgeTarget.SelectByCtrlA(window);
                 _output.WriteLine("selection: " + how);
                 ui.WaitForCardText(full);
