@@ -151,9 +151,14 @@
 
 ## 许可证
 
-本项目采用 [Apache License 2.0](LICENSE), 版权声明见 [NOTICE](NOTICE). 浏览器扩展、Windows 桌面端和本地预览沙盒的项目代码均适用此许可证; 第三方依赖仍遵循各自的许可证. 此许可证不授予哔哩哔哩等第三方的商标权, 也不改变上游翻译服务的使用条款.
+本项目采用 [Apache License 2.0](LICENSE)，版权声明见 [NOTICE](NOTICE)。浏览器扩展、Windows 桌面端和本地预览沙盒的项目代码均适用此许可证。以下内容不在此列，仍遵循各自的许可证：
 
-后续发布包会附带 LICENSE 和 NOTICE: 扩展包放在 `bili-index-translate/` 内, 桌面包放在可执行文件旁. 已发布的 v1.4.1 资产保持原样.
+- `bili-index-translate/data/` 里的词表数据，见 [`LICENSE-DATA.md`](bili-index-translate/data/LICENSE-DATA.md)（其中词频数据为 CC BY-SA 4.0）。
+- 第三方依赖。
+
+此许可证不授予哔哩哔哩等第三方的商标权，也不改变上游翻译服务的使用条款。
+
+之后的发布包都附带 LICENSE 和 NOTICE：扩展包放在 `bili-index-translate/` 里，桌面端 zip 放在可执行文件旁，安装版放在安装目录里。v1.5.0 及更早的已发布资产保持原样。
 
 ---
 

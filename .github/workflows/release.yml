@@ -68,6 +68,7 @@ jobs:
         run: |
           dotnet publish BiliIndexTranslate.Desktop/src/BiliIndexTranslate.App/BiliIndexTranslate.App.csproj -c Release -r win-x64 --self-contained true -o "$env:RUNNER_TEMP/velopack-publish"
           if ($LASTEXITCODE -ne 0) { throw "dotnet publish failed with exit code $LASTEXITCODE" }
+          foreach ($f in "LICENSE", "NOTICE") { if (-not (Test-Path -LiteralPath (Join-Path "$env:RUNNER_TEMP/velopack-publish" $f))) { throw "dotnet publish put no $f next to the exe" } }
 
       # The previous release is needed to build a delta package. The very first Velopack release has no
       # predecessor: then the download is allowed to fail, but only when no published release carries releases.win.json.

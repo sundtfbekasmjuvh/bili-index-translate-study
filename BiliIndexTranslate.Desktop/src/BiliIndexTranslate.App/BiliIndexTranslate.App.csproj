@@ -40,6 +40,11 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- LICENSE and NOTICE go next to the exe in every publish folder; the Velopack installer installs that folder as is. -->
+    <None Include="..\..\..\LICENSE;..\..\..\NOTICE" Link="%(Filename)%(Extension)" CopyToPublishDirectory="PreserveNewest" ExcludeFromSingleFile="true" Visible="false" />
+  </ItemGroup>
+
+  <ItemGroup>
     <Resource Include="Assets\app.ico" />
     <Resource Include="Assets\app-paused.ico" />
   </ItemGroup>

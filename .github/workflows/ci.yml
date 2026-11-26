@@ -142,10 +142,17 @@ jobs:
 
           dotnet publish src/BiliIndexTranslate.App/BiliIndexTranslate.App.csproj -c Release -r win-x64 --self-contained true -o $publish
           if ($LASTEXITCODE -ne 0) { throw "dotnet publish failed with exit code $LASTEXITCODE" }
+          foreach ($f in "LICENSE", "NOTICE") { if (-not (Test-Path -LiteralPath (Join-Path $publish $f))) { throw "dotnet publish put no $f next to the exe" } }
 
           vpk pack --packId BiliIndexTranslate.Desktop --packVersion $version --packDir $publish --mainExe BiliIndexTranslate.exe --packTitle "Bili Index Translate" --icon src/BiliIndexTranslate.App/Assets/app.ico --runtime win-x64 --channel win --noPortable --outputDir $out
           if ($LASTEXITCODE -ne 0) { throw "vpk pack failed with exit code $LASTEXITCODE" }
 
           if (-not (Test-Path (Join-Path $out "*-Setup.exe"))) { throw "vpk produced no Setup.exe in $out" }
           if (-not (Test-Path (Join-Path $out "BiliIndexTranslate.Desktop-$version-full.nupkg"))) { throw "vpk produced no full package for $version in $out" }
+          # The installed app carries the license too.
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $nupkg = [IO.Compression.ZipFile]::OpenRead((Join-Path $out "BiliIndexTranslate.Desktop-$version-full.nupkg"))
+          try {
+            foreach ($f in "LICENSE", "NOTICE") { if (-not ($nupkg.Entries | Where-Object { $_.FullName -like "*/$f" })) { throw "the full package has no $f" } }
+          } finally { $nupkg.Dispose() }
           Get-ChildItem -LiteralPath $out -File | ForEach-Object { "{0}  {1:N0} bytes" -f $_.Name, $_.Length }
