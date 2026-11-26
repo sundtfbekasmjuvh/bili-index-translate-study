@@ -5,6 +5,7 @@ using System.IO;
 using System.Windows.Forms;
 using BiliIndexTranslate.Core.Geometry;
 using BiliIndexTranslate.App.Localization;
+using BiliIndexTranslate.App.Themes;
 
 namespace BiliIndexTranslate.App.Popup;
 
@@ -24,7 +25,8 @@ internal static class ScreenSnipOverlay
 
     public static bool IsActive => _active;
 
-    public static ScreenSnipCapture? CaptureInteractive()
+    /// <param name="log">Diagnostics sink; gets one line when the overlay is shown, naming the palette.</param>
+    public static ScreenSnipCapture? CaptureInteractive(Action<string>? log = null)
     {
         if (_active) return null;
         _active = true;
@@ -45,7 +47,7 @@ internal static class ScreenSnipOverlay
                 g.CopyFromScreen(vs.Left, vs.Top, 0, 0, vs.Size, CopyPixelOperation.SourceCopy);
             }
 
-            using var dialog = new SnipForm(frozenScreen, vs);
+            using var dialog = new SnipForm(frozenScreen, vs, ThemeManager.SystemHighContrast(), log);
             var dr = dialog.ShowDialog();
             if (dr != DialogResult.OK || dialog.SelectedLocalRect is not { } localRect)
                 return null;
@@ -120,12 +122,17 @@ internal static class ScreenSnipOverlay
         private Point _start;
         private Point _current;
         private bool _dragging;
+        private readonly bool _highContrast;
+        private readonly Action<string>? _log;
 
         public Rectangle? SelectedLocalRect { get; private set; }
 
-        public SnipForm(Bitmap frozen, Rectangle virtualScreen)
+        /// <param name="highContrast">Decided once when the overlay is created: system colors instead of the fixed palette.</param>
+        public SnipForm(Bitmap frozen, Rectangle virtualScreen, bool highContrast, Action<string>? log)
         {
             _frozen = frozen;
+            _highContrast = highContrast;
+            _log = log;
             AutoScaleMode = AutoScaleMode.None;
             FormBorderStyle = FormBorderStyle.None;
             StartPosition = FormStartPosition.Manual;
@@ -142,6 +149,13 @@ internal static class ScreenSnipOverlay
         {
             base.OnShown(e);
             Activate();
+            _log?.Invoke(_highContrast ? "snip overlay shown (high contrast)" : "snip overlay shown");
+        }
+
+        protected override void OnFormClosed(FormClosedEventArgs e)
+        {
+            base.OnFormClosed(e);
+            _log?.Invoke("snip overlay closed");
         }
 
         protected override void OnKeyDown(KeyEventArgs e)
@@ -212,11 +226,11 @@ internal static class ScreenSnipOverlay
 
                 if (sel.Width > 1 && sel.Height > 1)
                 {
-                    using var borderPen = new Pen(Color.FromArgb(255, 59, 130, 246), 2f);
+                    using var borderPen = _highContrast ? new Pen(SystemColors.Highlight, 3f) : new Pen(Color.FromArgb(255, 59, 130, 246), 2f);
                     g.DrawRectangle(borderPen, sel.X, sel.Y, sel.Width - 1, sel.Height - 1);
 
                     var label = Loc.T("Snip_Release", sel.Width, sel.Height);
-                    DrawPill(g, label, sel.X, Math.Max(8, sel.Y - 30));
+                    DrawPill(g, _highContrast, label, sel.X, Math.Max(8, sel.Y - 30));
                 }
             }
             else
@@ -225,20 +239,21 @@ internal static class ScreenSnipOverlay
                 var primary = Screen.PrimaryScreen?.Bounds ?? new Rectangle(0, 0, Width, Height);
                 var localCenterX = primary.Left - Left + primary.Width / 2;
                 var localTopY = primary.Top - Top + 28;
-                DrawPill(g, Loc.T("Snip_Hint"), localCenterX - 210, localTopY);
+                DrawPill(g, _highContrast, Loc.T("Snip_Hint"), localCenterX - 210, localTopY);
             }
         }
 
-        private static void DrawPill(Graphics g, string text, int x, int y)
+        private static void DrawPill(Graphics g, bool highContrast, string text, int x, int y)
         {
             using var font = new Font("Microsoft YaHei UI", 9.5f, FontStyle.Regular, GraphicsUnit.Point);
             var size = TextRenderer.MeasureText(g, text, font);
             var box = new Rectangle(Math.Max(8, x), Math.Max(8, y), size.Width + 20, size.Height + 10);
-            using var bg = new SolidBrush(Color.FromArgb(216, 15, 23, 42));
+            // High contrast: opaque Window fill, WindowText border and text. Otherwise the fixed translucent dark pill.
+            using var bg = new SolidBrush(highContrast ? SystemColors.Window : Color.FromArgb(216, 15, 23, 42));
             g.FillRectangle(bg, box);
-            using var border = new Pen(Color.FromArgb(64, 255, 255, 255), 1f);
+            using var border = new Pen(highContrast ? SystemColors.WindowText : Color.FromArgb(64, 255, 255, 255), 1f);
             g.DrawRectangle(border, box);
-            TextRenderer.DrawText(g, text, font, new Point(box.X + 10, box.Y + 5), Color.FromArgb(248, 250, 252));
+            TextRenderer.DrawText(g, text, font, new Point(box.X + 10, box.Y + 5), highContrast ? SystemColors.WindowText : Color.FromArgb(248, 250, 252));
         }
 
         private static Rectangle BuildRect(Point a, Point b)

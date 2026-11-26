@@ -4,7 +4,7 @@
     Windows high contrast. Same keys as Light.xaml / Dark.xaml, but every color is a system color (DynamicResource, so a
     change of the high-contrast scheme updates open windows). Rules: text is WindowText on Window; borders and dividers
     are WindowText so they stay visible; accents are HotTrack (the system's link color, made for Window); no fills that
-    only differ slightly from the background, so hover/pressed/soft fills are Window and no shadow is drawn.
+    only differ slightly from the background, so soft fills are Window and no shadow is drawn; hover/pressed use Highlight with HighlightText.
     Selected-state fills (Highlight) are used only with HighlightText.
   -->
   <SolidColorBrush x:Key="Popup.Surface" Color="{DynamicResource {x:Static SystemColors.WindowColorKey}}" />
@@ -18,8 +18,10 @@
   <SolidColorBrush x:Key="Popup.Accent" Color="{DynamicResource {x:Static SystemColors.HotTrackColorKey}}" />
   <SolidColorBrush x:Key="Popup.AccentSoft" Color="{DynamicResource {x:Static SystemColors.WindowColorKey}}" />
   <SolidColorBrush x:Key="Popup.Error" Color="{DynamicResource {x:Static SystemColors.WindowTextColorKey}}" />
-  <SolidColorBrush x:Key="Popup.Hover" Color="{DynamicResource {x:Static SystemColors.WindowColorKey}}" />
-  <SolidColorBrush x:Key="Popup.Pressed" Color="{DynamicResource {x:Static SystemColors.WindowColorKey}}" />
+  <!-- Hover and pressed: the Windows convention, Highlight fill with HighlightText (also the loading placeholder bars, which stay visible). -->
+  <SolidColorBrush x:Key="Popup.Hover" Color="{DynamicResource {x:Static SystemColors.HighlightColorKey}}" />
+  <SolidColorBrush x:Key="Popup.Pressed" Color="{DynamicResource {x:Static SystemColors.HighlightColorKey}}" />
+  <SolidColorBrush x:Key="Popup.HoverText" Color="{DynamicResource {x:Static SystemColors.HighlightTextColorKey}}" />
   <SolidColorBrush x:Key="Popup.ScrollThumb" Color="{DynamicResource {x:Static SystemColors.WindowTextColorKey}}" />
   <SolidColorBrush x:Key="Popup.PinnedBorder" Color="{DynamicResource {x:Static SystemColors.HotTrackColorKey}}" />
   <Color x:Key="Popup.ShadowColor">#000000</Color>
@@ -33,6 +35,9 @@
   <!-- Primary button: Highlight with HighlightText, the system's selected pair. -->
   <SolidColorBrush x:Key="Ui.Accent" Color="{DynamicResource {x:Static SystemColors.HighlightColorKey}}" />
   <SolidColorBrush x:Key="Ui.AccentText" Color="{DynamicResource {x:Static SystemColors.HighlightTextColorKey}}" />
+  <!-- Primary button is already Highlight, so its hover swaps to HotTrack with Window text. -->
+  <SolidColorBrush x:Key="Ui.AccentHover" Color="{DynamicResource {x:Static SystemColors.HotTrackColorKey}}" />
+  <SolidColorBrush x:Key="Ui.AccentHoverText" Color="{DynamicResource {x:Static SystemColors.WindowColorKey}}" />
   <SolidColorBrush x:Key="Ui.Control" Color="{DynamicResource {x:Static SystemColors.WindowColorKey}}" />
   <SolidColorBrush x:Key="Ui.Success" Color="{DynamicResource {x:Static SystemColors.WindowTextColorKey}}" />
   <SolidColorBrush x:Key="Ui.Error" Color="{DynamicResource {x:Static SystemColors.WindowTextColorKey}}" />

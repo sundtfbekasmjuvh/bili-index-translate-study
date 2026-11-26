@@ -89,7 +89,7 @@ It works with any API format and sends no request at all.
 ## Accessibility
 
 When Windows high contrast is on, the card and the app's windows use the system's high-contrast colors and
-follow the setting while the app runs. Screen readers announce the final translation (and error messages)
+follow the setting while the app runs; hovered and pressed buttons use the Highlight colors, and the screen snip overlay draws with system colors too. Screen readers announce the final translation (and error messages)
 when it appears; text still streaming in is not announced.
 
 ## Settings (tray → Settings…)

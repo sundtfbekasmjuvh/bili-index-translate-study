@@ -13,6 +13,8 @@
   <SolidColorBrush x:Key="Popup.Error" Color="#E08A7B" />
   <SolidColorBrush x:Key="Popup.Hover" Color="#36312D" />
   <SolidColorBrush x:Key="Popup.Pressed" Color="#403A35" />
+  <!-- Text color while hovered/pressed: same as Popup.Text here (high contrast uses HighlightText on its Highlight fill). -->
+  <SolidColorBrush x:Key="Popup.HoverText" Color="#EAE5DE" />
   <SolidColorBrush x:Key="Popup.ScrollThumb" Color="#5A534C" />
   <SolidColorBrush x:Key="Popup.PinnedBorder" Color="#6B4F42" />
   <Color x:Key="Popup.ShadowColor">#000000</Color>
@@ -25,6 +27,9 @@
   <SolidColorBrush x:Key="Ui.Border" Color="#443E39" />
   <SolidColorBrush x:Key="Ui.Accent" Color="#E09A75" />
   <SolidColorBrush x:Key="Ui.AccentText" Color="#1E1B19" />
+  <!-- Primary button hover fill and text: same as Ui.Accent / Ui.AccentText here (the 0.9 opacity stays the hover cue). -->
+  <SolidColorBrush x:Key="Ui.AccentHover" Color="#E09A75" />
+  <SolidColorBrush x:Key="Ui.AccentHoverText" Color="#1E1B19" />
   <SolidColorBrush x:Key="Ui.Control" Color="#312D2A" />
   <SolidColorBrush x:Key="Ui.Success" Color="#8CC49A" />
   <SolidColorBrush x:Key="Ui.Error" Color="#E08A7B" />
