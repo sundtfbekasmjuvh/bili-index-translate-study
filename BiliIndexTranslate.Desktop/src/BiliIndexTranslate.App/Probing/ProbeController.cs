@@ -22,6 +22,8 @@ internal sealed class ProbeController : IDisposable
     private const int ProbeWatchdogMs = 2500;
     private const int ClipboardWatchdogMs = 1500;
     private const int RefreshWatchdogMs = 1000;
+    /// <summary>An automatic probe that ends this soon after a selection key counts as answering that key.</summary>
+    private const int SelectionKeyWindowMs = 3000;
 
     private readonly DiagnosticsLog _log;
     private readonly AppSupportRegistry _registry;
@@ -40,6 +42,7 @@ internal sealed class ProbeController : IDisposable
     private string? _pendingClipboardText;
     private PxPoint _lastPointer;
     private long _lastPointerTick;
+    private long _lastSelectionKeyTick;
 
     /// <param name="settings">The current settings (read at each use).</param>
     /// <param name="tracker">The source window tracker (created after the observer, so it is read at each use).</param>
@@ -74,6 +77,12 @@ internal sealed class ProbeController : IDisposable
         _lastPointer = point;
         _lastPointerTick = Environment.TickCount64;
     }
+
+    /// <summary>
+    /// A selection key (Shift+arrows, Ctrl+A) was released. If the automatic probe it leads to finds no selection,
+    /// one log line says so; otherwise a keyboard selection that shows no card leaves no trace in the log.
+    /// </summary>
+    public void NoteSelectionKey() => _lastSelectionKeyTick = Environment.TickCount64;
 
     /// <summary>The next probe uses this text (tray "translate the clipboard") instead of asking UI Automation.</summary>
     public void SetPendingClipboardText(string text) => _pendingClipboardText = text;
@@ -144,6 +153,9 @@ internal sealed class ProbeController : IDisposable
     {
         if (probeId != _probeId) { _log.Info("probe", $"late result #{probeId} ignored"); return; }
         var explicitRequest = _probeMode == ProbeMode.Explicit;
+        var afterSelectionKey = !explicitRequest && _lastSelectionKeyTick != 0
+            && Environment.TickCount64 - _lastSelectionKeyTick <= SelectionKeyWindowMs;
+        if (!explicitRequest) _lastSelectionKeyTick = 0;
 
         if (outcome is ProbeOutcome.Selected sel)
         {
@@ -166,8 +178,16 @@ internal sealed class ProbeController : IDisposable
 
         _probeWatchdog.Stop();
         _probeId = 0;
+        if (afterSelectionKey && outcome is ProbeOutcome.NoSelection) LogNoSelectionAfterKey();
         RecordOutcome(outcome);
         _dispatch(new SessionEvent.ProbeCompleted(probeId, outcome));
+    }
+
+    private void LogNoSelectionAfterKey()
+    {
+        var pid = NativeMethods.ProcessIdOf(NativeMethods.GetForegroundWindow());
+        if (pid == Environment.ProcessId) return;
+        _log.Info("probe", $"{ProcessInfo.NameOf(pid)}: no selection found after a selection key");
     }
 
     private async Task RunClipboardFallbackAsync(long probeId)

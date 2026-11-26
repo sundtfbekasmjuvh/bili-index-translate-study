@@ -33,6 +33,27 @@ public class InputAndClipboardTests
     }
 
     [Fact]
+    public void Selection_key_that_selects_nothing_leaves_a_log_line()
+    {
+        // Shift+Left with the caret at the start selects nothing, yet releasing Shift is a selection gesture.
+        // The automatic probe then finds no selection; that used to leave no trace in the log.
+        using var ui = new UiSession(Name(), uiaSelectionEvents: false);
+        ui.Guard(() =>
+        {
+            ui.PressShiftLeftAtStart();
+            var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+            while (DateTime.UtcNow < deadline && !ui.DiagnosticsLog().Contains(NoSelectionLine, StringComparison.Ordinal))
+                Thread.Sleep(100);
+
+            Assert.Contains(NoSelectionLine, ui.DiagnosticsLog(), StringComparison.Ordinal);
+            Assert.False(ui.CardVisible());
+            Assert.Empty(ui.Mock.ChatRequests);
+        });
+    }
+
+    private const string NoSelectionLine = "no selection found after a selection key";
+
+    [Fact]
     public void Hotkey_uses_clipboard_fallback_and_restores_the_previous_clipboard_text()
     {
         using var ui = new UiSession(Name(), hotkeyEnabled: true);

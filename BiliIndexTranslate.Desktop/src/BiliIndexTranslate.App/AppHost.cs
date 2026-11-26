@@ -448,6 +448,7 @@ internal sealed class AppHost : IDisposable
                 break;
 
             case InputSignal.KeyUpSelection:
+                _probes.NoteSelectionKey();
                 _triggerTimestamp = Stopwatch.GetTimestamp();
                 Dispatch(new SessionEvent.TriggerReceived(TriggerKind.KeyUp));
                 break;
