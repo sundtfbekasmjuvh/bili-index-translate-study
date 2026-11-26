@@ -15,12 +15,12 @@
 | 目录 | 说明 | 状态 |
 |---|---|---|
 | [`bili-index-translate/`](bili-index-translate/) | **Chrome / Edge / Brave / Arc 浏览器扩展（Manifest V3）**：MV3 原生直连 + `Alt+S` 零 OCR 识图框选/右键图片直译 + `Alt+A` 视口流式双语对照 + `instTrans` 动态术语表 + 划词与伴随语言学习卡片 | 可直接加载未打包扩展或下载 Release ZIP |
-| [`BiliIndexTranslate.Desktop/`](BiliIndexTranslate.Desktop/) | **Windows 桌面全局划词与屏幕识图端（C# / .NET 10, WPF + UI Automation）**：跨应用非抢焦点浮窗翻译 + `Alt+Shift+S` 跨屏冻结框选识图直译/剪贴板截图直译 + `instTrans` 术语表 + 伴随学习卡片 | `0 warnings` 编译通过，`263/263` xUnit 核心单测通过（见 [`BiliIndexTranslate.Desktop/README.md`](BiliIndexTranslate.Desktop/README.md)） |
+| [`BiliIndexTranslate.Desktop/`](BiliIndexTranslate.Desktop/) | **Windows 桌面全局划词与屏幕识图端（C# / .NET 10, WPF + UI Automation）**：跨应用非抢焦点浮窗翻译 + `Alt+Shift+S` 跨屏冻结框选识图直译/剪贴板截图直译 + `instTrans` 术语表 + 伴随学习卡片 | `0 warnings` 编译通过，`431/431` xUnit 核心单测通过（见 [`BiliIndexTranslate.Desktop/README.md`](BiliIndexTranslate.Desktop/README.md)） |
 | [`bili-study-sandbox/`](bili-study-sandbox/) | **零依赖本地浏览器预览沙盒（Node.js 标准库）**：无需重载扩展即可在本地 `http://localhost:3001` 实时体验划词、学习卡片、`Alt+S` 画布框选识图、术语表与 `Alt+A` 双语对照 | 运行 `node bili-study-sandbox/server.js` 即可启动，默认只监听 `127.0.0.1` |
 
 ---
 
-## 核心特性（v1.5.0 多模态全能旗舰版）
+## 核心特性（v1.6.0 多模态全能旗舰版）
 
 ### 1. Zero-OCR 多模态识图框选直译 + 学习卡片全闭环（Chrome `Alt+S` / Windows `Alt+Shift+S`）
 - **突破不可选中像素边界**：无需外接任何第三方 OCR 引擎，直接调用 `Index-Translate-35B-A3B` 旗舰 MoE 视觉多模态能力，一气呵成读懂**生肉漫画气泡、论文扫描图、架构示意图、游戏外语 UI 以及 YouTube/B 站暂停视频硬字幕帧**。35B-A3B 首字比 2B/9B 慢，但译文和回填原文最完整（2B 不回填原文，2B 和 9B 在日文与多行样例中会重复句子），实测数据见下方「识图速度实测」。
@@ -64,10 +64,10 @@
 
 ## 快速安装指南
 
-1. **Chrome / Edge 浏览器扩展**：下载 Release 中的 `bili-index-translate-chrome-v1.5.0.zip` 解压 → 打开 `chrome://extensions` 开启右上角**开发者模式** → **加载已解压的扩展程序** 选择 `bili-index-translate/` 目录。
+1. **Chrome / Edge 浏览器扩展**：下载 Release 中的 `bili-index-translate-chrome-v1.6.0.zip` 解压 → 打开 `chrome://extensions` 开启右上角**开发者模式** → **加载已解压的扩展程序** 选择 `bili-index-translate/` 目录。
 2. **Windows 桌面端（.NET 10 WPF）**，两种方式任选其一：
    - **安装程序（推荐）**：下载 Release 中的 `BiliIndexTranslate.Desktop-win-Setup.exe` 并运行。只为当前用户安装（不需要管理员权限），自带运行时，会创建开始菜单和桌面快捷方式，并且能自动更新（设置里可关闭自动检查，也可以随时点“检查更新”）。可在 Windows 设置的“应用”里卸载。安装版会定期访问 GitHub（`api.github.com` 和 Releases 的下载地址）检查并下载更新，请求里不带任何个人信息或使用数据。
-   - **免安装 ZIP**：下载 `BiliIndexTranslate-Desktop-win-x64-selfcontained-v1.5.0.zip`（自带运行时单文件版）或 `BiliIndexTranslate-Desktop-win-x64-v1.5.0.zip`（轻量版），解压运行 `BiliIndexTranslate.exe`。免安装版不会检查更新，请从 GitHub 下载新版本。
+   - **免安装 ZIP**：下载 `BiliIndexTranslate-Desktop-win-x64-selfcontained-v1.6.0.zip`（自带运行时单文件版）或 `BiliIndexTranslate-Desktop-win-x64-v1.6.0.zip`（轻量版），解压运行 `BiliIndexTranslate.exe`。免安装版不会检查更新，请从 GitHub 下载新版本。
 3. **本地预览沙盒**：运行 `node bili-study-sandbox/server.js` 并访问 `http://localhost:3001`。
    沙盒默认只监听本机 `127.0.0.1`，并且只应答用本机名字（`localhost`、`127.0.0.1`）寻址、由沙盒页面自己发出的请求；确需局域网访问时设置环境变量 `HOST=0.0.0.0`（此时不做这项检查；注意局域网里任何人都能通过它使用服务器上配置的 key，启动时会打印警告），端口用 `PORT` 修改。
 
