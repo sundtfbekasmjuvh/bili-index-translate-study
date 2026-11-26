@@ -244,6 +244,14 @@ internal sealed class AppHost : IDisposable
 
         _log.Info("app", $"ready · auto={_settings.AutoTranslate} delay={_settings.StabilizationDelayMs}ms target={_settings.TargetLanguage} model={_settings.Model} relay={_settings.UseRelay}");
         if (_forceWelcome || !_settings.OnboardingCompleted) OpenWelcome(force: false);
+
+        // Prepare the card window once the start-up work is done, so the first selection does not wait for it.
+        System.Windows.Threading.Dispatcher.CurrentDispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.ApplicationIdle, () =>
+        {
+            if (_disposed) return;
+            try { _popup.Prewarm(); }
+            catch (Exception ex) { _log.Warn("render", $"card window prewarm failed ({ex.GetType().Name}); it is created on first use"); }
+        });
     }
 
     // ---- session dispatch -------------------------------------------------------------------------

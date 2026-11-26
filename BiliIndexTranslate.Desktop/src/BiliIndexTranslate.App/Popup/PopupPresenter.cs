@@ -92,6 +92,25 @@ internal sealed class PopupPresenter : IDisposable
         }
     }
 
+    private bool _everShown;
+
+    /// <summary>
+    /// Creates the card window and lays it out once, ahead of the first selection (the host calls this when idle
+    /// after start-up). Otherwise the first card pays for window creation, templates and layout: about 260 ms on the
+    /// CI runner. Nothing is shown.
+    /// </summary>
+    public void Prewarm()
+    {
+        if (_window is not null) return;
+        var sw = Stopwatch.StartNew();
+        var w = Window;
+        w.ApplyTemplate();
+        w.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+        w.Arrange(new Rect(w.DesiredSize));
+        w.UpdateLayout();
+        _log.Info("render", $"card window prepared in {sw.Elapsed.TotalMilliseconds:0} ms");
+    }
+
     private StudyCardWindow StudyWindow
     {
         get
@@ -146,7 +165,11 @@ internal sealed class PopupPresenter : IDisposable
         if (_studyVisible && ReferenceEquals(_studyOwner, w)) HideStudy();
         w.ShowLoading(snapshot, caption);
         Present(snapshot.Anchor, firstShow: !_visible);
-        if (created) _log.Info("render", $"card window created and shown in {sw.Elapsed.TotalMilliseconds:0} ms");
+        if (!_everShown)
+        {
+            _everShown = true;
+            _log.Info("render", $"first card shown in {sw.Elapsed.TotalMilliseconds:0} ms ({(created ? "window created now" : "window prepared earlier")})");
+        }
     }
 
     public void ShowTranslation(SelectionSnapshot snapshot, TranslationOutcome.Success result, string? caption)
