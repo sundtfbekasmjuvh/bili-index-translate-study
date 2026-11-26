@@ -33,12 +33,30 @@ public class EdgeSelectionTests
             }
             catch (TimeoutException ex)
             {
+                var nl = Environment.NewLine;
                 _output.WriteLine("triple click gave no card (" + ex.Message + "); error card: " + (ui.ErrorText() ?? "none")
-                                  + "; chat requests so far: " + ui.Mock.ChatRequests.Count + "; falling back to Ctrl+A");
-                _output.WriteLine("app log after the triple click:" + Environment.NewLine + ui.DiagnosticsLog());
-                how = EdgeTarget.SelectByCtrlA(window);
-                _output.WriteLine("selection: " + how);
-                ui.WaitForCardText(full);
+                                  + "; chat requests so far: " + ui.Mock.ChatRequests.Count);
+                _output.WriteLine("app log after the triple click:" + nl + ui.DiagnosticsLog());
+
+                // A second triple click before anything else queries Edge: tells a one-time accessibility warm-up
+                // apart from a triple click that never produces a card.
+                how = EdgeTarget.SelectByTripleClick(window);
+                _output.WriteLine("selection: second " + how);
+                try
+                {
+                    ui.WaitForCardText(full, TimeSpan.FromSeconds(10));
+                    _output.WriteLine("second triple click gave the card; UIA seen from the test:" + nl + EdgeTarget.DescribeFocus(ui.Automation));
+                }
+                catch (TimeoutException)
+                {
+                    _output.WriteLine("second triple click gave no card either; UIA seen from the test:" + nl + EdgeTarget.DescribeFocus(ui.Automation));
+                    _output.WriteLine("falling back to Ctrl+A");
+                    how = EdgeTarget.SelectByCtrlA(window);
+                    _output.WriteLine("selection: " + how);
+                    ui.WaitForCardText(full);
+                    _output.WriteLine("Ctrl+A gave the card; UIA seen from the test:" + nl + EdgeTarget.DescribeFocus(ui.Automation));
+                }
+                _output.WriteLine("app log at the end:" + nl + ui.DiagnosticsLog());
             }
 
             Assert.NotEmpty(ui.Mock.ChatRequests);
