@@ -15,10 +15,10 @@ public class EdgeSelectionTests
 
     public EdgeSelectionTests(ITestOutputHelper output) => _output = output;
 
-    [EdgeFact]
+    [AppFact("edge")]
     public void Edge_page_selection_shows_full_card_and_escape_closes_it()
     {
-        using var ui = new UiSession(nameof(Edge_page_selection_shows_full_card_and_escape_closes_it), external: EdgeTarget.Target());
+        using var ui = new UiSession(nameof(Edge_page_selection_shows_full_card_and_escape_closes_it), external: SelectionApps.Edge.Target());
         ui.Guard(() =>
         {
             var full = MockUpstream.FullText;
@@ -26,7 +26,7 @@ public class EdgeSelectionTests
 
             // Triple click on the paragraph, as a reader would. Chromium builds its accessibility tree lazily, hence
             // the generous timeout. No keyboard fallback: the test is about the mouse path.
-            var how = EdgeTarget.SelectByTripleClick(window);
+            var how = SelectionApps.Edge.Perform(window, Gesture.TripleClick);
             _output.WriteLine("selection: " + how);
             try
             {
@@ -37,7 +37,7 @@ public class EdgeSelectionTests
                 var nl = Environment.NewLine;
                 _output.WriteLine("no card after the triple click; error card: " + (ui.ErrorText() ?? "none")
                                   + "; chat requests: " + ui.Mock.ChatRequests.Count);
-                _output.WriteLine("UIA seen from the test:" + nl + EdgeTarget.DescribeFocus(ui.Automation));
+                _output.WriteLine("UIA seen from the test:" + nl + UiaDiagnostics.DescribeFocus(ui.Automation));
                 _output.WriteLine("app log:" + nl + ui.DiagnosticsLog());
                 throw;
             }

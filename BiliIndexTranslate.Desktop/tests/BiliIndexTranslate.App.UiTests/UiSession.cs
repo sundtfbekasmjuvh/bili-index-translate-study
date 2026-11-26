@@ -31,7 +31,14 @@ public sealed class UiSession : IDisposable
     public MockUpstream Mock { get; } = new();
     public string DataDir { get; }
     public UIA3Automation Automation { get; } = new();
-    public Window TargetWindow { get; private set; } = null!;
+    private Window? _targetWindow;
+
+    /// <summary>The target's UIA window. Not available in a session whose target was found by Win32 only (cold Chromium test).</summary>
+    public Window TargetWindow => _targetWindow
+        ?? throw new InvalidOperationException("this session has no UIA target window (the target was found with Win32 only, so the test process sends no UIA request to it); use TargetHandle");
+
+    /// <summary>Top-level window handle of an external target found without UIA (zero otherwise).</summary>
+    public IntPtr TargetHandle { get; private set; }
 
     /// <summary>The app process under test (read-only use: counters, handles).</summary>
     public Process AppProcess => _app ?? throw new InvalidOperationException("app not started");
@@ -58,6 +65,8 @@ public sealed class UiSession : IDisposable
         Directory.CreateDirectory(DataDir);
         try
         {
+            // A browser or Notepad window left over from an earlier test would take the focus and the selection.
+            if (_external is not null) SelectionApps.CloseLeftovers();
             WriteSettings();
             StartTarget();
             StartApp();
@@ -105,14 +114,16 @@ public sealed class UiSession : IDisposable
         if (_external is not null)
         {
             _target = _external.Start(DataDir);
-            TargetWindow = _external.FindWindow(Automation, _target);
+            if (_external.FindWindow is not null) _targetWindow = _external.FindWindow(Automation, _target);
+            else if (_external.FindWindowWin32 is not null) TargetHandle = _external.FindWindowWin32(_target);
+            else throw new InvalidOperationException("ExternalTarget has neither FindWindow nor FindWindowWin32");
             return;
         }
         _target = Process.Start(new ProcessStartInfo(ExeLocator.Target()) { UseShellExecute = false })
                   ?? throw new InvalidOperationException("target window did not start");
         var app = FlaUI.Core.Application.Attach(_target);
-        TargetWindow = app.GetMainWindow(Automation, TimeSpan.FromSeconds(20))
-                       ?? throw new InvalidOperationException("target window did not show up");
+        _targetWindow = app.GetMainWindow(Automation, TimeSpan.FromSeconds(20))
+                        ?? throw new InvalidOperationException("target window did not show up");
     }
 
     private void StartApp()
@@ -204,14 +215,18 @@ public sealed class UiSession : IDisposable
 
     // ---- reading the card --------------------------------------------------------------------
 
-    private AutomationElement? FindInApp(string automationId)
+    /// <summary>
+    /// Element of the app's own visible top-level windows. The windows are found with Win32 and read with
+    /// Automation.FromHandle, so reading the card never enumerates the desktop through UIA (and so never touches the target).
+    /// </summary>
+    public AutomationElement? FindInApp(string automationId)
     {
         try
         {
             var cf = Automation.ConditionFactory;
-            foreach (var window in Automation.GetDesktop().FindAllChildren(cf.ByProcessId(_app!.Id)))
+            foreach (var hwnd in Win32.TopLevelWindows(_app!.Id, visibleOnly: true))
             {
-                var hit = window.FindFirstDescendant(cf.ByAutomationId(automationId));
+                var hit = Automation.FromHandle(hwnd).FindFirstDescendant(cf.ByAutomationId(automationId));
                 if (hit is not null) return hit;
             }
         }
@@ -302,8 +317,9 @@ public sealed class UiSession : IDisposable
             var dir = Path.Combine(root, "TestResults", "ui-screenshots");
             Directory.CreateDirectory(dir);
             Capture.Screen().ToFile(Path.Combine(dir, _testName + ".png"));
-            if (_external is not null)
-                File.WriteAllText(Path.Combine(dir, _testName + ".uia-tree.txt"), EdgeTarget.DumpTree(Automation, TargetWindow));
+            // Only when the session has a UIA target window: a cold session must not query its target.
+            if (_external is not null && _targetWindow is not null)
+                File.WriteAllText(Path.Combine(dir, _testName + ".uia-tree.txt"), UiaDiagnostics.DumpTree(Automation, _targetWindow));
             foreach (var log in new[] { "diagnostics.log", "crash.log", "settings.json" })
             {
                 var src = Path.Combine(DataDir, log);
@@ -323,6 +339,8 @@ public sealed class UiSession : IDisposable
     {
         Kill(_app);
         Kill(_target);
+        // The started process may only be a launcher that handed the window to another process: close the test window's owner.
+        if (_external is not null) SelectionApps.CloseLeftovers();
         Mock.Dispose();
         Automation.Dispose();
         for (var i = 0; i < 10; i++)

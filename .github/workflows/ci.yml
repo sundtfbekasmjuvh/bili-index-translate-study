@@ -86,7 +86,7 @@ jobs:
   desktop:
     name: Desktop (.NET 10, Windows)
     runs-on: windows-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     env:
       DOTNET_CLI_TELEMETRY_OPTOUT: "1"
       DOTNET_NOLOGO: "1"
@@ -112,7 +112,7 @@ jobs:
         run: dotnet test tests/BiliIndexTranslate.Core.Tests/BiliIndexTranslate.Core.Tests.csproj -c Release --no-build --logger "console;verbosity=normal" --collect:"XPlat Code Coverage" --results-directory TestResults/coverage
 
       - name: UI tests
-        timeout-minutes: 12
+        timeout-minutes: 20
         run: dotnet test tests/BiliIndexTranslate.App.UiTests/BiliIndexTranslate.App.UiTests.csproj -c Release --no-build --logger "trx;LogFileName=ui-tests.trx" --logger "console;verbosity=detailed" --results-directory TestResults
 
       # Baseline numbers (recorded only, no thresholds): job summary + artifact. Never fails the job.
@@ -159,6 +159,44 @@ jobs:
             }
             $d = $res.metrics.delta
             $md.Add(("| **delta** | {0} | {1} | {2} | {3:N1} | {4:N1} |" -f $d.handles, $d.gdiObjects, $d.userObjects, ($d.privateBytes / 1MB), ($d.workingSetBytes / 1MB)))
+          }
+
+          # App matrix: one app-matrix-<app>.json per app (warn only, never fails the step)
+          $matrixFiles = @(Get-ChildItem -Path $dir -Filter "app-matrix-*.json" -ErrorAction SilentlyContinue | Sort-Object Name)
+          if ($matrixFiles.Count -eq 0) {
+            Write-Warning "no app-matrix-*.json under $dir"
+          } else {
+            $order = @("double-click", "triple-click", "drag", "keyboard", "cold-triple-click")
+            $rows = @(); $details = @()
+            foreach ($f in $matrixFiles) {
+              try {
+                $m = Get-Content -LiteralPath $f.FullName -Raw | ConvertFrom-Json
+                $cells = foreach ($g in $order) {
+                  $e = @($m.entries) | Where-Object { $_.gesture -eq $g } | Select-Object -First 1
+                  if ($null -eq $e) { "-" } elseif ($e.result -eq "pass") { "pass ($(Ms $e.timeToCardMs) ms)" } elseif ($e.result -eq "n/a") { "n/a" } else { "FAIL" }
+                }
+                # First selection: the warm-up selection of each gesture's session (informational), as passed/total
+                $warm = @(@($m.entries) | Where-Object { $null -ne $_.firstSelection })
+                $warmOk = @($warm | Where-Object { $_.firstSelection.passed }).Count
+                $firstCell = if ($warm.Count -eq 0) { "-" } else { "$warmOk/$($warm.Count) ok" }
+                $rows += "| $($m.displayName) | $($cells -join ' | ') | $firstCell |"
+                foreach ($e in @($m.entries)) {
+                  $sel = "$($e.selectedText)" -replace "[\r\n]+", " " -replace "\|", "\|"
+                  if ($sel.Length -gt 90) { $sel = $sel.Substring(0, 90) + "..." }
+                  $err = "$($e.error)" -replace "[\r\n]+", " " -replace "\|", "\|"
+                  if ($err.Length -gt 120) { $err = $err.Substring(0, 120) + "..." }
+                  $res = if ($e.result -eq "pass") { "pass" } elseif ($e.result -eq "n/a") { "n/a" } else { "FAIL" }
+                  $fs = if ($null -eq $e.firstSelection) { "-" } elseif ($e.firstSelection.passed) { "ok ($(Ms $e.firstSelection.timeMs) ms)" } else { "failed" }
+                  $details += "| $($m.displayName) | $($e.gesture) | $res | $fs | $sel | $err |"
+                }
+              } catch { Write-Warning "$($f.Name) is unreadable: $_"; $rows += "| $($f.Name) | unreadable | | | | | |" }
+            }
+            $md.Add(""); $md.Add("### App matrix (selection gestures that produced the card)")
+            $md.Add("| App | double-click | triple-click | drag | keyboard | cold triple-click | first selection |"); $md.Add("|---|---|---|---|---|---|---|")
+            foreach ($r in $rows) { $md.Add($r) }
+            $md.Add(""); $md.Add("| App | Gesture | Result | First selection | Selected text sent | Error |"); $md.Add("|---|---|---|---|---|---|")
+            foreach ($d in $details) { $md.Add($d) }
+            $md.Add(""); $md.Add("_Time is from the end of the gesture to the full card text and includes the mock's three streamed segments (about 0.8 s). First selection = the warm-up selection (a separate line) made before each measured gesture in a freshly started program; informational, not asserted. n/a = the gesture does not exist in that program. A dash means the test did not run (program missing) or did not finish._")
           }
 
           $env1 = if ($lat) { $lat.environment } elseif ($cold) { $cold.environment } elseif ($res) { $res.environment } else { $null }
