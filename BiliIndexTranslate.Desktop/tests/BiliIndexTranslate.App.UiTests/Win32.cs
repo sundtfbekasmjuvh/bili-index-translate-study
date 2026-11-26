@@ -118,4 +118,34 @@ public static class Win32
     }
 
     public static void SetForeground(IntPtr hwnd) => SetForegroundWindow(hwnd);
+
+    /// <summary>
+    /// Kills (with child processes) every process that owns a visible top-level window whose title STARTS WITH one of the
+    /// prefixes. Only those pids, never programs by name: the tests also run on people's own machines.
+    /// </summary>
+    public static int KillWindowOwners(IEnumerable<string> titlePrefixes)
+    {
+        var prefixes = titlePrefixes.ToArray();
+        var pids = new HashSet<uint>();
+        EnumWindows((h, _) =>
+        {
+            if (!IsWindowVisible(h)) return true;
+            var title = Title(h);
+            if (!prefixes.Any(p => title.StartsWith(p, StringComparison.Ordinal))) return true;
+            GetWindowThreadProcessId(h, out var pid);
+            if (pid != (uint)Environment.ProcessId) pids.Add(pid);
+            return true;
+        }, IntPtr.Zero);
+        foreach (var pid in pids)
+        {
+            try
+            {
+                using var p = System.Diagnostics.Process.GetProcessById((int)pid);
+                p.Kill(entireProcessTree: true);
+                p.WaitForExit(3000);
+            }
+            catch (Exception) { /* already gone */ }
+        }
+        return pids.Count;
+    }
 }

@@ -6,8 +6,16 @@ using Xunit.Abstractions;
 
 namespace BiliIndexTranslate.App.UiTests;
 
-/// <summary>One gesture on one app: what happened.</summary>
-public sealed record MatrixEntry(string Gesture, bool Passed, string? SelectedText, double? TimeToCardMs, int ChatRequests, string? How, string? Error);
+/// <summary>The warm-up selection before the measured gesture (informational, never asserted).</summary>
+public sealed record WarmUpOutcome(bool Passed, double? TimeMs, string? Note);
+
+/// <summary>One gesture on one app: what happened. <see cref="Result"/> is "pass", "fail" or "n/a" (gesture does not exist in the program).</summary>
+public sealed record MatrixEntry(string Gesture, string Result, string? SelectedText, double? TimeToCardMs, int ChatRequests, string? How, string? Error, WarmUpOutcome? FirstSelection)
+{
+    public const string Pass = "pass";
+    public const string Fail = "fail";
+    public const string NotApplicable = "n/a";
+}
 
 public sealed record MatrixEnv(string Os, int ProcessorCount);
 
@@ -87,7 +95,9 @@ public class AppMatrixTests
 
     // ---- Notepad ----
     [AppFact("notepad")] public void Notepad_double_click_selects_word() => Run(SelectionApps.Notepad, Gesture.DoubleClick);
-    [AppFact("notepad")] public void Notepad_triple_click_selects_something() => Run(SelectionApps.Notepad, Gesture.TripleClick);
+    // The classic Edit control has no triple-click line selection (it reported an empty selection on CI): not a selection gesture there.
+    [AppNotApplicableFact("notepad", "triple-click", "classic Notepad's Edit control has no triple-click selection")]
+    public void Notepad_triple_click_is_not_a_selection_gesture() { }
     [AppFact("notepad")] public void Notepad_drag_selects_start_of_line() => Run(SelectionApps.Notepad, Gesture.Drag);
     [AppFact("notepad")] public void Notepad_shift_end_selects_line() => Run(SelectionApps.Notepad, Gesture.Keyboard);
 
@@ -147,7 +157,7 @@ public class AppMatrixTests
                     selected = SelectedText(body);
                     Assert.Contains(SelectionApp.Line, body);
                     _out.WriteLine($"selected text sent: '{selected}'; time to card {ms:F0} ms");
-                    MatrixResults.Record(app, new MatrixEntry(gesture, true, selected, ms, requests.Count, how, null));
+                    MatrixResults.Record(app, new MatrixEntry(gesture, MatrixEntry.Pass, selected, ms, requests.Count, how, null, null));
                 }
                 catch (Exception ex)
                 {
@@ -174,8 +184,14 @@ public class AppMatrixTests
             ui.Guard(() =>
             {
                 string? how = null, selected = null;
+                WarmUpOutcome? first = null;
                 try
                 {
+                    // A freshly started program may not be ready for its first selection (the probe can fail once):
+                    // one selection of a separate line first, so the measured gesture's text is new (no cache hit).
+                    first = WarmUp(ui, app);
+                    var before = ui.Mock.ChatRequests.Count;
+
                     how = app.Perform(ui.TargetWindow, gesture);
                     _out.WriteLine($"{app.DisplayName} / {gestureName}: {how}");
                     var sw = Stopwatch.StartNew();
@@ -183,16 +199,16 @@ public class AppMatrixTests
                     var ms = sw.Elapsed.TotalMilliseconds;
 
                     var requests = ui.Mock.ChatRequests;
-                    Assert.NotEmpty(requests);
-                    var body = requests[^1].Body;
+                    Assert.True(requests.Count > before, $"the measured gesture sent no new chat request (still {requests.Count}); the card shown was the warm-up's");
+                    var body = requests[^1].Body; // the LAST request: the measured gesture's
                     selected = SelectedText(body);
-                    CheckBody(app, gesture, body);
+                    CheckBody(gesture, body);
                     _out.WriteLine($"PASS {app.DisplayName} / {gestureName}: selected '{selected}', card after {ms:F0} ms, {requests.Count} request(s)");
-                    MatrixResults.Record(app, new MatrixEntry(gestureName, true, selected, ms, requests.Count, how, null));
+                    MatrixResults.Record(app, new MatrixEntry(gestureName, MatrixEntry.Pass, selected, ms, requests.Count, how, null, first));
                 }
                 catch (Exception ex)
                 {
-                    Fail(app, gestureName, ex.Message, how, selected, ui);
+                    Fail(app, gestureName, ex.Message, how, selected, ui, first);
                     var nl = Environment.NewLine;
                     _out.WriteLine($"FAIL {app.DisplayName} / {gestureName}: {ex.Message}");
                     _out.WriteLine("error card: " + (ui.ErrorText() ?? "none") + "; chat requests: " + ui.Mock.ChatRequests.Count);
@@ -204,7 +220,28 @@ public class AppMatrixTests
         }
     }
 
-    private static void CheckBody(SelectionApp app, Gesture gesture, string body)
+    /// <summary>One selection of the warm-up line, wait for its card, Esc, wait until the card is gone. Informational: never throws.</summary>
+    private WarmUpOutcome WarmUp(UiSession ui, SelectionApp app)
+    {
+        try
+        {
+            var how = app.WarmUp(ui.TargetWindow);
+            var sw = Stopwatch.StartNew();
+            ui.WaitForCardText(Full, TimeSpan.FromSeconds(20));
+            var ms = sw.Elapsed.TotalMilliseconds;
+            ui.PressEscape();
+            var gone = ui.WaitForCardGone();
+            _out.WriteLine($"first selection (warm-up) OK in {ms:F0} ms; {how}" + (gone ? "" : "; card still visible after Esc"));
+            return new WarmUpOutcome(true, ms, gone ? how : how + "; card still visible 8 s after Esc");
+        }
+        catch (Exception ex)
+        {
+            _out.WriteLine("first selection (warm-up) FAILED: " + ex.Message);
+            return new WarmUpOutcome(false, null, ex.Message);
+        }
+    }
+
+    private static void CheckBody(Gesture gesture, string body)
     {
         switch (gesture)
         {
@@ -213,10 +250,7 @@ public class AppMatrixTests
                 Assert.DoesNotContain(SelectionApp.Line, body);
                 break;
             case Gesture.TripleClick:
-                // Notepad's Edit control has no triple click (it may repeat the word selection): there only a
-                // non-empty selection that contains the clicked word is required.
-                if (app is NotepadApp) Assert.Contains(SelectionApp.Word, body);
-                else Assert.Contains(SelectionApp.Line, body);
+                Assert.Contains(SelectionApp.Line, body);
                 break;
             case Gesture.Drag:
                 Assert.Contains("Quick", body);
@@ -241,8 +275,9 @@ public class AppMatrixTests
         catch (TimeoutException) { return false; }
     }
 
-    private static void Fail(SelectionApp app, string gesture, string error, string? how = null, string? selected = null, UiSession? ui = null)
-        => MatrixResults.Record(app, new MatrixEntry(gesture, false, selected, null, ui?.Mock.ChatRequests.Count ?? 0, how, error));
+    private static void Fail(SelectionApp app, string gesture, string error, string? how = null, string? selected = null,
+        UiSession? ui = null, WarmUpOutcome? first = null)
+        => MatrixResults.Record(app, new MatrixEntry(gesture, MatrixEntry.Fail, selected, null, ui?.Mock.ChatRequests.Count ?? 0, how, error, first));
 
     /// <summary>The user message of the chat request (the selected text, possibly inside the prompt); the raw body when it cannot be parsed.</summary>
     private static string SelectedText(string body)

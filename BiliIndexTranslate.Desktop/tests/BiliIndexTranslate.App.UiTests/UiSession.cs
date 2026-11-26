@@ -65,6 +65,8 @@ public sealed class UiSession : IDisposable
         Directory.CreateDirectory(DataDir);
         try
         {
+            // A browser or Notepad window left over from an earlier test would take the focus and the selection.
+            if (_external is not null) SelectionApps.CloseLeftovers();
             WriteSettings();
             StartTarget();
             StartApp();
@@ -337,6 +339,8 @@ public sealed class UiSession : IDisposable
     {
         Kill(_app);
         Kill(_target);
+        // The started process may only be a launcher that handed the window to another process: close the test window's owner.
+        if (_external is not null) SelectionApps.CloseLeftovers();
         Mock.Dispose();
         Automation.Dispose();
         for (var i = 0; i < 10; i++)

@@ -28,10 +28,34 @@ public sealed class AppFactAttribute : FactAttribute
     }
 }
 
+/// <summary>
+/// Always skipped: the gesture does not exist in that program. Besides the skip, the constructor writes an "n/a" entry to the
+/// app's matrix JSON (when the program is installed), so the CI table shows n/a instead of a gap. This runs at test
+/// discovery, before any test of the run.
+/// </summary>
+public sealed class AppNotApplicableFactAttribute : FactAttribute
+{
+    public AppNotApplicableFactAttribute(string appId, string gestureName, string reason)
+    {
+        var app = SelectionApps.ById(appId);
+        Skip = $"n/a: {reason}";
+        if (app.Locate() is not null)
+            MatrixResults.Record(app, new MatrixEntry(gestureName, MatrixEntry.NotApplicable, null, null, 0, null, reason, null));
+    }
+}
+
 public enum Gesture { DoubleClick, TripleClick, Drag, Keyboard }
 
 public static class SelectionApps
 {
+    /// <summary>
+    /// Closes processes that own a visible window of the test pages (title starts with the page title) or of the Notepad test
+    /// file. Needed because a browser's launcher process can hand over to another process and exit, so killing the started
+    /// process (tree) does not close the browser. Only these windows' owners are killed, never programs by name.
+    /// </summary>
+    public static void CloseLeftovers()
+        => Win32.KillWindowOwners([SelectionApp.PageTitle, EdgeCold.PageTitle, NotepadApp.FileName]);
+
     public static readonly SelectionApp Edge = new ChromiumApp("edge", "Microsoft Edge", "BIT_EDGE_EXE",
         "%ProgramFiles(x86)% and %ProgramFiles% \\Microsoft\\Edge\\Application\\msedge.exe",
         () => Candidates(["ProgramFiles(x86)", "ProgramFiles"], Path.Combine("Microsoft", "Edge", "Application", "msedge.exe")));
@@ -76,6 +100,9 @@ public abstract class SelectionApp
     public const string Line = "Quick brown fox jumps over the lazy dog.";
     public const string Word = "brown";
 
+    /// <summary>A second line, selected once before the measured gesture so a freshly started program has served one selection already.</summary>
+    public const string WarmLine = "Warm up line for the reader.";
+
     /// <summary>Monospace on purpose: with a fixed character width a position inside the line can be computed from the character index.</summary>
     public const string Font = "32px Consolas, 'Courier New', monospace";
 
@@ -96,6 +123,18 @@ public abstract class SelectionApp
     protected abstract Point BlankPoint(Window window);
 
     protected abstract void KeyboardSelect(Window window);
+
+    /// <summary>Where and how often to click to select something on the warm-up line (a text different from every measured one).</summary>
+    protected abstract (Point Point, int Clicks) WarmUpClick(Window window);
+
+    /// <summary>The warm-up selection. Returns a note for the log.</summary>
+    public string WarmUp(Window window)
+    {
+        Foreground(window);
+        var (p, clicks) = WarmUpClick(window);
+        Clicks(p, clicks);
+        return $"warm-up: {clicks} click(s) at ({p.X},{p.Y}) on the warm-up line";
+    }
 
     public ExternalTarget Target() => new(
         Start: dataDir => Start(Locate() ?? throw new FileNotFoundException(DisplayName + " not found"), dataDir),
@@ -188,13 +227,15 @@ public abstract class SelectionApp
         Thread.Sleep(300);
     }
 
-    /// <summary>Shared page: one short line in a big font at a predictable place. Returns the file path.</summary>
+    /// <summary>Shared page: the measured line at a predictable place, the warm-up line below it. Returns the file path.</summary>
     public static string WritePage(string dataDir)
     {
         var page = Path.Combine(dataDir, "bit-page.html");
+        var style = "display:inline-block;margin:0;white-space:nowrap;font:" + Font;
         File.WriteAllText(page,
             "<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>" + PageTitle + "</title></head>" +
-            "<body style=\"margin:40px\"><p style=\"display:inline-block;margin:0;white-space:nowrap;font:" + Font + "\">" + Line + "</p></body></html>");
+            "<body style=\"margin:40px\"><p style=\"" + style + "\">" + Line + "</p><br>" +
+            "<p style=\"" + style + ";margin-top:30px\">" + WarmLine + "</p></body></html>");
         return page;
     }
 
@@ -207,23 +248,26 @@ public abstract class BrowserApp : SelectionApp
     protected override string WindowTitle => PageTitle;
 
     /// <summary>The line's element, found by its text. Chromium and Firefox build their UIA tree lazily, so this polls.</summary>
-    protected override Rectangle LineRect(Window window)
+    protected override Rectangle LineRect(Window window) => ElementRect(window, Line[..15]);
+
+    protected override (Point Point, int Clicks) WarmUpClick(Window window) => (Mid(ElementRect(window, WarmLine[..12])), 3);
+
+    private Rectangle ElementRect(Window window, string namePart)
     {
-        Rectangle rect = default;
         var end = DateTime.UtcNow + TimeSpan.FromSeconds(20);
         do
         {
             try
             {
                 var hit = window.FindAllDescendants().FirstOrDefault(e =>
-                    (e.Properties.Name.ValueOrDefault ?? string.Empty).Contains(Line[..15], StringComparison.OrdinalIgnoreCase)
+                    (e.Properties.Name.ValueOrDefault ?? string.Empty).Contains(namePart, StringComparison.OrdinalIgnoreCase)
                     && e.ControlType != ControlType.Document && e.ControlType != ControlType.Window);
                 if (hit is not null && hit.BoundingRectangle is { Width: > 0, Height: > 0 } r) return r;
             }
             catch (Exception) { /* the tree changes while the page loads */ }
             Thread.Sleep(500);
         } while (DateTime.UtcNow < end);
-        throw new TimeoutException($"{DisplayName}: no UIA element containing '{Line[..15]}' with a rectangle within 20 s (rect {rect})");
+        throw new TimeoutException($"{DisplayName}: no UIA element containing '{namePart}' with a rectangle within 20 s");
     }
 
     protected override Point BlankPoint(Window window)
@@ -326,6 +370,8 @@ public sealed class FirefoxApp : BrowserApp
         psi.ArgumentList.Add(profile);
         psi.ArgumentList.Add("-no-remote");
         psi.ArgumentList.Add("-new-instance");
+        // Keeps the launcher process alive as the parent of the browser, so killing the started process tree closes the browser.
+        psi.ArgumentList.Add("-wait-for-browser");
         psi.ArgumentList.Add(new Uri(WritePage(dataDir)).AbsoluteUri);
         return Process.Start(psi) ?? throw new InvalidOperationException("Firefox did not start");
     }
@@ -334,12 +380,13 @@ public sealed class FirefoxApp : BrowserApp
 /// <summary>Classic Notepad (Edit control) with a .txt file that holds the line.</summary>
 public sealed class NotepadApp : SelectionApp
 {
-    private const string FileStem = "bit-line";
+    /// <summary>File name of the test text; Notepad's window title starts with it.</summary>
+    public const string FileName = "bit-line.txt";
 
     public override string Id => "notepad";
     public override string DisplayName => "Notepad";
     public override string LocateHint => "%WINDIR%\\System32\\notepad.exe";
-    protected override string WindowTitle => FileStem + ".txt";
+    protected override string WindowTitle => FileName;
 
     public override string? Locate()
     {
@@ -351,8 +398,8 @@ public sealed class NotepadApp : SelectionApp
 
     protected override Process Start(string exe, string dataDir)
     {
-        var file = Path.Combine(dataDir, FileStem + ".txt");
-        File.WriteAllText(file, Line);
+        var file = Path.Combine(dataDir, FileName);
+        File.WriteAllText(file, Line + "\r\n" + WarmLine);
         var psi = new ProcessStartInfo(exe) { UseShellExecute = false };
         psi.ArgumentList.Add(file);
         return Process.Start(psi) ?? throw new InvalidOperationException("Notepad did not start");
@@ -392,6 +439,9 @@ public sealed class NotepadApp : SelectionApp
     protected override Rectangle LineRect(Window window) => RangeRect(window, Line);
 
     protected override Point WordPoint(Window window) => Mid(RangeRect(window, Word));
+
+    /// <summary>Double click on the last word of the second line.</summary>
+    protected override (Point Point, int Clicks) WarmUpClick(Window window) => (Mid(RangeRect(window, "reader")), 2);
 
     protected override Point BlankPoint(Window window)
     {

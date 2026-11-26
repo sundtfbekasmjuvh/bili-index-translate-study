@@ -173,25 +173,30 @@ jobs:
                 $m = Get-Content -LiteralPath $f.FullName -Raw | ConvertFrom-Json
                 $cells = foreach ($g in $order) {
                   $e = @($m.entries) | Where-Object { $_.gesture -eq $g } | Select-Object -First 1
-                  if ($null -eq $e) { "-" } elseif ($e.passed) { "pass ($(Ms $e.timeToCardMs) ms)" } else { "FAIL" }
+                  if ($null -eq $e) { "-" } elseif ($e.result -eq "pass") { "pass ($(Ms $e.timeToCardMs) ms)" } elseif ($e.result -eq "n/a") { "n/a" } else { "FAIL" }
                 }
-                $rows += "| $($m.displayName) | $($cells -join ' | ') |"
+                # First selection: the warm-up selection of each gesture's session (informational), as passed/total
+                $warm = @(@($m.entries) | Where-Object { $null -ne $_.firstSelection })
+                $warmOk = @($warm | Where-Object { $_.firstSelection.passed }).Count
+                $firstCell = if ($warm.Count -eq 0) { "-" } else { "$warmOk/$($warm.Count) ok" }
+                $rows += "| $($m.displayName) | $($cells -join ' | ') | $firstCell |"
                 foreach ($e in @($m.entries)) {
                   $sel = "$($e.selectedText)" -replace "[\r\n]+", " " -replace "\|", "\|"
                   if ($sel.Length -gt 90) { $sel = $sel.Substring(0, 90) + "..." }
                   $err = "$($e.error)" -replace "[\r\n]+", " " -replace "\|", "\|"
                   if ($err.Length -gt 120) { $err = $err.Substring(0, 120) + "..." }
-                  $res = if ($e.passed) { "pass" } else { "FAIL" }
-                  $details += "| $($m.displayName) | $($e.gesture) | $res | $sel | $err |"
+                  $res = if ($e.result -eq "pass") { "pass" } elseif ($e.result -eq "n/a") { "n/a" } else { "FAIL" }
+                  $fs = if ($null -eq $e.firstSelection) { "-" } elseif ($e.firstSelection.passed) { "ok ($(Ms $e.firstSelection.timeMs) ms)" } else { "failed" }
+                  $details += "| $($m.displayName) | $($e.gesture) | $res | $fs | $sel | $err |"
                 }
-              } catch { Write-Warning "$($f.Name) is unreadable: $_"; $rows += "| $($f.Name) | unreadable | | | | |" }
+              } catch { Write-Warning "$($f.Name) is unreadable: $_"; $rows += "| $($f.Name) | unreadable | | | | | |" }
             }
             $md.Add(""); $md.Add("### App matrix (selection gestures that produced the card)")
-            $md.Add("| App | double-click | triple-click | drag | keyboard | cold triple-click |"); $md.Add("|---|---|---|---|---|---|")
+            $md.Add("| App | double-click | triple-click | drag | keyboard | cold triple-click | first selection |"); $md.Add("|---|---|---|---|---|---|---|")
             foreach ($r in $rows) { $md.Add($r) }
-            $md.Add(""); $md.Add("| App | Gesture | Result | Selected text sent | Error |"); $md.Add("|---|---|---|---|---|")
+            $md.Add(""); $md.Add("| App | Gesture | Result | First selection | Selected text sent | Error |"); $md.Add("|---|---|---|---|---|---|")
             foreach ($d in $details) { $md.Add($d) }
-            $md.Add(""); $md.Add("_Time is from the end of the gesture to the full card text and includes the mock's three streamed segments (about 0.8 s). A dash means the test did not run (program missing) or did not finish._")
+            $md.Add(""); $md.Add("_Time is from the end of the gesture to the full card text and includes the mock's three streamed segments (about 0.8 s). First selection = the warm-up selection (a separate line) made before each measured gesture in a freshly started program; informational, not asserted. n/a = the gesture does not exist in that program. A dash means the test did not run (program missing) or did not finish._")
           }
 
           $env1 = if ($lat) { $lat.environment } elseif ($cold) { $cold.environment } elseif ($res) { $res.environment } else { $null }
