@@ -265,6 +265,7 @@ mutex, so a running copy of the app on the same machine does not interfere.
 | 2 | `Card_fills_in_while_streaming` | at least one state with only part of the text, and the caption (`Caption`) shows "streaming" |
 | 3 | `Same_selection_again_is_served_from_the_cache` | after Esc, a click and a new Ctrl+A, the card shows the complete text from its first frame and the mock sees no second request |
 | 4 | `Http_412_shows_an_error_card` | mock answers 412 → error card whose text contains `412` |
+| 5 | `Edge_page_selection_shows_full_card_and_escape_closes_it` (`EdgeSelectionTests`) | Microsoft Edge (own temp profile, no `--force-renderer-accessibility`) opens a local page with one `<p>`; triple click on the paragraph (raw mouse down/up: FlaUI's `Mouse.Click` deliberately avoids double clicks) → card shows the complete text, every request had `stream: true`, Esc hides the card. No keyboard fallback. The test finds the paragraph through Edge's UIA tree, which turns on Chromium's accessibility by itself, so it does not show that the app does so alone. Skipped, not failed, when `msedge.exe` is not found (`%ProgramFiles(x86)%` / `%ProgramFiles%`, or `BIT_EDGE_EXE`). The test output has the app log; when no card appears it also has the focused element and the selection as UIA reports them, and `TestResults\ui-screenshots\` gets `<test>.uia-tree.txt` (first levels of the Edge UIA tree) |
 
 The card's translation text is read from the element's UIA `HelpText` (set in `PopupWindow.ShowTranslation`),
 because its `Name` is the fixed label "Translation". Error title/message and the caption are read from their `Name`.
@@ -284,7 +285,7 @@ Core-only logic that is covered by unit tests is marked (unit).
 
 | # | Scenario | Expected | Status |
 |---|---|---|---|
-| 1 | Select a sentence in a browser | Card appears above the selection within settle delay + request time; no focus change in the browser | ◐ verified in a WPF text box (probe + card + upstream request); Chromium itself not tested |
+| 1 | Select a sentence in a browser | Card appears above the selection within settle delay + request time; no focus change in the browser | ◐ verified in a WPF text box and, since 2026-11-26, in Edge on the CI runner (triple click → probe → card with the streamed text → Esc; UI test 5). Card position and the browser keeping focus are not checked; Chrome not tested |
 | 2 | Click to clear the selection | Card hides immediately on mouse-down; no reopen on mouse-up (probe → no selection) | ⬜ (session: unit) |
 | 3 | Select A, then B while A is loading | A's request cancelled, card shows loading for B, A's late result never rendered | ⬜ (session + coordinator: unit) |
 | 4 | Dismiss while a request is pending | Card stays hidden when the response arrives | ⬜ (unit) |
@@ -308,7 +309,7 @@ Core-only logic that is covered by unit tests is marked (unit).
 | App | Mechanism expected | Status |
 |---|---|---|
 | Self-built WPF text box (test harness) | UIA TextPattern on the read-only editor | ✅ selection read in 2.4–12.7 ms, card and upstream request confirmed |
-| Chrome / Edge (web page) | UIA TextPattern on the document (Chromium exposes it when a screen reader / UIA client is active; first probe may be slow) | ⬜ not tested |
+| Chrome / Edge (web page) | UIA TextPattern on the document (Chromium exposes it when a screen reader / UIA client is active; first probe may be slow) | ◐ Edge on the `windows-latest` CI runner (UI test 5, 2026-11-26): a triple click on a paragraph is read from the document's TextPattern (`probe msedge: 80 chars, 2 line(s), 15.6 ms`), the card shows the complete text. The test had already queried Edge's UIA tree, so a cold Chromium (no other UIA client) is not covered. Chrome, drag selection and real web pages not tested |
 | Firefox | UIA TextPattern (Firefox's UIA support improved in 2024–2025 builds; older builds may be unsupported) | ⬜ not tested |
 | Notepad (Windows 11) | TextPattern on the editor control | ⬜ not tested |
 | Word | TextPattern on the document body | ⬜ not tested |
