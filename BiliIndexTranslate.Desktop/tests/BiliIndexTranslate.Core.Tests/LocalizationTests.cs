@@ -98,7 +98,10 @@ public class UiTextTests
         var files = Directory.EnumerateFiles(dir, "*.*", SearchOption.AllDirectories)
             .Where(f => (f.EndsWith(".xaml", StringComparison.Ordinal) || f.EndsWith(".cs", StringComparison.Ordinal)) && !f.Contains(Path.DirectorySeparatorChar + "obj" + Path.DirectorySeparatorChar) && !f.Contains(Path.DirectorySeparatorChar + "bin" + Path.DirectorySeparatorChar))
             .ToList();
+        // Core code that picks text by key (not UiText itself, which holds every key) counts as a user of the keys too.
+        files.Add(Path.GetFullPath(Path.Combine(dir, "..", "BiliIndexTranslate.Core", "Localization", "CardCaption.cs")));
         Assert.NotEmpty(files);
+        Assert.All(files, f => Assert.True(File.Exists(f), "missing " + f));
 
         var prefixes = string.Join("|", UiText.English.Keys.Select(k => k[..k.IndexOf('_')]).Distinct());
         var inXaml = new Regex(@"\{loc:Tr ([A-Za-z0-9_]+)\}");

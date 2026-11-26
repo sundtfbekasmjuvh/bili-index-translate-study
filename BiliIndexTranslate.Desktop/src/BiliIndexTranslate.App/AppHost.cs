@@ -3,12 +3,11 @@ using System.IO;
 using System.Text;
 using System.Windows;
 using System.Windows.Threading;
-using BiliIndexTranslate.App.Diagnostics;
+using BiliIndexTranslate.App.AppWindowing;
 using BiliIndexTranslate.App.Input;
 using BiliIndexTranslate.App.Native;
-using BiliIndexTranslate.App.Ocr;
-using BiliIndexTranslate.App.Onboarding;
 using BiliIndexTranslate.App.Popup;
+using BiliIndexTranslate.App.Probing;
 using BiliIndexTranslate.App.Settings;
 using BiliIndexTranslate.App.Themes;
 using BiliIndexTranslate.App.Tracking;
@@ -18,6 +17,7 @@ using BiliIndexTranslate.App.Updates;
 using BiliIndexTranslate.App.Vision;
 using BiliIndexTranslate.Core.Diagnostics;
 using BiliIndexTranslate.Core.Geometry;
+using BiliIndexTranslate.Core.Localization;
 using BiliIndexTranslate.Core.Selection;
 using BiliIndexTranslate.Core.Session;
 using BiliIndexTranslate.Core.Settings;
@@ -34,10 +34,6 @@ namespace BiliIndexTranslate.App;
 /// </summary>
 internal sealed class AppHost : IDisposable
 {
-    private const int ProbeWatchdogMs = 2500;
-    private const int ClipboardWatchdogMs = 1500;
-    private const int RefreshWatchdogMs = 1000;
-
     private readonly Application _app;
     private readonly Dispatcher _dispatcher;
     private readonly string _dataDir;
@@ -70,32 +66,18 @@ internal sealed class AppHost : IDisposable
     private UpdateService _updates = null!;
 
     private readonly DispatcherTimer _stabTimer = new(DispatcherPriority.Input);
-    private readonly DispatcherTimer _probeWatchdog = new(DispatcherPriority.Background);
-    private readonly DispatcherTimer _refreshWatchdog = new(DispatcherPriority.Background);
     private readonly DispatcherTimer _graceTimer = new(DispatcherPriority.Background);
-    private readonly DispatcherTimer _saveTimer = new(DispatcherPriority.Background);
 
     private long _stabTimerId;
-    private long _probeId;
-    private ProbeMode _probeMode;
-    private long _trackedSelectionId;
     private long _graceSelectionId;
-    private string? _pendingClipboardText;
-    private PxPoint _lastPointer;
-    private long _lastPointerTick;
     private long _triggerTimestamp;
     private long _requestStartTimestamp; // network requests only (not cache hits); cleared once the first text is on screen
-    private bool _anchorFromPointer;
-    private string? _lastProcessName;
-    private string? _hotkeyError;
-    private string? _snipHotkeyError;
     private VisionController _vision = null!;
+    private ProbeController _probes = null!;
+    private readonly AppWindows _windows;
+    private readonly SettingsSaver _saver;
 
-    private SettingsWindow? _settingsWindow;
-    private DiagnosticsWindow? _diagnosticsWindow;
-    private WelcomeWindow? _welcomeWindow;
     private StreamWriter? _fileLog;
-    private bool _saveFailureShown;
     private EventWaitHandle? _activateEvent;
     private RegisteredWaitHandle? _activateWait;
     private bool _started;
@@ -114,6 +96,18 @@ internal sealed class AppHost : IDisposable
         _coordinator = new TranslationCoordinator(_translator, _cache, Post, _timings, _log, maxConcurrency: 2, postPartial: PostBackground);
         _theme = new ThemeManager(app) { Log = message => _log.Info("app", "theme: " + message) };
         _monitors.Log = _log;
+        _saver = new SettingsSaver(_store, () => _settings, _log, () => _tray);
+        _windows = new AppWindows(
+            _log,
+            _timings,
+            _registry,
+            () => _settings,
+            _store.FilePath,
+            TestConnectionAsync,
+            s => ApplySettings(s, notifySession: true, notifySaveFailure: false),
+            () => _updates,
+            () => new AppStatus(_session.State, _hooks.HooksInstalled, _observer.IsAlive, _cache.Count, _cache.Hits, _cache.Misses, _coordinator.ActiveCount),
+            () => _saver.TrySave());
     }
 
     private void Post(Action action)
@@ -141,7 +135,7 @@ internal sealed class AppHost : IDisposable
         _settings = load.Settings;
         Loc.Instance.Apply(_settings.UiLanguage);
         if (load.Note is not null) _log.Info("settings", load.Note);
-        if (load.WasMigrated) { _log.Info("settings", "migrated to schema v2"); TrySave(); }
+        if (load.WasMigrated) { _log.Info("settings", "migrated to schema v2"); _saver.TrySave(); }
         ConfigureFileLogging(_settings.DiagnosticsFileLogging);
 
         _theme.Apply(_settings.Theme);
@@ -185,14 +179,15 @@ internal sealed class AppHost : IDisposable
             if (_vision.RetryLast()) return;
             Dispatch(new SessionEvent.UserRetry());
         };
-        _popup.SettingsRequested += OpenSettings;
-        _popup.TextScaleChanged += scale => { _settings.TextScale = scale; ScheduleSave(); };
-        _popup.ShowOriginalChanged += show => { _settings.ShowOriginalByDefault = show; ScheduleSave(); };
+        _popup.SettingsRequested += _windows.OpenSettings;
+        _popup.TextScaleChanged += scale => { _settings.TextScale = scale; _saver.ScheduleSave(); };
+        _popup.ShowOriginalChanged += show => { _settings.ShowOriginalByDefault = show; _saver.ScheduleSave(); };
         _popup.VisibleRectsChanged += rects => _hooks.PopupWheelRegions = rects;
 
         _observer = new UiaObserver(Post, _log, _timings, _settings.UseUiaSelectionEvents);
-        _observer.ProbeCompleted += OnProbeCompleted;
-        _observer.RefreshCompleted += OnRefreshCompleted;
+        _probes = new ProbeController(_log, _registry, () => _settings, _observer, () => _tracker, Dispatch, () => _windows.WelcomeHwnd);
+        _observer.ProbeCompleted += _probes.OnProbeCompleted;
+        _observer.RefreshCompleted += _probes.OnRefreshCompleted;
         _observer.SelectionChangedByUia += OnUiaSelectionChanged;
         _observer.Start();
 
@@ -209,7 +204,7 @@ internal sealed class AppHost : IDisposable
         _tracker = new SourceWindowTracker();
         _tracker.ForegroundChanged += OnForegroundChanged;
         _tracker.SourceLost += reason => { _log.Info("track", reason); Dispatch(new SessionEvent.SourceWindowLost()); };
-        _tracker.RefreshRequested += RequestRefresh;
+        _tracker.RefreshRequested += _probes.RequestRefresh;
 
         _tray = new TrayIcon();
         _tray.SetAutoTranslate(_settings.AutoTranslate);
@@ -220,22 +215,18 @@ internal sealed class AppHost : IDisposable
         _tray.SnipRegionRequested += _vision.StartSnip;
         _tray.OcrCopyRequested += _vision.StartOcrCopy;
         _tray.TranslateClipboardRequested += TranslateClipboard;
-        _tray.SettingsRequested += OpenSettings;
-        _tray.DiagnosticsRequested += OpenDiagnostics;
-        _tray.WelcomeRequested += () => OpenWelcome(force: true);
+        _tray.SettingsRequested += _windows.OpenSettings;
+        _tray.DiagnosticsRequested += _windows.OpenDiagnostics;
+        _tray.WelcomeRequested += () => _windows.OpenWelcome(force: true);
         _tray.ExitRequested += Exit;
 
         _stabTimer.Tick += (_, _) => { _stabTimer.Stop(); var id = _stabTimerId; _stabTimerId = 0; Dispatch(new SessionEvent.StabilizationElapsed(id)); };
-        _probeWatchdog.Tick += (_, _) => OnProbeWatchdog();
-        _refreshWatchdog.Tick += (_, _) => OnRefreshWatchdog();
         _graceTimer.Tick += (_, _) => { _graceTimer.Stop(); Dispatch(new SessionEvent.GeometryGraceElapsed(_graceSelectionId)); };
-        _saveTimer.Interval = TimeSpan.FromSeconds(1.5);
-        _saveTimer.Tick += (_, _) => { _saveTimer.Stop(); TrySave(); };
 
         try
         {
             _activateEvent = new EventWaitHandle(false, EventResetMode.AutoReset, Program.ActivateName);
-            _activateWait = ThreadPool.RegisterWaitForSingleObject(_activateEvent, (_, _) => Post(() => { _log.Info("app", "second instance signalled; opening settings"); OpenSettings(); }), null, -1, false);
+            _activateWait = ThreadPool.RegisterWaitForSingleObject(_activateEvent, (_, _) => Post(() => { _log.Info("app", "second instance signalled; opening settings"); _windows.OpenSettings(); }), null, -1, false);
         }
         catch (Exception ex) { _log.Warn("app", $"activation event unavailable: {ex.GetType().Name}"); }
 
@@ -245,13 +236,13 @@ internal sealed class AppHost : IDisposable
         // Updates: only an installed (Velopack) build ever contacts GitHub; for a portable or development run Configure does nothing.
         _updates = new UpdateService(Post, _log);
         _updates.UpdateReady += OnUpdateReady;
-        _updates.DownloadFailed += (reason, manual) => { if (manual) _settingsWindow?.ShowUpdateDownloadFailed(reason); };
+        _updates.DownloadFailed += (reason, manual) => { if (manual) _windows.ShowUpdateDownloadFailed(reason); };
         _tray.RestartUpdateRequested += RestartAndUpdate;
         if (_updates.ReadyVersion is not null) _tray.SetUpdateReady(true); // downloaded in an earlier run, not installed yet
         _updates.Configure(_settings.AutoCheckForUpdates);
 
         _log.Info("app", $"ready · auto={_settings.AutoTranslate} delay={_settings.StabilizationDelayMs}ms target={_settings.TargetLanguage} model={_settings.Model} relay={_settings.UseRelay}");
-        if (_forceWelcome || !_settings.OnboardingCompleted) OpenWelcome(force: false);
+        if (_forceWelcome || !_settings.OnboardingCompleted) _windows.OpenWelcome(force: false);
 
         // Prepare the card window once the start-up work is done, so the first selection does not wait for it.
         System.Windows.Threading.Dispatcher.CurrentDispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.ApplicationIdle, () =>
@@ -304,7 +295,7 @@ internal sealed class AppHost : IDisposable
                 break;
 
             case SessionEffect.RequestProbe p:
-                StartProbe(p.ProbeId, p.Mode);
+                _probes.StartProbe(p.ProbeId, p.Mode);
                 break;
 
             case SessionEffect.ShowLoading s:
@@ -344,15 +335,11 @@ internal sealed class AppHost : IDisposable
                 break;
 
             case SessionEffect.BeginTracking b:
-                _trackedSelectionId = b.SelectionId;
-                _tracker.Begin(new IntPtr(b.Snapshot.SourceWindow), b.Snapshot.ProcessId);
+                _probes.BeginTracking(b.SelectionId, b.Snapshot);
                 break;
 
             case SessionEffect.EndTracking:
-                _trackedSelectionId = 0;
-                _tracker.End();
-                _refreshWatchdog.Stop();
-                _observer.ClearTracking();
+                _probes.EndTracking();
                 break;
 
             case SessionEffect.UpdateAnchor u:
@@ -378,180 +365,6 @@ internal sealed class AppHost : IDisposable
                 _log.Add(r.Level, r.Category, r.Message);
                 break;
         }
-    }
-
-    // ---- probes -----------------------------------------------------------------------------------
-
-    private ReaderPolicy Policy() => new(_settings.MaxChars, Environment.ProcessId, _welcomeWindow?.Hwnd ?? IntPtr.Zero);
-
-    private void StartProbe(long probeId, ProbeMode mode)
-    {
-        _probeId = probeId;
-        _probeMode = mode;
-
-        if (_pendingClipboardText is { } clip)
-        {
-            _pendingClipboardText = null;
-            _probeId = 0;
-            Dispatch(new SessionEvent.ProbeCompleted(probeId, OutcomeForText(clip, SelectionOrigin.Clipboard, explicitRequest: true)));
-            return;
-        }
-
-        if (!_observer.IsAlive)
-        {
-            _probeId = 0;
-            Dispatch(new SessionEvent.ProbeCompleted(probeId, new ProbeOutcome.Failed("UI Automation thread is not running")));
-            return;
-        }
-
-        _observer.RequestProbe(probeId, mode, Policy());
-        _probeWatchdog.Stop();
-        _probeWatchdog.Interval = TimeSpan.FromMilliseconds(ProbeWatchdogMs);
-        _probeWatchdog.Start();
-    }
-
-    private void OnProbeWatchdog()
-    {
-        _probeWatchdog.Stop();
-        if (_probeId == 0) return;
-        var id = _probeId;
-        _probeId = 0;
-        _log.Warn("probe", "stalled: UI Automation did not answer in time (the source app may be busy)");
-        Dispatch(new SessionEvent.ProbeCompleted(id, new ProbeOutcome.Failed("probe stalled")));
-    }
-
-    private void OnProbeCompleted(long probeId, ProbeOutcome outcome)
-    {
-        if (probeId != _probeId) { _log.Info("probe", $"late result #{probeId} ignored"); return; }
-        var explicitRequest = _probeMode == ProbeMode.Explicit;
-
-        if (outcome is ProbeOutcome.Selected sel)
-        {
-            _probeWatchdog.Stop();
-            _probeId = 0;
-            Dispatch(new SessionEvent.ProbeCompleted(probeId, FinishSelected(sel.Snapshot, explicitRequest)));
-            return;
-        }
-
-        if (explicitRequest && outcome is ProbeOutcome.NoSelection or ProbeOutcome.Unsupported or ProbeOutcome.Failed)
-        {
-            // UIA could not read it: the explicit fallback copies once via Ctrl+C.
-            _log.Info("probe", $"explicit request, UIA gave {outcome.GetType().Name}; trying clipboard fallback");
-            _probeWatchdog.Stop();
-            _probeWatchdog.Interval = TimeSpan.FromMilliseconds(ClipboardWatchdogMs);
-            _probeWatchdog.Start();
-            _ = RunClipboardFallbackAsync(probeId);
-            return;
-        }
-
-        _probeWatchdog.Stop();
-        _probeId = 0;
-        RecordOutcome(outcome);
-        Dispatch(new SessionEvent.ProbeCompleted(probeId, outcome));
-    }
-
-    private async Task RunClipboardFallbackAsync(long probeId)
-    {
-        string? text = null;
-        try { text = await ClipboardFallback.CaptureSelectionAsync(); }
-        catch (Exception ex) { _log.Warn("clipboard", $"fallback failed: {ex.GetType().Name}"); }
-        if (probeId != _probeId) return; // watchdog or a newer probe took over
-        _probeWatchdog.Stop();
-        _probeId = 0;
-        if (string.IsNullOrWhiteSpace(text))
-        {
-            _log.Info("clipboard", "nothing captured");
-            Dispatch(new SessionEvent.ProbeCompleted(probeId, new ProbeOutcome.NoSelection()));
-            return;
-        }
-        Dispatch(new SessionEvent.ProbeCompleted(probeId, OutcomeForText(text, SelectionOrigin.Clipboard, explicitRequest: true)));
-    }
-
-    private ProbeOutcome FinishSelected(SelectionSnapshot snapshot, bool explicitRequest)
-    {
-        _lastProcessName = snapshot.ProcessName;
-        _anchorFromPointer = false;
-
-        var reason = SelectionPolicy.ReasonToSkip(snapshot, _settings, explicitRequest);
-        if (reason is not null)
-        {
-            _registry.RecordSuccess(snapshot.ProcessName, snapshot.HasGeometry);
-            return new ProbeOutcome.Skipped(reason);
-        }
-
-        if (!snapshot.HasGeometry)
-        {
-            // Text but no on-screen bounds: anchor to the pointer only right after a mouse release, never guess otherwise.
-            if (Environment.TickCount64 - _lastPointerTick <= 1500)
-            {
-                snapshot = snapshot with { Anchor = AnchorRect.AroundPoint(_lastPointer), AnchoredAtPointer = true };
-                _anchorFromPointer = true;
-                _log.Info("probe", $"{snapshot.ProcessName}: selection has no bounds; anchoring near the pointer");
-            }
-            else
-            {
-                _registry.RecordSuccess(snapshot.ProcessName, hadGeometry: false);
-                return new ProbeOutcome.Skipped("selection reported without on-screen bounds");
-            }
-        }
-
-        _registry.RecordSuccess(snapshot.ProcessName, !_anchorFromPointer);
-        _log.Info("probe", $"{snapshot.ProcessName}: {snapshot.Text.Length} chars, {snapshot.Anchor!.LineCount} line(s), {snapshot.ProbeDurationMs:0.0} ms, fp={DiagnosticsLog.Fingerprint(snapshot.Text)}");
-        return new ProbeOutcome.Selected(snapshot);
-    }
-
-    private ProbeOutcome OutcomeForText(string text, SelectionOrigin origin, bool explicitRequest)
-    {
-        var foreground = NativeMethods.GetForegroundWindow();
-        var pid = NativeMethods.ProcessIdOf(foreground);
-        NativeMethods.GetCursorPos(out var pt);
-        _lastPointer = new PxPoint(pt.X, pt.Y);
-        _anchorFromPointer = true;
-        var snapshot = new SelectionSnapshot(text, AnchorRect.AroundPoint(_lastPointer), foreground.ToInt64(), pid, ProcessInfo.NameOf(pid), EditableKind.NotEditable, origin, 0)
-        {
-            AnchoredAtPointer = true,
-        };
-        var reason = SelectionPolicy.ReasonToSkip(snapshot, _settings, explicitRequest);
-        return reason is null ? new ProbeOutcome.Selected(snapshot) : new ProbeOutcome.Skipped(reason);
-    }
-
-    private void RecordOutcome(ProbeOutcome outcome)
-    {
-        var fg = NativeMethods.GetForegroundWindow();
-        var name = ProcessInfo.NameOf(NativeMethods.ProcessIdOf(fg));
-        if (NativeMethods.ProcessIdOf(fg) == Environment.ProcessId) return;
-        switch (outcome)
-        {
-            case ProbeOutcome.Unsupported: _registry.RecordUnsupported(name); _lastProcessName = name; break;
-            case ProbeOutcome.Failed: _registry.RecordFailure(name); _lastProcessName = name; break;
-        }
-    }
-
-    // ---- geometry refresh ------------------------------------------------------------------------
-
-    private void RequestRefresh()
-    {
-        if (_trackedSelectionId == 0) return;
-        _observer.RequestRefresh(_trackedSelectionId, Policy());
-        _refreshWatchdog.Stop();
-        _refreshWatchdog.Interval = TimeSpan.FromMilliseconds(RefreshWatchdogMs);
-        _refreshWatchdog.Start();
-    }
-
-    private void OnRefreshCompleted(long selectionId, GeometryUpdate update)
-    {
-        _refreshWatchdog.Stop();
-        _tracker.RefreshCompleted();
-        if (selectionId != _trackedSelectionId) return;
-        Dispatch(new SessionEvent.GeometryRefreshed(selectionId, update));
-    }
-
-    private void OnRefreshWatchdog()
-    {
-        _refreshWatchdog.Stop();
-        _tracker.RefreshCompleted();
-        if (_trackedSelectionId == 0) return;
-        Dispatch(new SessionEvent.GeometryRefreshed(_trackedSelectionId, new GeometryUpdate.Unavailable("refresh timed out")));
     }
 
     // ---- translation --------------------------------------------------------------------------------
@@ -588,15 +401,7 @@ internal sealed class AppHost : IDisposable
     }
 
     private string? Caption(SelectionSnapshot snapshot, RequestRoute? route, bool fromCache, bool streaming = false)
-    {
-        var parts = new List<string>(4);
-        if (streaming) parts.Add(Loc.T("Caption_Streaming"));
-        if (fromCache) parts.Add(Loc.T("Caption_Cached"));
-        if (route == RequestRoute.Relay || (route is null && _settings.UseRelay)) parts.Add(Loc.T("Caption_Relay"));
-        if (snapshot.Origin == SelectionOrigin.Clipboard) parts.Add(Loc.T("Caption_Clipboard"));
-        else if (_anchorFromPointer) parts.Add(Loc.T("Caption_NearPointer"));
-        return parts.Count == 0 ? null : string.Join(" · ", parts);
-    }
+        => CardCaption.Build(Loc.Instance.Language, snapshot, route, fromCache, _settings.UseRelay, streaming);
 
     private async Task<(bool Ok, string Message)> TestConnectionAsync(AppSettings s, CancellationToken ct)
     {
@@ -637,8 +442,7 @@ internal sealed class AppHost : IDisposable
 
             case InputSignal.MouseUp:
                 if (_popup.HitTest(e.Point)) return;
-                _lastPointer = e.Point;
-                _lastPointerTick = Environment.TickCount64;
+                _probes.NotePointer(e.Point);
                 _triggerTimestamp = Stopwatch.GetTimestamp();
                 Dispatch(new SessionEvent.TriggerReceived(TriggerKind.MouseUp));
                 break;
@@ -656,8 +460,7 @@ internal sealed class AppHost : IDisposable
 
             case InputSignal.Hotkey:
                 if (!_settings.HotkeyEnabled) return;
-                _lastPointer = e.Point;
-                _lastPointerTick = Environment.TickCount64;
+                _probes.NotePointer(e.Point);
                 _triggerTimestamp = Stopwatch.GetTimestamp();
                 Dispatch(new SessionEvent.TriggerReceived(TriggerKind.Hotkey));
                 break;
@@ -691,7 +494,7 @@ internal sealed class AppHost : IDisposable
         var text = ClipboardFallback.ReadText();
         if (!string.IsNullOrWhiteSpace(text))
         {
-            _pendingClipboardText = text;
+            _probes.SetPendingClipboardText(text);
             _triggerTimestamp = Stopwatch.GetTimestamp();
             Dispatch(new SessionEvent.TriggerReceived(TriggerKind.Hotkey));
             return;
@@ -713,7 +516,7 @@ internal sealed class AppHost : IDisposable
         var fg = NativeMethods.GetForegroundWindow();
         var pid = NativeMethods.ProcessIdOf(fg);
         if (pid != 0 && pid != Environment.ProcessId) return ProcessInfo.NameOf(pid);
-        return _lastProcessName;
+        return _probes.LastProcessName;
     }
 
     // ---- settings --------------------------------------------------------------------------------------
@@ -723,7 +526,7 @@ internal sealed class AppHost : IDisposable
     {
         var previous = _settings;
         _settings = next.Normalize();
-        var saveError = TrySave(notifySaveFailure);
+        var saveError = _saver.TrySave(notifySaveFailure);
         Loc.Instance.Apply(_settings.UiLanguage);
 
         _session.Options = new SessionOptions(_settings.AutoTranslate, _settings.StabilizationDelayMs);
@@ -764,56 +567,24 @@ internal sealed class AppHost : IDisposable
 
     private void OnHotkeyStatus(string display, string? error)
     {
-        _hotkeyError = error;
         if (error is null) _log.Info("hotkey", $"{display} registered");
         else
         {
             _log.Warn("hotkey", error + " Automatic translation is unaffected.");
             _tray.ShowNotice(Loc.T("App_ShortcutUnavailable"), Loc.T("App_ShortcutUnavailableHint", error), warning: true);
         }
-        _settingsWindow?.SetHotkeyStatus(error);
+        _windows.SetHotkeyStatus(error);
     }
 
     private void OnSnipHotkeyStatus(string display, string? error)
     {
-        _snipHotkeyError = error;
         if (error is null) _log.Info("hotkey", $"vision snip {display} registered");
         else
         {
             _log.Warn("hotkey", error);
             _tray.ShowNotice(Loc.T("App_SnipShortcutUnavailable"), Loc.T("App_SnipShortcutUnavailableHint", error), warning: true);
         }
-        _settingsWindow?.SetSnipHotkeyStatus(error);
-    }
-
-    private void ScheduleSave()
-    {
-        _saveTimer.Stop();
-        _saveTimer.Start();
-    }
-
-    /// <summary>Writes the settings file. Returns null when it was written, otherwise the reason it was not.</summary>
-    private string? TrySave(bool notify = true)
-    {
-        try
-        {
-            _store.Save(_settings);
-            _saveFailureShown = false;
-            return null;
-        }
-        catch (Exception ex)
-        {
-            _log.Error("settings", $"save failed: {ex.GetType().Name}: {ex.Message}");
-            var reason = Loc.T("App_SettingsNotSavedReason", ex.GetType().Name, ex.Message);
-            // The Settings window shows the reason itself. Other saves run in the background, so the tray says it,
-            // once per run of failures. The tray does not exist yet during start-up; the log entry covers that case.
-            if (notify && !_saveFailureShown && _tray is not null)
-            {
-                _saveFailureShown = true;
-                _tray.ShowNotice(Loc.T("App_SettingsNotSaved"), reason, warning: true);
-            }
-            return reason;
-        }
+        _windows.SetSnipHotkeyStatus(error);
     }
 
     private void ConfigureFileLogging(bool enabled)
@@ -837,77 +608,6 @@ internal sealed class AppHost : IDisposable
         catch (Exception ex) { _log.Warn("diag", $"file logging unavailable: {ex.GetType().Name}: {ex.Message}"); }
     }
 
-    // ---- windows -------------------------------------------------------------------------------------
-
-    private void OpenSettings()
-    {
-        if (_settingsWindow is { IsLoaded: true })
-        {
-            _settingsWindow.Activate();
-            return;
-        }
-        _settingsWindow = new SettingsWindow(_settings, _store.FilePath, TestConnectionAsync, s => ApplySettings(s, notifySession: true, notifySaveFailure: false),
-            new SettingsUpdateInfo(_updates.IsInstalled, _updates.CurrentVersionText, _updates.CheckNowAsync));
-        _settingsWindow.SetHotkeyStatus(_hotkeyError);
-        _settingsWindow.SetSnipHotkeyStatus(_snipHotkeyError);
-        _settingsWindow.Closed += (_, _) => _settingsWindow = null;
-        _settingsWindow.Show();
-        _settingsWindow.Activate();
-    }
-
-    private void OpenDiagnostics()
-    {
-        if (_diagnosticsWindow is { IsLoaded: true })
-        {
-            _diagnosticsWindow.Activate();
-            return;
-        }
-        _diagnosticsWindow = new DiagnosticsWindow(_log, _timings, _registry, DiagnosticsHeader);
-        _diagnosticsWindow.Closed += (_, _) => _diagnosticsWindow = null;
-        _diagnosticsWindow.Show();
-    }
-
-    private void OpenWelcome(bool force)
-    {
-        if (_welcomeWindow is { IsLoaded: true })
-        {
-            _welcomeWindow.Activate();
-            return;
-        }
-        _welcomeWindow = new WelcomeWindow();
-        if (!_hooks.HooksInstalled) _welcomeWindow.SetWarning(Loc.T("App_HooksWarning"));
-        _welcomeWindow.SettingsRequested += OpenSettings;
-        _welcomeWindow.Finished += dontShow =>
-        {
-            if (dontShow && !_settings.OnboardingCompleted) { _settings.OnboardingCompleted = true; TrySave(); }
-        };
-        _welcomeWindow.Closed += (_, _) => _welcomeWindow = null;
-        _welcomeWindow.Show();
-        if (force) _welcomeWindow.Activate();
-    }
-
-    private string DiagnosticsHeader()
-    {
-        var sb = new StringBuilder();
-        sb.Append(System.Globalization.CultureInfo.InvariantCulture, $"v{typeof(AppHost).Assembly.GetName().Version} · {Environment.OSVersion.Version} · .NET {Environment.Version} · ");
-        sb.Append(System.Globalization.CultureInfo.InvariantCulture, $"session {_session.State} · hooks {(_hooks.HooksInstalled ? "ok" : "MISSING")} · uia {(_observer.IsAlive ? "ok" : "stopped")} · ");
-        sb.Append(System.Globalization.CultureInfo.InvariantCulture, $"cache {_cache.Count} entries, {_cache.Hits} hits / {_cache.Misses} misses · in-flight {_coordinator.ActiveCount} · ");
-        sb.Append(System.Globalization.CultureInfo.InvariantCulture, $"target {_settings.TargetLanguage} · {ServiceLabels.ModelLabel(_settings)} · {ServiceLabels.HostOf(_settings)} · relay {(_settings.UseRelay ? "on" : "off")} · auto {(_settings.AutoTranslate ? "on" : "off")} · delay {_settings.StabilizationDelayMs} ms");
-        try
-        {
-            var monitors = new List<string>();
-            NativeMethods.EnumDisplayMonitors(IntPtr.Zero, IntPtr.Zero, (IntPtr h, IntPtr _, ref RECT _, IntPtr _) =>
-            {
-                var m = Win32MonitorLocator.FromHandle(h, _log);
-                monitors.Add($"{m.Name.TrimStart('\\', '.')} {m.Bounds.Width}x{m.Bounds.Height}@{m.Scale * 100:0}%");
-                return true;
-            }, IntPtr.Zero);
-            if (monitors.Count > 0) sb.Append(" · monitors: ").Append(string.Join(", ", monitors));
-        }
-        catch (Exception) { }
-        return sb.ToString();
-    }
-
     public void ReportCrash(Exception ex) => _log.Error("app", $"unhandled: {ex.GetType().Name}: {ex.Message}");
 
     // ---- lifetime -------------------------------------------------------------------------------------
@@ -925,7 +625,7 @@ internal sealed class AppHost : IDisposable
     {
         _tray.SetUpdateReady(true);
         _tray.ShowNotice("Bili Index Translate", Loc.T("Update_Ready", version));
-        _settingsWindow?.ShowUpdateDownloaded(version);
+        _windows.ShowUpdateDownloaded(version);
     }
 
     /// <summary>Tray: "Restart and update". Everything is stopped and saved first, because Velopack ends the process at once.</summary>
@@ -944,11 +644,10 @@ internal sealed class AppHost : IDisposable
         _disposed = true;
 
         _stabTimer.Stop();
-        _probeWatchdog.Stop();
-        _refreshWatchdog.Stop();
+        SafeDispose(_probes); // stops the probe and refresh watchdogs
         _graceTimer.Stop();
-        _saveTimer.Stop();
-        TrySave();
+        _saver.Dispose(); // stops a pending scheduled save
+        _saver.TrySave();
 
         SafeDispose(_vision);
         _studyService.ClearVolatileCache();
@@ -960,7 +659,7 @@ internal sealed class AppHost : IDisposable
         SafeDispose(_observer);
         SafeDispose(_coordinator);
         SafeDispose(_popup);
-        try { _settingsWindow?.Close(); _diagnosticsWindow?.Close(); _welcomeWindow?.Close(); } catch (Exception) { }
+        _windows.CloseAll();
         SafeDispose(_tray);
         SafeDispose(_updates);
         SafeDispose(_transport);
