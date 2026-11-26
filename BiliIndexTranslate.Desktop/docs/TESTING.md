@@ -247,6 +247,24 @@ machine with only the English OCR pack and, separately, with the Chinese or Japa
 | 17 | Windows 10 1809 / 1903 (lowest supported) and Windows 11 | The app starts and local OCR works; check that the self-contained and the framework-dependent single-file builds both start |
 | 18 | Switch the interface language to English / 简体中文 with the tray menu closed | The new tray item, the Settings entries and the OCR messages follow the language |
 
+## Baseline on the CI runner (2026-11-26)
+
+Measured by UI tests 6–8 below on the `windows-latest` runner (Windows NT 10.0.26100, 4 logical processors) in CI
+run 45792315547 (commit `6d04571`). The app runs from the Release build output (framework-dependent), not from the
+single-file or installed build. Shared runners are noisy: read these as orders of magnitude and compare trends.
+
+| Measure | Result |
+|---|---|
+| Ctrl+A → card with the text, cache hit (n = 10) | min 376 / median 414 / max 439 ms. 320 ms of that is the settle delay for a UIA selection event (250 ms + 70 ms); a mouse release waits 250 ms |
+| Ctrl+A → first text, cache miss (first selection after start) | 815 ms; full text at 1521 ms (the mock sends the second and third segment 400 ms apart). The mock sends the first segment at once, so the first selection is about 400 ms slower than a cache hit. Cause not located yet (first card window, first HTTP request, JIT) |
+| Loading state | not observed: "first card visible" equals "first text". The loading text is either too short-lived to catch or not exposed to UIA |
+| Process start → `ready` | 404–419 ms over 3 runs (polled every 200 ms); 19–21 ms from the app's first log line to `ready` |
+| 100 selections (cache hits) | handles 750–766 (−2), GDI objects 32 (0), USER objects 66–67 (−1), private bytes 54–63 MB (+0.3 MB), working set 126–151 MB (−7.5 MB): no growth |
+| Core unit-test coverage (coverlet) | lines 86.9 %, branches 71.7 % |
+
+The walkthrough on 2026-11-06 measured a working set of about 85 MB on a real machine with .NET 8. The runner shows
+126–151 MB with .NET 10; the two were not measured on the same machine, and private bytes are the steadier figure.
+
 ## UI tests (FlaUI)
 
 `tests/BiliIndexTranslate.App.UiTests` (xunit, FlaUI.UIA3) drives the real app on a real desktop. It runs in
@@ -266,6 +284,15 @@ mutex, so a running copy of the app on the same machine does not interfere.
 | 3 | `Same_selection_again_is_served_from_the_cache` | after Esc, a click and a new Ctrl+A, the card shows the complete text from its first frame and the mock sees no second request |
 | 4 | `Http_412_shows_an_error_card` | mock answers 412 → error card whose text contains `412` |
 | 5 | `Edge_page_selection_shows_full_card_and_escape_closes_it` (`EdgeSelectionTests`) | Microsoft Edge (own temp profile, no `--force-renderer-accessibility`) opens a local page with one `<p>`; triple click on the paragraph (raw mouse down/up: FlaUI's `Mouse.Click` deliberately avoids double clicks) → card shows the complete text, every request had `stream: true`, Esc hides the card. No keyboard fallback. The test finds the paragraph through Edge's UIA tree, which turns on Chromium's accessibility by itself, so it does not show that the app does so alone. Skipped, not failed, when `msedge.exe` is not found (`%ProgramFiles(x86)%` / `%ProgramFiles%`, or `BIT_EDGE_EXE`). The test output has the app log; when no card appears it also has the focused element and the selection as UIA reports them, and `TestResults\ui-screenshots\` gets `<test>.uia-tree.txt` (first levels of the Edge UIA tree) |
+| 6 | `Latency_from_selection_to_card` (`BaselineTests`) | measurement: one session; first selection (cache miss) times first card state, first partial text and final text from the moment Ctrl+A is sent, polled about every 10 ms; then 10 cache-hit cycles (min / median / max). The trigger is the UIA text-selection-changed event, and the mock's segment delay dominates the final time on a miss. Asserts only that every card reached the full text and the mock got a chat request |
+| 7 | `Cold_start_time` (`BaselineTests`) | measurement: three sequential sessions; time from `Process.Start` of the app to the `ready` log line (polled every 200 ms, so up to 200 ms high), plus the app's own log time from first line to `ready` |
+| 8 | `Resource_use_over_repeated_selections` (`BaselineTests`) | measurement: one warm-up selection, then 100 cycles of clear selection, Ctrl+A, wait for the card text; handle count, GDI and USER objects, private bytes and working set are sampled before the loop and every 10 cycles, with first-to-last deltas. Asserts only that every card reached the full text and the mock got a chat request |
+
+Tests 6 to 8 only record numbers, they are not thresholds yet. Each writes `TestResults/baseline/<test>.json`
+(metrics plus OS version and processor count). In CI the `Baseline summary` step puts the tables, together with
+the line and branch coverage of the Core unit tests (`coverlet.collector`, cobertura under `TestResults/coverage`),
+in the job summary, and the artifact `baseline` holds the JSON files and the coverage XML. Numbers from shared
+runners are noisy; compare trends, not single runs.
 
 The card's translation text is read from the element's UIA `HelpText` (set in `PopupWindow.ShowTranslation`),
 because its `Name` is the fixed label "Translation". Error title/message and the caption are read from their `Name`.
