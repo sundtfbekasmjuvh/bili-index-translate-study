@@ -57,7 +57,7 @@
             MinWidth="280"
             Width="390">
       <Border.Effect>
-        <DropShadowEffect BlurRadius="20" ShadowDepth="3" Direction="270" Opacity="0.16" Color="Black" />
+        <DropShadowEffect BlurRadius="20" ShadowDepth="3" Direction="270" Opacity="{DynamicResource Popup.ShadowOpacity}" Color="{DynamicResource Popup.ShadowColor}" />
       </Border.Effect>
 
       <Grid>

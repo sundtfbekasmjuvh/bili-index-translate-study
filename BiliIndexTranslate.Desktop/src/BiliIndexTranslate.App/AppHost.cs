@@ -114,7 +114,7 @@ internal sealed class AppHost : IDisposable
         _studyService = new StudyCardService(_transport, TimeSpan.FromSeconds(30));
         _visionService = new VisionTranslationService(_transport, TimeSpan.FromSeconds(35));
         _coordinator = new TranslationCoordinator(_translator, _cache, Post, _timings, _log, maxConcurrency: 2, postPartial: PostBackground);
-        _theme = new ThemeManager(app);
+        _theme = new ThemeManager(app) { Log = message => _log.Info("app", "theme: " + message) };
         _monitors.Log = _log;
     }
 
