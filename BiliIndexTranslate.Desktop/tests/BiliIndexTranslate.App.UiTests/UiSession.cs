@@ -33,9 +33,13 @@ public sealed class UiSession : IDisposable
     public UIA3Automation Automation { get; } = new();
     public Window TargetWindow { get; private set; } = null!;
 
-    public UiSession(string testName, int? failWithStatus = null)
+    private readonly ExternalTarget? _external;
+
+    /// <param name="external">When given, this program is the selection target instead of the WPF test target window.</param>
+    public UiSession(string testName, int? failWithStatus = null, ExternalTarget? external = null)
     {
         _testName = testName;
+        _external = external;
         Mock.FailWithStatus = failWithStatus;
         DataDir = Path.Combine(Path.GetTempPath(), "bit-ui-" + Guid.NewGuid().ToString("N")[..10]);
         Directory.CreateDirectory(DataDir);
@@ -84,6 +88,12 @@ public sealed class UiSession : IDisposable
 
     private void StartTarget()
     {
+        if (_external is not null)
+        {
+            _target = _external.Start(DataDir);
+            TargetWindow = _external.FindWindow(Automation, _target);
+            return;
+        }
         _target = Process.Start(new ProcessStartInfo(ExeLocator.Target()) { UseShellExecute = false })
                   ?? throw new InvalidOperationException("target window did not start");
         var app = FlaUI.Core.Application.Attach(_target);
@@ -106,6 +116,9 @@ public sealed class UiSession : IDisposable
         }, TimeSpan.FromSeconds(30), TimeSpan.FromMilliseconds(200));
         if (!ready.Success) throw new TimeoutException("app did not log 'ready' within 30 s");
     }
+
+    /// <summary>The app's diagnostics.log so far (empty when it cannot be read).</summary>
+    public string DiagnosticsLog() => LogText();
 
     private string LogText()
     {
@@ -244,6 +257,8 @@ public sealed class UiSession : IDisposable
             var dir = Path.Combine(root, "TestResults", "ui-screenshots");
             Directory.CreateDirectory(dir);
             Capture.Screen().ToFile(Path.Combine(dir, _testName + ".png"));
+            if (_external is not null)
+                File.WriteAllText(Path.Combine(dir, _testName + ".uia-tree.txt"), EdgeTarget.DumpTree(Automation, TargetWindow));
             foreach (var log in new[] { "diagnostics.log", "crash.log", "settings.json" })
             {
                 var src = Path.Combine(DataDir, log);
@@ -268,7 +283,12 @@ public sealed class UiSession : IDisposable
         for (var i = 0; i < 10; i++)
         {
             try { Directory.Delete(DataDir, recursive: true); break; }
-            catch (Exception) { Thread.Sleep(200); }
+            catch (Exception ex)
+            {
+                // Edge's profile can stay locked for a moment after the kill; never fail a test for it.
+                if (i == 9) Console.Error.WriteLine($"could not delete {DataDir}: {ex.Message}");
+                else Thread.Sleep(300);
+            }
         }
     }
 
