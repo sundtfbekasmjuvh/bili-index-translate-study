@@ -1,3 +1,4 @@
+using System.IO;
 using System.Runtime.InteropServices;
 using System.Windows;
 using BiliIndexTranslate.App.Native;
@@ -7,12 +8,15 @@ namespace BiliIndexTranslate.App.Input;
 /// <summary>
 /// Explicit-only clipboard capture (fallback shortcut or tray command). Sends one Ctrl+C to the
 /// foreground application, waits briefly for the clipboard sequence number to change, and reads the
-/// text. Never runs automatically and never polls the clipboard.
+/// text. Never runs automatically and never polls the clipboard. If the clipboard held text before the
+/// Ctrl+C, that text is written back afterwards (excluded from clipboard history and cloud clipboard);
+/// non-text content is left as is, and nothing is restored when Ctrl+C changed nothing.
 /// </summary>
 internal static class ClipboardFallback
 {
     public static async Task<string?> CaptureSelectionAsync(int timeoutMs = 350)
     {
+        var previous = ReadText();
         var before = NativeMethods.GetClipboardSequenceNumber();
         var sent = SendCtrlC();
         if (sent == 0) return null;
@@ -24,7 +28,34 @@ internal static class ClipboardFallback
             if (NativeMethods.GetClipboardSequenceNumber() != before) break;
         }
         if (NativeMethods.GetClipboardSequenceNumber() == before) return null;
-        return ReadText();
+        var text = ReadText();
+        if (previous is not null) TryRestoreText(previous);
+        return text;
+    }
+
+    /// <summary>
+    /// Writes text back to the clipboard without it entering Windows clipboard history or the cloud
+    /// clipboard (registered formats with a DWORD 0); false when the clipboard stays busy.
+    /// </summary>
+    public static bool TryRestoreText(string text)
+    {
+        for (var attempt = 0; attempt < 4; attempt++)
+        {
+            try
+            {
+                var data = new DataObject();
+                data.SetText(text);
+                data.SetData("CanIncludeInClipboardHistory", new MemoryStream(new byte[4]));
+                data.SetData("CanUploadToCloudClipboard", new MemoryStream(new byte[4]));
+                Clipboard.SetDataObject(data, true);
+                return true;
+            }
+            catch (COMException)
+            {
+                Thread.Sleep(40); // clipboard busy
+            }
+        }
+        return false;
     }
 
     public static string? ReadText()
@@ -78,6 +109,6 @@ internal static class ClipboardFallback
     private static INPUT Key(ushort vk, bool up) => new()
     {
         type = NativeMethods.INPUT_KEYBOARD,
-        u = new INPUTUNION { ki = new KEYBDINPUT { wVk = vk, dwFlags = up ? NativeMethods.KEYEVENTF_KEYUP : 0 } },
+        u = new INPUTUNION { ki = new KEYBDINPUT { wVk = vk, dwFlags = up ? NativeMethods.KEYEVENTF_KEYUP : 0, dwExtraInfo = OwnInput.Marker } },
     };
 }

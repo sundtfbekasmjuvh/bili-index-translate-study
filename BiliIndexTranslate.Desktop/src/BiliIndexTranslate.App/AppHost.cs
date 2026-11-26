@@ -115,6 +115,7 @@ internal sealed class AppHost : IDisposable
         _visionService = new VisionTranslationService(_transport, TimeSpan.FromSeconds(35));
         _coordinator = new TranslationCoordinator(_translator, _cache, Post, _timings, _log, maxConcurrency: 2, postPartial: PostBackground);
         _theme = new ThemeManager(app);
+        _monitors.Log = _log;
     }
 
     private void Post(Action action)
@@ -1243,7 +1244,7 @@ internal sealed class AppHost : IDisposable
             var monitors = new List<string>();
             NativeMethods.EnumDisplayMonitors(IntPtr.Zero, IntPtr.Zero, (IntPtr h, IntPtr _, ref RECT _, IntPtr _) =>
             {
-                var m = Win32MonitorLocator.FromHandle(h);
+                var m = Win32MonitorLocator.FromHandle(h, _log);
                 monitors.Add($"{m.Name.TrimStart('\\', '.')} {m.Bounds.Width}x{m.Bounds.Height}@{m.Scale * 100:0}%");
                 return true;
             }, IntPtr.Zero);

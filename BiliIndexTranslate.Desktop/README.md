@@ -58,7 +58,9 @@ A second instance does not start twice; it opens the Settings window of the runn
 
 Optional fallback: `Alt+Q` (configurable, can be disabled) asks for a translation on demand. If
 UI Automation cannot read the selection, this — and only this — sends a single Ctrl+C and
-translates the copied text. Automatic mode never touches the clipboard.
+translates the copied text, then puts your previous clipboard text back (kept out of Windows
+clipboard history and the cloud clipboard; non-text content is left untouched). Automatic mode never
+touches the clipboard.
 
 ### Screen snip: how the image is read
 

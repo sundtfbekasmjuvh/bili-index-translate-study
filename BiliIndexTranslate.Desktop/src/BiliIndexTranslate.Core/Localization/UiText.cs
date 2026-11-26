@@ -200,6 +200,7 @@ public static partial class UiText
         ["Popup_Close"] = "Close (Esc)",
         ["Popup_PinnedCaption"] = "pinned · drag to move",
         ["Popup_ClipboardBusy"] = "Clipboard busy",
+        ["Popup_Copied"] = "Copied",
 
         ["Error_Timeout"] = "No response",
         ["Error_Network"] = "Connection problem",
@@ -442,6 +443,7 @@ public static partial class UiText
         ["Popup_Close"] = "关闭 (Esc)",
         ["Popup_PinnedCaption"] = "已固定 · 可拖动",
         ["Popup_ClipboardBusy"] = "剪贴板正忙",
+        ["Popup_Copied"] = "已复制",
 
         ["Error_Timeout"] = "响应超时",
         ["Error_Network"] = "连接异常",
