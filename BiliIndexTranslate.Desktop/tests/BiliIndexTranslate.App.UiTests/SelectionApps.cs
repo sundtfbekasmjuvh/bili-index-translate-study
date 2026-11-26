@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Drawing;
+using System.Runtime.InteropServices;
 using FlaUI.Core.AutomationElements;
 using FlaUI.Core.Definitions;
 using FlaUI.Core.Input;
@@ -138,7 +139,24 @@ public abstract class SelectionApp
 
     public ExternalTarget Target() => new(
         Start: dataDir => Start(Locate() ?? throw new FileNotFoundException(DisplayName + " not found"), dataDir),
-        FindWindow: (automation, _) => automation.FromHandle(Win32.WaitForTopLevelByTitle(WindowTitle, TimeSpan.FromSeconds(40))).AsWindow());
+        FindWindow: (automation, _) => FromHandlePatiently(automation, Win32.WaitForTopLevelByTitle(WindowTitle, TimeSpan.FromSeconds(40))));
+
+    /// <summary>
+    /// <c>FromHandle</c> on a program that has just started: its first UIA answer can take longer than the client
+    /// timeout (a fresh Chrome once failed with UIA_E_TIMEOUT 0x80131505 here), so a timeout is retried for up to 20 s.
+    /// </summary>
+    private static Window FromHandlePatiently(UIA3Automation automation, IntPtr hwnd)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(20);
+        while (true)
+        {
+            try { return automation.FromHandle(hwnd).AsWindow(); }
+            catch (Exception ex) when (DateTime.UtcNow < deadline && (ex is TimeoutException || ex.InnerException is COMException { HResult: unchecked((int)0x80131505) }))
+            {
+                Thread.Sleep(500);
+            }
+        }
+    }
 
     /// <summary>Position of the middle of <see cref="Word"/>. Notepad overrides it with a real text range.</summary>
     protected virtual Point WordPoint(Window window)

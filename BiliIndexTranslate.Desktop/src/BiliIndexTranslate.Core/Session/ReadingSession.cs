@@ -21,6 +21,7 @@ public sealed class ReadingSession
     private long _selectionId;
     private long _requestId;
     private bool _graceActive;
+    private bool _probeRetried;
     private bool _shutdown;
     private SelectionSnapshot? _current;
     private (string Text, string SourceKey)? _suppressed;
@@ -69,6 +70,7 @@ public sealed class ReadingSession
 
     private void OnTrigger(TriggerKind kind)
     {
+        _probeRetried = false; // every new trigger gets its own single retry
         if (kind == TriggerKind.Hotkey)
         {
             CancelTimer();
@@ -128,14 +130,34 @@ public sealed class ReadingSession
 
             case ProbeOutcome.Unsupported u:
                 Report(DiagnosticLevel.Info, "probe", $"unsupported: {u.Reason}");
+                if (TryScheduleRetry(mode)) break;
                 if (State == SessionState.SelectionPending) State = SessionState.Idle;
                 break;
 
             case ProbeOutcome.Failed f:
                 Report(DiagnosticLevel.Warning, "probe", $"failed: {f.Reason}");
+                if (TryScheduleRetry(mode)) break;
                 if (State == SessionState.SelectionPending) State = SessionState.Idle;
                 break;
         }
+    }
+
+    /// <summary>
+    /// Schedules one more automatic probe after an unsupported or failed one. A freshly started browser can answer
+    /// before its page is in the accessibility tree (Chrome reports only its window pane, Firefox can time out), and
+    /// the selection is readable a moment later. Only while no card is shown, at most once per trigger; "no selection"
+    /// (a plain click) is never retried, and explicit requests have their own clipboard fallback.
+    /// </summary>
+    private bool TryScheduleRetry(ProbeMode mode)
+    {
+        if (mode != ProbeMode.Auto || _probeRetried || Options.ProbeRetryDelayMs <= 0 || !Options.AutoTranslate) return false;
+        if (State != SessionState.SelectionPending) return false;
+        _probeRetried = true;
+        CancelTimer();
+        _timerId = NextId();
+        Report(DiagnosticLevel.Info, "probe", $"retrying once in {Options.ProbeRetryDelayMs} ms");
+        Emit(new SessionEffect.StartStabilizationTimer(_timerId, Options.ProbeRetryDelayMs));
+        return true;
     }
 
     private void OnSelected(SelectionSnapshot snapshot, ProbeMode mode)

@@ -383,4 +383,65 @@ public class ReadingSessionTests
         Assert.Contains(s.Handle(new SessionEvent.ProbeCompleted(p, new ProbeOutcome.Skipped("too long"))), e => e is SessionEffect.HidePopup);
         Assert.Equal(SessionState.Idle, s.State);
     }
+
+    // ---- single retry after an unsupported or failed automatic probe ---------------------------
+
+    [Fact]
+    public void UnsupportedAutoProbe_RetriesOnce_ThenGoesIdle()
+    {
+        var s = new ReadingSession();
+        var p1 = Probe(s, StartTimer(s));
+
+        var fx = s.Handle(new SessionEvent.ProbeCompleted(p1, new ProbeOutcome.Unsupported("pane")));
+        var retry = Single<SessionEffect.StartStabilizationTimer>(fx);
+        Assert.Equal(400, retry.DelayMs);
+        Assert.Equal(SessionState.SelectionPending, s.State);
+
+        var p2 = Probe(s, retry.TimerId);
+        Assert.Empty(s.Handle(new SessionEvent.ProbeCompleted(p2, new ProbeOutcome.Unsupported("pane"))).OfType<SessionEffect.StartStabilizationTimer>());
+        Assert.Equal(SessionState.Idle, s.State);
+    }
+
+    [Fact]
+    public void FailedAutoProbe_RetriesOnce_AndTheRetryCanShowTheCard()
+    {
+        var s = new ReadingSession();
+        var p1 = Probe(s, StartTimer(s));
+        var retry = Single<SessionEffect.StartStabilizationTimer>(s.Handle(new SessionEvent.ProbeCompleted(p1, new ProbeOutcome.Failed("GetFocusedElement failed (0x80131505)"))));
+
+        var p2 = Probe(s, retry.TimerId);
+        var fx = s.Handle(new SessionEvent.ProbeCompleted(p2, new ProbeOutcome.Selected(Snap("ready now"))));
+        Assert.Contains(fx, e => e is SessionEffect.StartTranslation);
+        Assert.Equal(SessionState.Loading, s.State);
+    }
+
+    [Fact]
+    public void NoSelection_IsNotRetried_AndANewTriggerGetsItsOwnRetry()
+    {
+        var s = new ReadingSession();
+        var p1 = Probe(s, StartTimer(s));
+        Assert.Empty(s.Handle(new SessionEvent.ProbeCompleted(p1, new ProbeOutcome.NoSelection())).OfType<SessionEffect.StartStabilizationTimer>());
+        Assert.Equal(SessionState.Idle, s.State);
+
+        // Use up the retry of one trigger, then a new trigger may retry again.
+        var p2 = Probe(s, StartTimer(s));
+        var r = Single<SessionEffect.StartStabilizationTimer>(s.Handle(new SessionEvent.ProbeCompleted(p2, new ProbeOutcome.Unsupported("pane"))));
+        var p3 = Probe(s, r.TimerId);
+        s.Handle(new SessionEvent.ProbeCompleted(p3, new ProbeOutcome.Unsupported("pane")));
+        var p4 = Probe(s, StartTimer(s));
+        Assert.Single(s.Handle(new SessionEvent.ProbeCompleted(p4, new ProbeOutcome.Unsupported("pane"))).OfType<SessionEffect.StartStabilizationTimer>());
+    }
+
+    [Fact]
+    public void ExplicitProbe_AndDisabledRetry_AreNotRetried()
+    {
+        var s = new ReadingSession();
+        var explicitProbe = Single<SessionEffect.RequestProbe>(s.Handle(new SessionEvent.TriggerReceived(TriggerKind.Hotkey))).ProbeId;
+        Assert.Empty(s.Handle(new SessionEvent.ProbeCompleted(explicitProbe, new ProbeOutcome.Unsupported("pane"))).OfType<SessionEffect.StartStabilizationTimer>());
+
+        var off = new ReadingSession(new SessionOptions(ProbeRetryDelayMs: 0));
+        var p = Probe(off, StartTimer(off));
+        Assert.Empty(off.Handle(new SessionEvent.ProbeCompleted(p, new ProbeOutcome.Unsupported("pane"))).OfType<SessionEffect.StartStabilizationTimer>());
+        Assert.Equal(SessionState.Idle, off.State);
+    }
 }

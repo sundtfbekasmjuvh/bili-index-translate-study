@@ -231,14 +231,24 @@ public class AppMatrixTests
             var ms = sw.Elapsed.TotalMilliseconds;
             ui.PressEscape();
             var gone = ui.WaitForCardGone();
-            _out.WriteLine($"first selection (warm-up) OK in {ms:F0} ms; {how}" + (gone ? "" : "; card still visible after Esc"));
-            return new WarmUpOutcome(true, ms, gone ? how : how + "; card still visible 8 s after Esc");
+            var retried = WriteProbeLog(ui);
+            _out.WriteLine($"first selection (warm-up) OK in {ms:F0} ms; {how}" + (gone ? "" : "; card still visible after Esc") + (retried ? "; probe retried once" : ""));
+            return new WarmUpOutcome(true, ms, (gone ? how : how + "; card still visible 8 s after Esc") + (retried ? "; probe retried once" : ""));
         }
         catch (Exception ex)
         {
+            WriteProbeLog(ui);
             _out.WriteLine("first selection (warm-up) FAILED: " + ex.Message);
             return new WarmUpOutcome(false, null, ex.Message);
         }
+    }
+
+    /// <summary>Writes the app's probe log lines so far; true when the session retried a probe (unsupported or failed first answer).</summary>
+    private bool WriteProbeLog(UiSession ui)
+    {
+        var lines = ui.DiagnosticsLog().Split('\n').Select(l => l.TrimEnd('\r')).Where(l => l.Contains(" probe ", StringComparison.Ordinal)).ToList();
+        foreach (var line in lines) _out.WriteLine("  app " + line);
+        return lines.Any(l => l.Contains("retrying once", StringComparison.Ordinal));
     }
 
     private static void CheckBody(Gesture gesture, string body)
