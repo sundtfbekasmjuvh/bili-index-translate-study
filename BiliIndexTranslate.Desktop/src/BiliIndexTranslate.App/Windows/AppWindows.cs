@@ -35,6 +35,7 @@ internal sealed class AppWindows
     private readonly AppSupportRegistry _registry;
     private readonly Func<AppSettings> _settings;
     private readonly string _settingsFilePath;
+    private readonly string _dataDir;
     private readonly Func<AppSettings, CancellationToken, Task<(bool Ok, string Message)>> _testConnection;
     private readonly Func<AppSettings, string?> _applySettings;
     private readonly Func<UpdateService> _updates;
@@ -49,6 +50,7 @@ internal sealed class AppWindows
 
     /// <param name="settings">The current settings (read at each use).</param>
     /// <param name="settingsFilePath">Where the Settings window says the settings are stored.</param>
+    /// <param name="dataDir">The data directory (settings, logs); the diagnostics bundle reads its log files.</param>
     /// <param name="testConnection">The Settings window's "Save and test" request.</param>
     /// <param name="applySettings">Applies and saves the settings the Settings window hands over; returns why it could not be saved, or null.</param>
     /// <param name="updates">The update service (created after this object, so it is read when Settings opens).</param>
@@ -60,6 +62,7 @@ internal sealed class AppWindows
         AppSupportRegistry registry,
         Func<AppSettings> settings,
         string settingsFilePath,
+        string dataDir,
         Func<AppSettings, CancellationToken, Task<(bool Ok, string Message)>> testConnection,
         Func<AppSettings, string?> applySettings,
         Func<UpdateService> updates,
@@ -71,6 +74,7 @@ internal sealed class AppWindows
         _registry = registry;
         _settings = settings;
         _settingsFilePath = settingsFilePath;
+        _dataDir = dataDir;
         _testConnection = testConnection;
         _applySettings = applySettings;
         _updates = updates;
@@ -122,7 +126,7 @@ internal sealed class AppWindows
             _diagnosticsWindow.Activate();
             return;
         }
-        _diagnosticsWindow = new DiagnosticsWindow(_log, _timings, _registry, DiagnosticsHeader);
+        _diagnosticsWindow = new DiagnosticsWindow(_log, _timings, _registry, DiagnosticsHeader, _settings, _dataDir, SystemInfo);
         _diagnosticsWindow.Closed += (_, _) => _diagnosticsWindow = null;
         _diagnosticsWindow.Show();
     }
@@ -162,18 +166,28 @@ internal sealed class AppWindows
         sb.Append(System.Globalization.CultureInfo.InvariantCulture, $"session {status.SessionState} · hooks {(status.HooksInstalled ? "ok" : "MISSING")} · uia {(status.UiaAlive ? "ok" : "stopped")} · ");
         sb.Append(System.Globalization.CultureInfo.InvariantCulture, $"cache {status.CacheEntries} entries, {status.CacheHits} hits / {status.CacheMisses} misses · in-flight {status.InFlight} · ");
         sb.Append(System.Globalization.CultureInfo.InvariantCulture, $"target {settings.TargetLanguage} · {ServiceLabels.ModelLabel(settings)} · {ServiceLabels.HostOf(settings)} · relay {(settings.UseRelay ? "on" : "off")} · auto {(settings.AutoTranslate ? "on" : "off")} · delay {settings.StabilizationDelayMs} ms");
+        var monitors = MonitorSummaries();
+        if (monitors.Count > 0) sb.Append(" · monitors: ").Append(string.Join(", ", monitors));
+        return sb.ToString();
+    }
+
+    /// <summary>One "name WxH@scale%" text per monitor (empty when they cannot be listed).</summary>
+    private List<string> MonitorSummaries()
+    {
+        var monitors = new List<string>();
         try
         {
-            var monitors = new List<string>();
             NativeMethods.EnumDisplayMonitors(IntPtr.Zero, IntPtr.Zero, (IntPtr h, IntPtr _, ref RECT _, IntPtr _) =>
             {
                 var m = Win32MonitorLocator.FromHandle(h, _log);
                 monitors.Add($"{m.Name.TrimStart('\\', '.')} {m.Bounds.Width}x{m.Bounds.Height}@{m.Scale * 100:0}%");
                 return true;
             }, IntPtr.Zero);
-            if (monitors.Count > 0) sb.Append(" · monitors: ").Append(string.Join(", ", monitors));
         }
         catch (Exception) { }
-        return sb.ToString();
+        return monitors;
     }
+
+    private string SystemInfo()
+        => SystemInfoReport.Build(typeof(AppHost).Assembly.GetName().Version?.ToString() ?? "?", _updates().IsInstalled, _settings(), _dataDir, MonitorSummaries());
 }

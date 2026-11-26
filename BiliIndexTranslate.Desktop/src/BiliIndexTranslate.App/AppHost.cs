@@ -38,6 +38,7 @@ internal sealed class AppHost : IDisposable
     private readonly Dispatcher _dispatcher;
     private readonly string _dataDir;
     private readonly bool _forceWelcome;
+    private readonly bool _openDiagnostics;
 
     private readonly DiagnosticsLog _log = new(300);
     private readonly TimingStats _timings = new(128);
@@ -83,12 +84,13 @@ internal sealed class AppHost : IDisposable
     private bool _started;
     private bool _disposed;
 
-    public AppHost(Application app, string dataDir, bool forceWelcome)
+    public AppHost(Application app, string dataDir, bool forceWelcome, bool openDiagnostics = false)
     {
         _app = app;
         _dispatcher = app.Dispatcher;
         _dataDir = dataDir;
         _forceWelcome = forceWelcome;
+        _openDiagnostics = openDiagnostics;
         _store = new SettingsStore(Path.Combine(dataDir, "settings.json"), new DpapiSecretProtector());
         _translator = new OpenAiCompatibleTranslator(_transport, TimeSpan.FromSeconds(20));
         _studyService = new StudyCardService(_transport, TimeSpan.FromSeconds(30));
@@ -103,6 +105,7 @@ internal sealed class AppHost : IDisposable
             _registry,
             () => _settings,
             _store.FilePath,
+            dataDir,
             TestConnectionAsync,
             s => ApplySettings(s, notifySession: true, notifySaveFailure: false),
             () => _updates,
@@ -243,6 +246,7 @@ internal sealed class AppHost : IDisposable
 
         _log.Info("app", $"ready · auto={_settings.AutoTranslate} delay={_settings.StabilizationDelayMs}ms target={_settings.TargetLanguage} model={_settings.Model} relay={_settings.UseRelay}");
         if (_forceWelcome || !_settings.OnboardingCompleted) _windows.OpenWelcome(force: false);
+        if (_openDiagnostics) _windows.OpenDiagnostics();
 
         // Prepare the card window once the start-up work is done, so the first selection does not wait for it.
         System.Windows.Threading.Dispatcher.CurrentDispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.ApplicationIdle, () =>

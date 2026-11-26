@@ -40,6 +40,17 @@ The app lives in the notification area. Right-click the icon for: automatic tran
 "Don't translate in *app*", translate clipboard text, Settings, Diagnostics, Welcome, Exit (and, while a
 downloaded update is waiting, Restart and update).
 A second instance does not start twice; it opens the Settings window of the running one.
+`BiliIndexTranslate.exe --diagnostics` opens the Diagnostics window right after start.
+
+**Diagnostics bundle.** The Diagnostics window has an **Export diagnostics…** button that saves a ZIP for bug
+reports: `report.txt` (what "Copy report" gives), `diagnostics.log` (last 2 MB, only if file logging is on and
+the file exists), `crash.log` (last 512 KB, only if it exists), `system.txt` (app version, installed or portable,
+Windows and .NET versions, architecture, languages, high contrast, light/dark, monitors, uptime, data directory)
+and `settings.json` (redacted). It never contains selected text, translations, the API key, URL paths or queries
+(only `scheme://host`), header values, the request body, glossary content, the user name or the machine name:
+the profile path, user name and machine name are replaced by `%USERPROFILE%`, `%USERNAME%` and `%COMPUTERNAME%`,
+and so is any other folder name under `X:\Users\` (such as the short `JOHNSM~1` form that temporary paths use).
+The file is saved only where you choose in the Save dialog; nothing is uploaded.
 
 ## Using it
 
