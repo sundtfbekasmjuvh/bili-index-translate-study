@@ -208,6 +208,23 @@ public sealed class UiSession : IDisposable
         Keyboard.Release(VirtualKeyShort.SHIFT);
     }
 
+    /// <summary>Focuses the text box, puts the caret at the start and selects the first three words (Ctrl+Shift+Right x3): a text that differs from Ctrl+A's.</summary>
+    public void SelectFirstWords()
+    {
+        TargetWindow.SetForeground();
+        var box = SourceBox;
+        box.Focus();
+        box.Click();
+        Thread.Sleep(300);
+        Keyboard.TypeSimultaneously(VirtualKeyShort.CONTROL, VirtualKeyShort.HOME);
+        Thread.Sleep(200);
+        for (var i = 0; i < 3; i++)
+        {
+            Keyboard.TypeSimultaneously(VirtualKeyShort.CONTROL, VirtualKeyShort.SHIFT, VirtualKeyShort.RIGHT);
+            Thread.Sleep(100);
+        }
+    }
+
     /// <summary>Clicks the custom control that has no text pattern (focuses it).</summary>
     public void ClickNoTextPatternBox()
     {
@@ -251,14 +268,34 @@ public sealed class UiSession : IDisposable
         return null;
     }
 
+    /// <summary>
+    /// Handle of the app's window that holds the card (the one with <c>TranslationText</c>), found with Win32.
+    /// With <paramref name="includeHidden"/> the hidden windows are searched too (the card window is only hidden, not
+    /// destroyed, after Esc). A hidden window may expose no UIA children, so find the handle while the card is visible
+    /// and keep it.
+    /// </summary>
+    public IntPtr FindCardWindow(bool includeHidden)
+    {
+        var cf = Automation.ConditionFactory;
+        foreach (var hwnd in Win32.TopLevelWindows(_app!.Id, visibleOnly: !includeHidden))
+        {
+            try
+            {
+                if (Automation.FromHandle(hwnd).FindFirstDescendant(cf.ByAutomationId("TranslationText")) is not null) return hwnd;
+            }
+            catch (Exception) { /* window vanished */ }
+        }
+        return IntPtr.Zero;
+    }
+
     /// <summary>Translation text of the card, or null when the translation body is not shown (hidden, loading or error).</summary>
     public string? CardText()
     {
         try
         {
             var el = FindInApp("TranslationText");
-            // PopupWindow exposes the text as HelpText: its Name is the fixed label "Translation".
-            return el?.Properties.HelpText.ValueOrDefault ?? (el is null ? null : string.Empty);
+            // PopupWindow sets the element's Name to the translation text (screen readers read the Name); HelpText is the label "Translation".
+            return el?.Properties.Name.ValueOrDefault ?? (el is null ? null : string.Empty);
         }
         catch (Exception) { return null; }
     }
