@@ -50,14 +50,18 @@ public sealed class UiSession : IDisposable
     private readonly bool _hotkeyEnabled;
     private readonly bool _uiaSelectionEvents;
     private readonly bool _snipHotkeyEnabled;
+    private readonly bool _onboardingCompleted;
 
     /// <param name="external">When given, this program is the selection target instead of the WPF test target window.</param>
     /// <param name="hotkeyEnabled">Registers the explicit hotkey (default Alt+Q) in the app; off for all other tests.</param>
     /// <param name="uiaSelectionEvents">The app's UseUiaSelectionEvents setting (its default is on).</param>
     /// <param name="snipHotkeyEnabled">The app's SnipHotkeyEnabled setting (screen snip, default Alt+Shift+S); off for all other tests.</param>
+    /// <param name="onboardingCompleted">The app's OnboardingCompleted setting; false makes the app open its Welcome window at start (default true: no Welcome window).</param>
     public UiSession(string testName, int? failWithStatus = null, ExternalTarget? external = null,
-        bool hotkeyEnabled = false, bool uiaSelectionEvents = true, bool snipHotkeyEnabled = false)
+        bool hotkeyEnabled = false, bool uiaSelectionEvents = true, bool snipHotkeyEnabled = false,
+        bool onboardingCompleted = true)
     {
+        _onboardingCompleted = onboardingCompleted;
         _snipHotkeyEnabled = snipHotkeyEnabled;
         _testName = testName;
         _external = external;
@@ -94,7 +98,7 @@ public sealed class UiSession : IDisposable
             ApiFormat = ApiFormat.OpenAi,
             Model = "Index-Translate-9B",
             AutoTranslate = true,
-            OnboardingCompleted = true,
+            OnboardingCompleted = _onboardingCompleted,
             UiLanguage = "en",
             HotkeyEnabled = _hotkeyEnabled,
             UseUiaSelectionEvents = _uiaSelectionEvents,
