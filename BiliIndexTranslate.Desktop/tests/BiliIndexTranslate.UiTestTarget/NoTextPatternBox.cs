@@ -22,12 +22,12 @@ public sealed class NoTextPatternBox : FrameworkElement
         FocusVisualStyle = null;
     }
 
-    protected override void OnRender(DrawingContext dc)
+    protected override void OnRender(DrawingContext drawingContext)
     {
-        dc.DrawRectangle(Brushes.White, new Pen(IsKeyboardFocused ? Brushes.SteelBlue : Brushes.Gray, 1), new Rect(0, 0, ActualWidth, ActualHeight));
+        drawingContext.DrawRectangle(Brushes.White, new Pen(IsKeyboardFocused ? Brushes.SteelBlue : Brushes.Gray, 1), new Rect(0, 0, ActualWidth, ActualHeight));
         var text = new FormattedText(CopyText, CultureInfo.InvariantCulture, FlowDirection.LeftToRight,
             new Typeface("Segoe UI"), 18, Brushes.Black, VisualTreeHelper.GetDpi(this).PixelsPerDip);
-        dc.DrawText(text, new Point(8, 8));
+        drawingContext.DrawText(text, new Point(8, 8));
     }
 
     protected override void OnMouseDown(MouseButtonEventArgs e)

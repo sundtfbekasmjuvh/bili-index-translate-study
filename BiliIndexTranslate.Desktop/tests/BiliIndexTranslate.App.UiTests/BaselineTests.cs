@@ -256,8 +256,10 @@ public class BaselineTests
             environment = new { os = Environment.OSVersion.ToString(), processorCount = Environment.ProcessorCount },
         };
         File.WriteAllText(Path.Combine(dir, file + ".json"),
-            JsonSerializer.Serialize(doc, new JsonSerializerOptions { WriteIndented = true }));
+            JsonSerializer.Serialize(doc, IndentedJson));
     }
+
+    private static readonly JsonSerializerOptions IndentedJson = new() { WriteIndented = true };
 
     private static string Name([System.Runtime.CompilerServices.CallerMemberName] string? name = null) => name!;
 }

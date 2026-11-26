@@ -201,7 +201,7 @@ internal sealed class UiaSelectionReader
         }
     }
 
-    private GeometryUpdate ReadGeometry(TrackedSelection tracked, ReaderPolicy policy)
+    private static GeometryUpdate ReadGeometry(TrackedSelection tracked, ReaderPolicy policy)
     {
         var selection = tracked.Pattern.GetSelection();
         if (selection is null || selection.Length == 0) return new GeometryUpdate.Cleared();

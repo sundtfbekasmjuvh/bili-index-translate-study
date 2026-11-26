@@ -152,7 +152,7 @@ public class HttpTranslationTransportTests
             var headEnd = text.IndexOf("\r\n\r\n", StringComparison.Ordinal);
             if (headEnd < 0) continue;
             var lengthLine = text[..headEnd].Split("\r\n").FirstOrDefault(l => l.StartsWith("Content-Length:", StringComparison.OrdinalIgnoreCase));
-            var bodyLength = lengthLine is null ? 0 : int.Parse(lengthLine["Content-Length:".Length..].Trim());
+            var bodyLength = lengthLine is null ? 0 : int.Parse(lengthLine["Content-Length:".Length..].Trim(), System.Globalization.CultureInfo.InvariantCulture);
             if (text.Length - (headEnd + 4) >= bodyLength) break;
         }
 

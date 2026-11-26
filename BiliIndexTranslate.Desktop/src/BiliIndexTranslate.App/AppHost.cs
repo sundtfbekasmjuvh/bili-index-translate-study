@@ -550,7 +550,7 @@ internal sealed class AppHost : IDisposable
 
     // ---- translation --------------------------------------------------------------------------------
 
-    private TranslationRequest BuildRequest(string text, AppSettings s)
+    private static TranslationRequest BuildRequest(string text, AppSettings s)
     {
         var lang = s.ResolvedTargetLanguage;
         return new TranslationRequest(text.Trim(), lang.Code, lang.PromptName, s.SourceLanguage, s.Model, s.BaseUrl, s.UseRelay, s.RelayPrefix, s.ApiKey, s.GlossaryText, s.ApiFormat, s.CustomTemplate);
@@ -1259,10 +1259,10 @@ internal sealed class AppHost : IDisposable
     private string DiagnosticsHeader()
     {
         var sb = new StringBuilder();
-        sb.Append($"v{typeof(AppHost).Assembly.GetName().Version} · {Environment.OSVersion.Version} · .NET {Environment.Version} · ");
-        sb.Append($"session {_session.State} · hooks {(_hooks.HooksInstalled ? "ok" : "MISSING")} · uia {(_observer.IsAlive ? "ok" : "stopped")} · ");
-        sb.Append($"cache {_cache.Count} entries, {_cache.Hits} hits / {_cache.Misses} misses · in-flight {_coordinator.ActiveCount} · ");
-        sb.Append($"target {_settings.TargetLanguage} · {ServiceLabel(_settings)} · {HostOf(_settings)} · relay {(_settings.UseRelay ? "on" : "off")} · auto {(_settings.AutoTranslate ? "on" : "off")} · delay {_settings.StabilizationDelayMs} ms");
+        sb.Append(System.Globalization.CultureInfo.InvariantCulture, $"v{typeof(AppHost).Assembly.GetName().Version} · {Environment.OSVersion.Version} · .NET {Environment.Version} · ");
+        sb.Append(System.Globalization.CultureInfo.InvariantCulture, $"session {_session.State} · hooks {(_hooks.HooksInstalled ? "ok" : "MISSING")} · uia {(_observer.IsAlive ? "ok" : "stopped")} · ");
+        sb.Append(System.Globalization.CultureInfo.InvariantCulture, $"cache {_cache.Count} entries, {_cache.Hits} hits / {_cache.Misses} misses · in-flight {_coordinator.ActiveCount} · ");
+        sb.Append(System.Globalization.CultureInfo.InvariantCulture, $"target {_settings.TargetLanguage} · {ServiceLabel(_settings)} · {HostOf(_settings)} · relay {(_settings.UseRelay ? "on" : "off")} · auto {(_settings.AutoTranslate ? "on" : "off")} · delay {_settings.StabilizationDelayMs} ms");
         try
         {
             var monitors = new List<string>();

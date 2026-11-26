@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 using FlaUI.Core.AutomationElements;
 using FlaUI.UIA3;
@@ -30,10 +31,10 @@ public static class UiaDiagnostics
                 var name = Safe(() => current.Properties.Name.ValueOrDefault ?? string.Empty);
                 if (name.Length > 40) name = name[..40] + "...";
                 var hasText = Safe(() => current.Patterns.Text.IsSupported.ToString());
-                sb.Append($"  hop {hop}: {Safe(() => current.Properties.ControlType.ValueOrDefault.ToString())}")
-                  .Append($" class='{Safe(() => current.Properties.ClassName.ValueOrDefault ?? string.Empty)}'")
-                  .Append($" framework='{Safe(() => current.Properties.FrameworkId.ValueOrDefault ?? string.Empty)}'")
-                  .Append($" name='{name}' textPattern={hasText}");
+                sb.Append(CultureInfo.InvariantCulture, $"  hop {hop}: {Safe(() => current.Properties.ControlType.ValueOrDefault.ToString())}")
+                  .Append(CultureInfo.InvariantCulture, $" class='{Safe(() => current.Properties.ClassName.ValueOrDefault ?? string.Empty)}'")
+                  .Append(CultureInfo.InvariantCulture, $" framework='{Safe(() => current.Properties.FrameworkId.ValueOrDefault ?? string.Empty)}'")
+                  .Append(CultureInfo.InvariantCulture, $" name='{name}' textPattern={hasText}");
                 if (hasText == bool.TrueString)
                 {
                     sb.Append(" selection=").Append(Safe(() =>

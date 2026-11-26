@@ -26,7 +26,7 @@ public interface IMonitorLocator
 /// <summary>A static locator over a fixed list of monitors. Used by tests and as a fallback.</summary>
 public sealed class StaticMonitorLocator : IMonitorLocator
 {
-    private readonly IReadOnlyList<MonitorArea> _monitors;
+    private readonly MonitorArea[] _monitors;
 
     public StaticMonitorLocator(params MonitorArea[] monitors)
     {

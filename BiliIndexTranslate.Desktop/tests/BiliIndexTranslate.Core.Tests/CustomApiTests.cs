@@ -459,6 +459,7 @@ public class CustomApiSettingsTests : IDisposable
     public void Dispose()
     {
         try { Directory.Delete(_dir, true); } catch { }
+        GC.SuppressFinalize(this);
     }
 
     [Fact]

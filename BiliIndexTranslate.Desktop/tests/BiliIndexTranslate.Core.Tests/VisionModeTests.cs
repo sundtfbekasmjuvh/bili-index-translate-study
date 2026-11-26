@@ -28,6 +28,7 @@ public class VisionModeSettingsTests : IDisposable
     public void Dispose()
     {
         try { Directory.Delete(_dir, true); } catch { }
+        GC.SuppressFinalize(this);
     }
 
     private SettingsLoadResult LoadJson(string json)

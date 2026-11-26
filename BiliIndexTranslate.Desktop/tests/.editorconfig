@@ -1,0 +1,11 @@
+# Test projects only.
+[*.cs]
+# CA1707: test methods use Given_When_Then style names with underscores by convention.
+dotnet_diagnostic.CA1707.severity = none
+
+# CA1861: inline arrays are one-shot test inputs; hoisting them to static fields would hurt readability for no gain.
+dotnet_diagnostic.CA1861.severity = none
+
+[UiSession.cs]
+# CA1822: PressHotkey/PressEscape/PressSnipHotkey are called as ui.PressX() at many call sites; keeping them instance methods preserves the session API.
+dotnet_diagnostic.CA1822.severity = none

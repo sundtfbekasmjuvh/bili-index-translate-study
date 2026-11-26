@@ -3,7 +3,6 @@
     <TargetFramework>net10.0</TargetFramework>
     <RootNamespace>BiliIndexTranslate.Core</RootNamespace>
     <AssemblyName>BiliIndexTranslate.Core</AssemblyName>
-    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
   </PropertyGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="BiliIndexTranslate.Core.Tests" />
