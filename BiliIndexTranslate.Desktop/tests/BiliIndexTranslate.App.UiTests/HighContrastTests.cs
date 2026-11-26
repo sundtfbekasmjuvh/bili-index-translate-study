@@ -34,8 +34,10 @@ public class HighContrastTests
                     $"high contrast is still off after SPI_SETHIGHCONTRAST succeeded (flags 0x{now.Flags:X}, scheme '{now.Scheme}'); this machine does not switch");
                 WaitForLog(ui, "theme: high contrast");
 
-                // The card still works with the high-contrast palette.
-                ui.SelectAll();
+                // The card still works with the high-contrast palette. The target window is being redrawn for high
+                // contrast right now, and FlaUI can briefly find no clickable point in it (NoClickablePointException).
+                var selected = Retry.WhileException(ui.SelectAll, TimeSpan.FromSeconds(10), TimeSpan.FromMilliseconds(500));
+                Assert.True(selected.Success, "could not click the target text box after switching high contrast: " + selected.LastException?.Message);
                 ui.WaitForCardText(Full);
                 ui.PressEscape();
                 Assert.True(ui.WaitForCardGone(), "card still visible after Esc");
