@@ -121,6 +121,16 @@ jobs:
           if (-not ($velopack | Where-Object { $_.Name -eq "BiliIndexTranslate.Desktop-$version-full.nupkg" })) { throw "vpk produced no BiliIndexTranslate.Desktop-$version-full.nupkg in $out" }
           if (-not ($velopack | Where-Object { $_.Name -eq "releases.win.json" })) { throw "vpk produced no releases.win.json in $out" }
           $assets += @($velopack | ForEach-Object FullName)
+
+          # package-release.ps1 lists the ZIPs in SHA256SUMS.txt. The installer and the update packages are
+          # downloads too, so they are added in the same "<sha256>  <name>" form (LF, UTF-8 without BOM).
+          $extraSums = @($velopack | Where-Object { $_.Name -like "*-Setup.exe" -or $_.Extension -eq ".nupkg" } | Sort-Object Name | ForEach-Object {
+            (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant() + "  " + $_.Name
+          })
+          [IO.File]::AppendAllText($sums[0].FullName, (($extraSums -join "`n") + "`n"), [Text.UTF8Encoding]::new($false))
+          Write-Host "SHA256SUMS.txt:"
+          Get-Content -LiteralPath $sums[0].FullName | ForEach-Object { Write-Host "  $_" }
+
           Write-Host "Uploading $($assets.Count) files:"
           $assets | ForEach-Object { Write-Host "  $(Split-Path -Leaf $_)" }
 

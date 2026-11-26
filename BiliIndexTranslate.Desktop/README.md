@@ -193,7 +193,8 @@ In both cases settings and the encrypted key are kept; the schema is versioned a
 are ignored. Apart from the update packages of the installed version, nothing else is written to disk
 unless file logging is on.
 
-**Publishing (maintainers).** The release workflow builds the zips, `SHA256SUMS.txt` and the Velopack
+**Publishing (maintainers).** The release workflow builds the zips, the Velopack
 files (`*-Setup.exe`, `*-full.nupkg`, a `*-delta.nupkg` when there is an earlier Velopack release,
-`releases.win.json`) into one **draft** release. Installed apps read only *published* releases, so an
+`releases.win.json`) and `SHA256SUMS.txt` (checksums of the zips, the installer and the packages) into one
+**draft** release. Installed apps read only *published* releases, so an
 update reaches users only after the draft has been reviewed and published.
