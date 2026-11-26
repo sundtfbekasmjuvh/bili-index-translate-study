@@ -7,7 +7,7 @@ Windows 11 Pro for Workstations (build 26200), .NET SDK 8.0.427, from the v1.4.0
 | Check | Result |
 |---|---|
 | `dotnet build BiliIndexTranslate.sln -c Release` | 0 errors, 0 warnings |
-| `dotnet test tests/BiliIndexTranslate.Core.Tests -c Release` | **123 passed, 0 failed** (session state machine, placement/anchoring, endpoint resolution, response parsing, vision dual output, study cards, cache, coordinator races, settings load/migrate) |
+| `dotnet test tests/BiliIndexTranslate.Core.Tests -c Release` | **253 passed, 0 failed** (session state machine, placement/anchoring, endpoint resolution, DeepLX format, custom API templates, response parsing, SSE transport, vision dual output, study cards, cache, coordinator races, settings load/migrate, interface text in both languages) |
 | `dotnet publish … -r win-x64 --self-contained false` | `BiliIndexTranslate.exe` — PE32+ x64 GUI, version 1.4.0 embedded (864 KB folder) |
 | `dotnet publish … --self-contained true -p:PublishSingleFile=true` | single 139 MB exe produced |
 | Icon | `tools/make-icon.py` output inspected at 256 px |
@@ -38,6 +38,92 @@ exercised.
 Probe latency over the run was 2.4–12.7 ms; the two translation paths measured 1 ms (cache
 warm mock) and 67 ms against the mock upstream.
 
+### DeepLX format through the Settings window (2026-11-12)
+
+Framework-dependent publish output of the working tree, driven through UI Automation against a
+local DeepLX-style mock on `127.0.0.1` (`tests/support/mock-upstream.js`). The user's
+`settings.json` was backed up first and restored afterwards (same SHA-256).
+
+| # | Step | Result |
+|---|---|---|
+| 1 | Open Settings (second instance) with a settings file that has no `apiFormat` | ✅ `API format` lists `OpenAI-compatible (/chat/completions)` and `DeepLX-compatible (/translate)`; OpenAI-compatible is selected |
+| 2 | Select DeepLX, endpoint `http://127.0.0.1:<port>/translate?token={apiKey}`, a test key, **Save and test** | ✅ `OK · 135 ms via direct · “译文：Hello, world.”`; the mock received one `POST /translate` with the key in the `token` query parameter, no `Authorization` header and the body `{"text":"Hello, world.","source_lang":"auto","target_lang":"ZH"}` |
+| 3 | Saved file | ✅ `"apiFormat": "Deeplx"`, the endpoint with its `{apiKey}` placeholder, the key as a DPAPI blob (`apiKeyScheme: dpapi-user`); the test key does not appear in plain text |
+| 4 | Restart, reopen Settings, **Save and test** | ✅ DeepLX still selected, endpoint kept, `OK · 131 ms via direct`; the mock received the same token again, so the key was read back from the file |
+| 5 | Switch to OpenAI-compatible while the endpoint still contains `{apiKey}`, **Save and test** | ✅ rejected with `The endpoint contains {apiKey}, which the OpenAI-compatible format does not fill in. …`; the settings file is unchanged (message as of the custom-format build) |
+
+Not exercised live with the DeepLX format: the selection popup, Study Card and screen snip (unit
+tests only).
+
+The same build started from `src\BiliIndexTranslate.App\bin\Release\net8.0-windows` translated
+correctly, but on this machine neither `settings.json` nor `diagnostics.log` was written; from the
+publish output both were. See the next section for the cause.
+
+### Settings that cannot be written (2026-11-12)
+
+Cause of the note above, found on this machine: the directory that holds the checkout carries a
+Low mandatory integrity label that every file below it inherits
+(`icacls <dir>` prints `Mandatory Label\Low Mandatory Level:(OI)(CI)(NW)`). Windows starts an
+executable with such a label at low integrity, and a low-integrity process may not write to
+`%LocalAppData%`. Measured: the app started from `bin\Release` ran at integrity level `0x1000`
+(Low) while the shell that started it ran at `0x2000` (Medium); a copy of `whoami.exe` placed in
+`bin\` reported `Low Mandatory Level`, the original `Medium Mandatory Level`. The publish output
+used in the walkthroughs was outside that directory. Security software was not involved.
+
+The app used to log such a failure and nothing else. Now:
+
+| # | Step | Result |
+|---|---|---|
+| 1 | Start from `bin\Release` (low integrity), open Settings, **Save** | ✅ the window stays open and shows `Settings were not saved (UnauthorizedAccessException: Access to the path '…\settings.json.tmp' is denied.). They stay in effect until the app exits.`; `settings.json` is unchanged (same SHA-256) and no `.tmp` file is left behind |
+
+Not exercised live: the tray notice shown when a background save fails (text size or the
+auto-translate toggle), and **Save and test** in this state (it reports the save failure together
+with the result of the connection test).
+
+If settings do not persist with `tools\run.cmd`, check the label with `icacls` and either build
+to a directory without it (`dotnet publish … -o <dir>`) or move the checkout.
+
+### Custom API template through the Settings window (2026-11-12)
+
+Same setup as the DeepLX walkthrough above (publish output, UI Automation, the user's
+`settings.json` backed up and restored with the same SHA-256), against the mock's `/custom-api`
+endpoint, whose made-up shape (`{ q: [...], to }` with an `X-Api-Key` header →
+`{ result: { items: [{ out }] } }`) can only be described by a template.
+
+| # | Step | Result |
+|---|---|---|
+| 1 | Open Settings | ✅ `API format` lists three entries; the template fields are not shown |
+| 2 | Select `Custom JSON API (template)` | ✅ the template fields appear |
+| 3 | Preset `DeepL API Free` | ✅ endpoint `https://api-free.deepl.com/v2/translate`, headers `Authorization: DeepL-Auth-Key {apiKey}`, body `{"text": {texts}, "target_lang": "{targetLang}"}`, result path `translations[*].text`; status `Preset loaded: DeepL. …`; the settings file is unchanged |
+| 4 | Custom with an empty result path, then with the body `{"q": {text}}`, **Save and test** | ✅ rejected with `The result path is empty. …` and `The request body is not valid JSON once the placeholders are filled in. …`; the settings file is unchanged both times |
+| 5 | Fill in the mock's template and a test key, **Save and test** | ✅ `OK · … via direct · “译文：Hello, world.”`; the mock received `POST /custom-api` with `X-Api-Key` set to the key, no `Authorization` header and the body `{"q":["Hello, world."],"to":"zh"}` |
+| 6 | Saved file | ✅ `"apiFormat": "Custom"` and the six `custom…` fields; the key as a DPAPI blob, not in plain text |
+| 7 | Restart, reopen Settings, **Save and test** | ✅ Custom still selected, the template fields shown with the saved values, `OK · 134 ms via direct` |
+
+The very first request of step 5 took 10.6 s; the six requests after it, including the first
+request of the restarted process, took 28–134 ms. The cause was not found: proxy auto-detection is
+off on this machine and `127.*` is in the proxy bypass list. It did not happen again.
+
+### Interface language through the Settings window (2026-11-12)
+
+Same setup as the walkthroughs above (publish output outside the checkout, UI Automation, the
+user's `settings.json` backed up and restored with the same SHA-256). Windows display language
+`zh-CN`; the settings file had no `uiLanguage`. Started with `--welcome` so that a second window
+is open while the setting changes.
+
+| # | Step | Result |
+|---|---|---|
+| 1 | Start with a settings file that has no `uiLanguage` | ✅ Welcome window in Chinese (`安静的阅读伴侣`, buttons `设置…` / `开始阅读`): "Auto" follows the Windows language |
+| 2 | Open Settings | ✅ title `Bili Index Translate — 设置`, buttons `取消` / `保存` / `保存并测试`; `Interface language` lists `自动（跟随 Windows 语言）` (selected), `English`, `简体中文` |
+| 3 | Select English, **Save** | ✅ the file has `"uiLanguage": "en"`; the Welcome window, which stayed open, now reads `A quiet reading companion` / `Settings…` / `Start reading` |
+| 4 | Reopen Settings | ✅ title `Bili Index Translate — Settings`, `Cancel` / `Save` / `Save and test`, English selected, the shortcut help and the `Show` button in English; selecting another language changes nothing until it is saved |
+| 5 | Select 简体中文, **Save**, reopen Settings | ✅ `"uiLanguage": "zh-CN"`; Welcome and Settings in Chinese, including the help texts set from code (`在 UI Automation 读不到选中内容时使用…`) and the `显示` button |
+| 6 | Select Auto, **Save** | ✅ `"uiLanguage": "auto"`; Welcome stays Chinese |
+
+Not exercised live in either language: the tray menu, the translation popup, the Study Card, the
+screen-snip overlay and the Diagnostics window (their text goes through the same table and binding;
+the unit tests check that every key they use exists).
+
 ### Resource behaviour over 200 selections
 
 Sampled every 10th selection of the app process:
@@ -58,8 +144,139 @@ parameters, not results. The Diagnostics window reports p50/p95 per category whi
 runs — the categories are `Detect`, `Probe`, `Cache`, `Render`, `Http` and `Refresh`.
 
 If `dotnet test` aborts on Windows with `Win32Exception (5): Access is denied` while the test host
-looks up its parent process, security software is blocking the test host in `bin\`. Point the
+looks up its parent process, check the checkout for the Low integrity label described under
+"Settings that cannot be written": `testhost.exe` in `bin\` is then started at low integrity and
+may not open the medium-integrity `dotnet` process that started it. On this machine the abort
+reproduces with the default output directory and all tests pass with the output elsewhere. Point the
 output somewhere else, for example `dotnet test … -o %TEMP%\bit-tests`.
+
+## Checked on Linux (2026-11-15)
+
+Arch Linux, .NET SDK 8.0.428, from the 1.5.0 sources plus the streaming changes (idle timeout for
+streamed replies, errors reported inside a stream, `LatestValueRelay` for image-translation deltas).
+The app cannot run on Linux, so this covers compilation and the platform-independent core only.
+
+| Check | Result |
+|---|---|
+| `dotnet build BiliIndexTranslate.sln -c Release -warnaserror` (the app project sets `EnableWindowsTargeting`) | 0 errors, 0 warnings |
+| `dotnet test tests/BiliIndexTranslate.Core.Tests -c Release` | **266 passed, 0 failed** (the 253 above plus `StreamingTests.cs`: stream deltas and in-stream errors, the idle timeout over a real socket, `LatestValueRelay`; and `SseLineTests.cs`: SSE line reading with CRLF, no space after `data:`, blank and comment lines, `[DONE]`) |
+
+Not exercised on Windows yet: `AppHost` now hands streamed image-translation deltas to the popup
+through `LatestValueRelay` at `DispatcherPriority.Background`. The relay itself is unit-tested; that
+the popup still updates smoothly while an image translation streams, and that the final result is
+never overwritten by a late delta, should be confirmed with scenario walkthroughs on Windows.
+
+## Checked on Linux (2026-11-25): .NET 10 and the streaming selection card
+
+.NET SDK 10.0.404. The app now targets .NET 10, and the selection card shows the translation while it
+is generated (chat format only; DeepLX and custom templates are unchanged).
+
+| Check | Result |
+|---|---|
+| `dotnet build BiliIndexTranslate.sln -c Release -warnaserror` | 0 errors, 0 warnings |
+| `dotnet test tests/BiliIndexTranslate.Core.Tests -c Release` | **310 passed, 0 failed** (the 266 above plus `StreamingTranslationTests.cs`: partial text from the translator, `<think>` filtering, a server that ignores `stream`, in-stream errors, cancellation; the coordinator delivering partial text only while the request is current and never after the final result; the session showing it only while loading) |
+
+Not exercised on Windows yet:
+
+- The card fills in while the translation streams, with no stutter and without delaying input or rendering.
+- A card above the selection grows upward without jumping or flickering (`SizeChanged` → `Replace`).
+- The caption shows "生成中…" / "streaming…" while text arrives. When the final result lands, Copy, Pin and the Study Card button come back.
+- Esc, an outside click or a new selection during streaming closes or replaces the card, and no older partial text is drawn afterwards.
+- The real Index-Translate endpoint answers a streamed request with `text/event-stream`. Check this direct, through the relay, and with the HTTP 412 hint.
+- A cache hit shows the final translation at once, without a streaming caption.
+
+## Installer, start-up entry and updates (2026-11-25)
+
+Velopack (1.2.161) installer and auto-update, plus the "Start with Windows" option.
+
+Checked on Linux (.NET SDK 10): `dotnet build BiliIndexTranslate.sln -c Release -warnaserror` gives 0 errors and
+0 warnings, and `dotnet test tests/BiliIndexTranslate.Core.Tests -c Release` passes **349** tests (the 318 before plus
+`UpdateAndStartupTests.cs`: when the next automatic check happens, the quoted start-up value and the "does this value
+start this exe" rule, update error text without URLs or tokens, and the `autoCheckForUpdates` setting with an old
+settings file). CI also runs "Velopack pack (dry run)", which publishes the self-contained build, runs `vpk pack` and
+checks that `*-Setup.exe` and the full package exist. None of the following can be done on Linux, and the dry run does
+not install or start anything. Walk through these on Windows, with a build that has a version number higher than the
+one you start from:
+
+| # | Check | Expected |
+|---|---|---|
+| 1 | Run `BiliIndexTranslate.Desktop-win-Setup.exe` from a release build on a user without admin rights | Installs without a UAC prompt into `%LocalAppData%\BiliIndexTranslate.Desktop`; `current\BiliIndexTranslate.exe` exists; Start menu and desktop shortcuts; the app starts and shows its tray icon. `%LocalAppData%\BiliIndexTranslate` (settings, logs) is a different folder |
+| 2 | Open Settings in the installed app | "Start with Windows" is not ticked (default); "Check for updates automatically" is ticked; the version shown is the installed one; the update controls are enabled |
+| 3 | Tick "Start with Windows", Save, then look at `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` | Value `BiliIndexTranslate` = `"%LocalAppData%\BiliIndexTranslate.Desktop\current\BiliIndexTranslate.exe"` with the quotes. `settings.json` has no start-up field. Sign out and in: the app starts by itself |
+| 4 | Change the value to another path by hand, reopen Settings | The box is not ticked. Tick it and Save: the value is the current exe path again |
+| 5 | Untick the box and Save | The value is gone; reopening Settings shows it unticked |
+| 6 | Publish a draft release of a higher version (assets uploaded by the release workflow), publish it, and press "Check for updates" in Settings | The window says a new version was found and is downloading; a tray notice "Version x has been downloaded and will be installed when you exit." appears once; the tray menu shows "Restart and update" |
+| 7 | With the draft **unpublished**, press "Check for updates" | "You have the latest version." (drafts are invisible to the updater) |
+| 8 | Wait for the automatic check: set "Check for updates automatically" on, start the app, and watch Diagnostics (turn on file logging) | A `check` line about 60 s after start, no more until 24 h later (or after sleep and wake past 24 h); with the option off, no `update` lines at all |
+| 9 | Tray → Restart and update | The app exits, the new version installs and starts; Settings shows the new version; the start-up value still points to the same `current\` path and the app still starts at sign-in |
+| 10 | Download an update again, then Tray → Exit | No window or restart; within a few seconds the new version is installed (check the version after starting it again) |
+| 11 | Cut the network (or block `api.github.com`) and press "Check for updates" | The window shows a short failure reason (no URL, no token). The automatic check in the same situation shows nothing and only writes a diagnostics line |
+| 12 | Run the portable zip build | The "Start with Windows" box works; "Check for updates automatically" and the button are disabled and the note "The portable build does not support automatic updates…" is shown; Wireshark/Fiddler shows no request to GitHub |
+| 13 | Tick "Start with Windows", then uninstall in Windows Settings → Apps | The Run value `BiliIndexTranslate` is deleted; `%LocalAppData%\BiliIndexTranslate.Desktop` is gone; `%LocalAppData%\BiliIndexTranslate\settings.json` is still there |
+| 14 | Install a second time over a running copy | Setup closes or replaces the running app cleanly; one tray icon after the start |
+
+Not verified at all before the first release: the delta package (needs two Velopack releases), and that the
+first release works with no earlier Velopack release to download.
+
+## Local OCR screen snip (added on Linux, not yet run on Windows)
+
+Written and compiled on Linux (`-warnaserror`: 0 warnings; Core tests **385**, the 349 before plus
+`VisionModeTests.cs`: routing table, old/unknown `visionMode` values, line and word joining). The App now targets
+`net10.0-windows10.0.19041.0`; `dotnet publish -r win-x64 -p:PublishSingleFile=true --self-contained false` succeeds on
+Linux. `Windows.Media.Ocr` cannot run here, so every row below is **unverified** until done on Windows (do it on a
+machine with only the English OCR pack and, separately, with the Chinese or Japanese pack added):
+
+| # | Check | Expected |
+|---|---|---|
+| 1 | Settings → Service → Image reading | Three entries, default Automatic; the hint text is shown; the choice survives Save and a restart (`visionMode` in `settings.json`); delete the field or write `"visionMode": "x"` and the app opens with Automatic and the rest of the file intact |
+| 2 | OpenAI-compatible endpoint, Automatic, snip a paragraph | Same as before: cloud vision model, caption "image", the screenshot is sent |
+| 3 | DeepLX endpoint, Automatic, snip English text | No "not supported" card; loading "Recognizing text on this PC…", then the card with the recognized text as the original and the translation, caption "DeepLX · local OCR · direct"; the mock receives one request holding only text (check it with a proxy: no image bytes) |
+| 4 | Custom API endpoint, Automatic, same | Same as row 3 with the custom API's label |
+| 5 | OpenAI endpoint, Always local OCR | Recognized text is translated with the chat model and streams in; caption "<model> · local OCR"; no `image_url` in the request |
+| 6 | DeepLX, Always cloud vision model | Error card "not supported" plus the hint to choose Automatic or Local OCR; no request leaves |
+| 7 | Snip a region without text (a plain colour), local OCR | Error card "No text was recognized…" with the hint to add the language in Windows Settings > Time & language > Language & region |
+| 8 | Remove all OCR language packs (or use an account whose profile languages have none), snip | The "no OCR language pack" error card, no crash |
+| 9 | Snip Chinese / Japanese text with that language's pack installed | No spaces between characters in the original shown on the card; lines of a paragraph are joined without spaces; mixed Latin words keep one space |
+| 10 | Snip a hyphenated English paragraph ("inter-" / "national") | Joined as "international" |
+| 11 | Snip very large regions (4K, several monitors) and a clipboard image larger than `OcrEngine.MaxImageDimension` | Recognized without an error (scaled down); no visible freeze of the UI |
+| 12 | Close the card (Esc or click out) while "Recognizing…" or translating; start a second snip while the first is loading | The closed card stays closed; only the newest snip's result is shown; the retry key repeats the last snip |
+| 13 | Tray → Recognize screen text and copy, snip a paragraph | One tray notice "Copied N characters" (N = characters, not UTF-16 units); Ctrl+V pastes the text; no popup card; no network traffic at all (proxy) |
+| 14 | Same on a region without text; with the clipboard locked by another program | A warning notice with the reason; no clipboard change |
+| 15 | Same with a DeepLX/custom endpoint and with an endpoint that is unreachable | Works the same (no request is made) |
+| 16 | Diagnostics (file logging on) after rows 3, 7 and 13 | Only lengths and failure kinds (`local OCR ok, chars=…`); no screenshot data and no recognized text |
+| 17 | Windows 10 1809 / 1903 (lowest supported) and Windows 11 | The app starts and local OCR works; check that the self-contained and the framework-dependent single-file builds both start |
+| 18 | Switch the interface language to English / 简体中文 with the tray menu closed | The new tray item, the Settings entries and the OCR messages follow the language |
+
+## UI tests (FlaUI)
+
+`tests/BiliIndexTranslate.App.UiTests` (xunit, FlaUI.UIA3) drives the real app on a real desktop. It runs in
+CI on `windows-latest` after the unit tests and cannot run on Linux (the solution only compiles there).
+
+What each test does: it starts an in-process mock service (`HttpListener` on `http://localhost:<free port>/`),
+the target window `tests/BiliIndexTranslate.UiTestTarget` (a read-only multi-line `TextBox`, AutomationId
+`SourceText`) and the app with `--data-dir <temp dir>`. The temp dir holds a `settings.json` written with
+`SettingsStore` (mock `BaseUrl`, OpenAI format, model `Index-Translate-9B`, auto-translate on, onboarding done,
+English UI, both hotkeys off, diagnostics log on). `--data-dir` also gives that instance its own single-instance
+mutex, so a running copy of the app on the same machine does not interfere.
+
+| # | Test | Checks |
+|---|---|---|
+| 1 | `Select_shows_streamed_card_and_escape_closes_it` | Ctrl+A in the target → card (`TranslationText`) ends with the three streamed segments joined; the one request had `stream: true` and `model: Index-Translate-9B`; Esc hides the card |
+| 2 | `Card_fills_in_while_streaming` | at least one state with only part of the text, and the caption (`Caption`) shows "streaming" |
+| 3 | `Same_selection_again_is_served_from_the_cache` | after Esc, a click and a new Ctrl+A, the card shows the complete text from its first frame and the mock sees no second request |
+| 4 | `Http_412_shows_an_error_card` | mock answers 412 → error card whose text contains `412` |
+| 5 | `Edge_page_selection_shows_full_card_and_escape_closes_it` (`EdgeSelectionTests`) | Microsoft Edge (own temp profile, no `--force-renderer-accessibility`) opens a local page with one `<p>`; triple click on the paragraph (raw mouse down/up: FlaUI's `Mouse.Click` deliberately avoids double clicks) → card shows the complete text, every request had `stream: true`, Esc hides the card. No keyboard fallback. The test finds the paragraph through Edge's UIA tree, which turns on Chromium's accessibility by itself, so it does not show that the app does so alone. Skipped, not failed, when `msedge.exe` is not found (`%ProgramFiles(x86)%` / `%ProgramFiles%`, or `BIT_EDGE_EXE`). The test output has the app log; when no card appears it also has the focused element and the selection as UIA reports them, and `TestResults\ui-screenshots\` gets `<test>.uia-tree.txt` (first levels of the Edge UIA tree) |
+
+The card's translation text is read from the element's UIA `HelpText` (set in `PopupWindow.ShowTranslation`),
+because its `Name` is the fixed label "Translation". Error title/message and the caption are read from their `Name`.
+
+Run on a local Windows machine: `tools\test-ui.cmd` (builds the solution, then runs the tests). Do not touch the
+mouse or keyboard while they run; the machine must be unlocked. The executables are found under
+`src\BiliIndexTranslate.App\bin\Release\net10.0-windows*\` and
+`tests\BiliIndexTranslate.UiTestTarget\bin\Release\net10.0-windows*\`; set `BIT_APP_EXE` / `BIT_TARGET_EXE`
+to use other builds. On failure a full-screen screenshot plus the app's `diagnostics.log`, `crash.log` and
+`settings.json` are saved to `TestResults\ui-screenshots\` (CI uploads that folder and the trx file). The temp
+data dir and both processes are removed after every test.
 
 ## Scenarios
 
@@ -68,7 +285,7 @@ Core-only logic that is covered by unit tests is marked (unit).
 
 | # | Scenario | Expected | Status |
 |---|---|---|---|
-| 1 | Select a sentence in a browser | Card appears above the selection within settle delay + request time; no focus change in the browser | ◐ verified in a WPF text box (probe + card + upstream request); Chromium itself not tested |
+| 1 | Select a sentence in a browser | Card appears above the selection within settle delay + request time; no focus change in the browser | ◐ verified in a WPF text box and, since 2026-11-26, in Edge on the CI runner (triple click → probe → card with the streamed text → Esc; UI test 5). Card position and the browser keeping focus are not checked; Chrome not tested |
 | 2 | Click to clear the selection | Card hides immediately on mouse-down; no reopen on mouse-up (probe → no selection) | ⬜ (session: unit) |
 | 3 | Select A, then B while A is loading | A's request cancelled, card shows loading for B, A's late result never rendered | ⬜ (session + coordinator: unit) |
 | 4 | Dismiss while a request is pending | Card stays hidden when the response arrives | ⬜ (unit) |
@@ -92,7 +309,7 @@ Core-only logic that is covered by unit tests is marked (unit).
 | App | Mechanism expected | Status |
 |---|---|---|
 | Self-built WPF text box (test harness) | UIA TextPattern on the read-only editor | ✅ selection read in 2.4–12.7 ms, card and upstream request confirmed |
-| Chrome / Edge (web page) | UIA TextPattern on the document (Chromium exposes it when a screen reader / UIA client is active; first probe may be slow) | ⬜ not tested |
+| Chrome / Edge (web page) | UIA TextPattern on the document (Chromium exposes it when a screen reader / UIA client is active; first probe may be slow) | ◐ Edge on the `windows-latest` CI runner (UI test 5, 2026-11-26): a triple click on a paragraph is read from the document's TextPattern (`probe msedge: 80 chars, 2 line(s), 15.6 ms`), the card shows the complete text. The test had already queried Edge's UIA tree, so a cold Chromium (no other UIA client) is not covered. Chrome, drag selection and real web pages not tested |
 | Firefox | UIA TextPattern (Firefox's UIA support improved in 2024–2025 builds; older builds may be unsupported) | ⬜ not tested |
 | Notepad (Windows 11) | TextPattern on the editor control | ⬜ not tested |
 | Word | TextPattern on the document body | ⬜ not tested |

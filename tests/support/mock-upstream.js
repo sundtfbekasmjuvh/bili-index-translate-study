@@ -2,6 +2,9 @@
 
 // Local stand-in for the OpenAI-compatible upstream used by the sandbox and extension tests.
 // Replies are deterministic and derived from the prompt, so tests can assert exact output.
+// POST .../translate is a DeepLX-style endpoint: { text, source_lang, target_lang } -> { code, data }.
+// POST .../custom-api has a made-up shape for the custom template: { q: [...], to } with an X-Api-Key
+// header -> { result: { items: [{ out }] } }.
 const http = require("http");
 const fs = require("fs");
 const path = require("path");
@@ -25,6 +28,8 @@ function classify(body) {
   const content = lastUserContent(body);
   if (Array.isArray(content)) return "vision";
   if (messages.some((m) => m.role === "system" && /私教|language tutor/.test(String(m.content)))) return "study";
+  // "Annotate hard words only" prompts list the words under \u3010\u8bcd\u8868\u3011 (one paragraph) or \u3010\u8bcd\u88681\u3011, \u3010\u8bcd\u88682\u3011...
+  if (/\u3010\u8bcd\u8868/.test(String(content))) return "annotate";
   if (/\u3016P0\u3017/.test(String(content))) return "immersive";
   return "translate";
 }
@@ -39,6 +44,8 @@ function sourceText(kind, body) {
     return content.split("\n\n").slice(1).join("\n\n");
   }
   if (kind === "study") return content.slice(content.lastIndexOf("\n") + 1);
+  // The word lines of the prompt ("编号. 词"), one per line, so tests can see what was asked for.
+  if (kind === "annotate") return annotateWords(content).map((x) => x.num + ". " + x.word).join("\n");
   if (kind === "immersive") {
     const block = /【源文】\n([\s\S]*?)\n\n【约束要求】/.exec(content);
     return block ? block[1] : content;
@@ -48,6 +55,28 @@ function sourceText(kind, body) {
 
 function translationOf(text) {
   return "译文：" + text;
+}
+
+// The "编号. 词" lines under each 【词表...】 heading of an annotate prompt.
+function annotateWords(content) {
+  const out = [];
+  const re = /【词表\d*】\n([\s\S]*?)(?:\n\n|$)/g;
+  let m;
+  while ((m = re.exec(content)) !== null) {
+    for (const line of m[1].split("\n")) {
+      const w = /^(\d+)\.\s+(.+)$/.exec(line.trim());
+      if (w) out.push({ num: Number(w[1]), word: w[2] });
+    }
+  }
+  return out;
+}
+
+// "编号. 词 => 注:词" per word; the gloss is in English when the prompt asks for English glosses.
+function annotateReply(content) {
+  const english = /释义必须用英语书写/.test(content);
+  return annotateWords(content)
+    .map((x) => x.num + ". " + x.word + " => " + (english ? "note:" : "注:") + x.word)
+    .join("\n");
 }
 
 function studyDeck(text) {
@@ -88,6 +117,7 @@ function replyFor(kind, body) {
   const src = sourceText(kind, body);
   if (kind === "vision") return "\u3016\u8bd1\u6587\u3017" + VISION_TRANSLATION + "\u3016\u539f\u6587\u3017" + VISION_SOURCE;
   if (kind === "study") return JSON.stringify(studyDeck(src));
+  if (kind === "annotate") return annotateReply(String(lastUserContent(body) || ""));
   if (kind === "immersive") {
     const out = [];
     const re = /\u3016P(\d+)\u3017([^\n]*)/g;
@@ -127,6 +157,8 @@ function pngChunk(type, data) {
   return Buffer.concat([len, typed, crc]);
 }
 
+const HUGE_IMAGE_BYTES = 32 * 1024 * 1024;
+
 // Small RGB PNG with horizontal stripes, served as the right-click image fixture.
 function samplePng(width = 64, height = 32) {
   const rows = [];
@@ -157,6 +189,7 @@ function pngSize(dataUrl) {
 
 async function startMockUpstream(options = {}) {
   const requests = [];
+  const downloads = [];
   const overrides = [];
   const delayMs = options.delayMs ?? 25;
   const png = samplePng();
@@ -183,6 +216,35 @@ async function startMockUpstream(options = {}) {
       res.end(png);
       return;
     }
+    // A download far beyond the extension's 8 MB image limit. With ?declared=1 the size is announced
+    // in Content-Length; without it the body is chunked and the size only shows while downloading.
+    if (req.method === "GET" && url.pathname === "/huge.png") {
+      const entry = { path: url.pathname + url.search, sent: 0, total: HUGE_IMAGE_BYTES, closedEarly: false };
+      downloads.push(entry);
+      const headers = { "Content-Type": "image/png", "Cache-Control": "no-store" };
+      if (url.searchParams.get("declared")) headers["Content-Length"] = String(entry.total);
+      res.writeHead(200, headers);
+      res.on("close", () => {
+        if (!res.writableEnded) entry.closedEarly = true;
+      });
+      const chunk = Buffer.alloc(64 * 1024, 0x5a);
+      while (entry.sent < entry.total && !res.destroyed) {
+        entry.sent += chunk.length;
+        if (!res.write(chunk)) {
+          await new Promise((resolve) => {
+            const resume = () => {
+              res.off("drain", resume);
+              res.off("close", resume);
+              resolve();
+            };
+            res.on("drain", resume);
+            res.on("close", resume);
+          });
+        }
+      }
+      if (!res.destroyed) res.end();
+      return;
+    }
     if (req.method === "GET" && url.pathname.endsWith(".html")) {
       const file = path.join(FIXTURE_DIR, path.basename(url.pathname));
       if (fs.existsSync(file)) {
@@ -191,7 +253,9 @@ async function startMockUpstream(options = {}) {
         return;
       }
     }
-    if (req.method !== "POST" || !url.pathname.endsWith("/chat/completions")) {
+    const isDeeplx = url.pathname.endsWith("/translate");
+    const isCustom = url.pathname.endsWith("/custom-api");
+    if (req.method !== "POST" || !(isDeeplx || isCustom || url.pathname.endsWith("/chat/completions"))) {
       res.writeHead(404, { "Content-Type": "text/plain" });
       res.end("not found");
       return;
@@ -200,13 +264,18 @@ async function startMockUpstream(options = {}) {
     let raw = "";
     for await (const chunk of req) raw += chunk;
     const body = JSON.parse(raw || "{}");
-    const kind = classify(body);
+    const customItems = isCustom ? [].concat(body.q || []).map(String) : [];
+    const kind = isDeeplx ? "deeplx" : isCustom ? "custom" : classify(body);
     const entry = {
       kind,
       path: url.pathname,
+      token: url.searchParams.get("token") || "",
       body,
-      source: sourceText(kind, body),
+      source: isDeeplx ? String(body.text || "") : isCustom ? customItems.join("\n") : sourceText(kind, body),
       authorization: req.headers.authorization || "",
+      origin: req.headers.origin || "",
+      userAgent: req.headers["user-agent"] || "",
+      apiKeyHeader: req.headers["x-api-key"] || "",
       aborted: false,
       completed: false
     };
@@ -216,7 +285,13 @@ async function startMockUpstream(options = {}) {
     });
 
     const idx = overrides.findIndex((o) => o.kind === kind && (!o.match || o.match(entry)));
-    const override = idx >= 0 ? overrides.splice(idx, 1)[0] : null;
+    // `times: N` keeps the override for the next N matching requests instead of one.
+    let override = null;
+    if (idx >= 0) {
+      override = overrides[idx];
+      if (override.times > 1) override.times -= 1;
+      else overrides.splice(idx, 1);
+    }
 
     if (override && override.status) {
       res.writeHead(override.status, { "Content-Type": override.contentType || "text/html; charset=utf-8" });
@@ -224,10 +299,33 @@ async function startMockUpstream(options = {}) {
       return;
     }
 
+    if (isCustom) {
+      await sleep(delayMs);
+      if (res.destroyed) return;
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ result: { items: customItems.map((q) => ({ out: translationOf(q) })) } }));
+      entry.completed = true;
+      return;
+    }
+
+    if (isDeeplx) {
+      // Like a real DeepLX service, translate line by line and keep the line breaks.
+      const data =
+        override && typeof override.reply === "string"
+          ? override.reply
+          : entry.source.split("\n").map(translationOf).join("\n");
+      await sleep(delayMs);
+      if (res.destroyed) return;
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ code: 200, id: requests.length, data, source_lang: "EN", target_lang: body.target_lang }));
+      entry.completed = true;
+      return;
+    }
+
     const text = override && typeof override.reply === "string" ? override.reply : replyFor(kind, body);
     if (body.stream === false) {
       res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ choices: [{ message: { role: "assistant", content: text } }] }));
+      res.end(JSON.stringify({ choices: [{ message: { role: "assistant", content: text }, finish_reason: "stop" }] }));
       entry.completed = true;
       return;
     }
@@ -241,8 +339,10 @@ async function startMockUpstream(options = {}) {
     origin,
     base: origin + "/v1",
     requests,
+    // One entry per /huge.png download: bytes written so far and whether the client hung up early.
+    downloads,
     // Applies to the next request of this kind (optionally filtered by match). Supports
-    // { status, body } for HTTP errors, { reply } for custom text, and { hold } to pause the
+    // { status, body } for HTTP errors (add times: N to repeat for the next N requests), { reply } for custom text, and { hold } to pause the
     // stream after its first chunk until the promise resolves.
     override(kind, spec) {
       overrides.push({ kind, ...spec });
@@ -255,6 +355,7 @@ async function startMockUpstream(options = {}) {
     },
     reset() {
       requests.length = 0;
+      downloads.length = 0;
       overrides.length = 0;
     },
     close() {

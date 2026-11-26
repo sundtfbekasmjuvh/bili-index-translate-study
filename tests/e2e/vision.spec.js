@@ -134,11 +134,31 @@ test.describe("识图直译", () => {
     });
     await expect(page.locator("#bili-index-translate-panel")).toHaveAttribute("data-open", "");
     await expect(page.locator("#bili-index-translate-panel .bit-error")).toHaveText(
-      "Request failed\nFailed to fetch image (HTTP 404)."
+      "请求失败\n图片下载失败 (HTTP 404)。"
     );
     expect(requestsOf(upstream, "vision")).toHaveLength(0);
     expect(pageErrors).toEqual([]);
   });
+
+  // 声明了大小的下载在收到响应头时就放弃, 所以服务端发出的字节远不到 8 MB; 分块传输的要读过 8 MB 才能发现.
+  const MB = 1024 * 1024;
+  for (const [name, query, sentBelow] of [
+    ["响应头声明了大小", "?declared=1", 8 * MB],
+    ["分块传输, 没有 Content-Length", "", 32 * MB]
+  ]) {
+    test("右键超过 8 MB 的图片 (" + name + "): 不把整张图下载完, 提示改用框选, 不调用模型", async ({ page, upstream, serviceWorker }) => {
+      await clickContextMenu(serviceWorker, page, {
+        menuItemId: "bili-translate-image",
+        srcUrl: upstream.origin + "/huge.png" + query
+      });
+      await expect(page.locator("#bili-index-translate-panel .bit-error")).toHaveText(
+        "请求失败\n图片超过 8 MB 上限，请改用 Alt+S 框选。"
+      );
+      await expect.poll(() => upstream.downloads.map((d) => d.closedEarly)).toEqual([true]);
+      expect(upstream.downloads[0].sent).toBeLessThan(sentBelow);
+      expect(requestsOf(upstream, "vision")).toHaveLength(0);
+    });
+  }
 
   test("纯文本模型被配置为识图模型时自动改用 35B-A3B; 快捷键命令也能启动框选", async ({ page, upstream, settings, serviceWorker }) => {
     await settings({ sync: { visionModel: "Index-Nailong-9B" } });

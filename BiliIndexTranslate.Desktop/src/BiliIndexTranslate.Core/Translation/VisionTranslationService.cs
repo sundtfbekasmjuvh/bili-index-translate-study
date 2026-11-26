@@ -3,7 +3,6 @@ using System.Net.Http;
 using System.Net.Sockets;
 using System.Security.Cryptography;
 using System.Text;
-using System.Text.Json;
 
 namespace BiliIndexTranslate.Core.Translation;
 
@@ -41,6 +40,9 @@ public sealed class VisionTranslationService
         CancellationToken ct,
         Action<ImageTranslationDelta>? onDelta = null)
     {
+        if (request.Format != ApiFormat.OpenAi)
+            throw new TranslationException(DeeplxProtocol.Unsupported("Image translation", request.UseRelay ? RequestRoute.Relay : RequestRoute.Direct, request.Format));
+
         if (!EndpointResolver.TryResolve(request.BaseUrl, request.UseRelay, request.RelayPrefix, out var endpoint, out var cfgError))
             throw new TranslationException(new TranslationError(TranslationErrorKind.Configuration, cfgError ?? "Invalid endpoint.", request.UseRelay ? RequestRoute.Relay : RequestRoute.Direct));
 
@@ -78,8 +80,9 @@ public sealed class VisionTranslationService
                     _timeout,
                     dataJson =>
                     {
-                        var delta = ExtractDeltaContent(dataJson);
-                        if (string.IsNullOrEmpty(delta)) return;
+                        var delta = ChatCompletionParser.ReadStreamDelta(dataJson, out var streamError);
+                        if (streamError is not null) throw ChatCompletionParser.StreamFailure(streamError, route);
+                        if (delta.Length == 0) return;
                         streamedContent.Append(delta);
                         var parsed = VisionPromptBuilder.ParseDualOutput(streamedContent.ToString());
                         if (parsed.Translation.Length == 0 || string.Equals(parsed.Translation, lastShownTranslation, StringComparison.Ordinal))
@@ -171,24 +174,6 @@ public sealed class VisionTranslationService
 
         PutCached(cacheKey, result);
         return result;
-    }
-
-    private static string ExtractDeltaContent(string dataJson)
-    {
-        try
-        {
-            using var doc = JsonDocument.Parse(dataJson);
-            var root = doc.RootElement;
-            if (!root.TryGetProperty("choices", out var choices) || choices.ValueKind != JsonValueKind.Array || choices.GetArrayLength() == 0)
-                return string.Empty;
-            var first = choices[0];
-            if (!first.TryGetProperty("delta", out var delta) || delta.ValueKind != JsonValueKind.Object)
-                return string.Empty;
-            if (delta.TryGetProperty("content", out var c) && c.ValueKind == JsonValueKind.String)
-                return c.GetString() ?? string.Empty;
-        }
-        catch (JsonException) { }
-        return string.Empty;
     }
 
     private static string BuildCacheKey(ImageTranslationRequest req, string model)

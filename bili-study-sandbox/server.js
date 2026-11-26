@@ -2,6 +2,7 @@
 "use strict";
 
 const http = require("http");
+const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
 
@@ -9,6 +10,12 @@ const PORT = Number(process.env.PORT) || 3001;
 const HOST = process.env.HOST || "127.0.0.1";
 const EXT_DIR = path.resolve(__dirname, "../bili-index-translate");
 const DEMO_HTML = path.join(__dirname, "index.html");
+const EXT_FILES = {
+  "/ext/content.css": { name: "content.css", type: "text/css; charset=utf-8" },
+  "/ext/i18n.js": { name: "i18n.js", type: "application/javascript; charset=utf-8" },
+  "/ext/content.js": { name: "content.js", type: "application/javascript; charset=utf-8" },
+  "/ext/icons/icon32.png": { name: "icons/icon32.png", type: "image/png" }
+};
 
 const DEFAULT_BASE = "https://index-translate.bilibili.com/v1";
 const DEFAULT_KEY = "bili";
@@ -34,10 +41,55 @@ function lruSet(map, k, v) {
   if (map.size > MEM_LIMIT) map.delete(map.keys().next().value);
 }
 
+// Hash the full glossary and image so entries of equal length never share a cache slot.
+function sha256Hex(str) {
+  return crypto.createHash("sha256").update(String(str || ""), "utf8").digest("hex");
+}
+
+// The prompt builders and parsers come from the extension itself. They are loaded again when one of
+// the files has changed, so an edit shows up on the next request without restarting the server.
+const BG_FILES = ["background.js", "i18n.js"].map((name) => path.join(EXT_DIR, name));
+let bgModule = null;
+let bgStamp = "";
+
 function loadBg() {
-  const p = path.join(EXT_DIR, "background.js");
-  delete require.cache[require.resolve(p)];
-  return require(p);
+  const stamp = BG_FILES.map((file) => fs.statSync(file).mtimeMs).join(":");
+  if (!bgModule || stamp !== bgStamp) {
+    for (const file of BG_FILES) delete require.cache[require.resolve(file)];
+    bgModule = require(BG_FILES[0]);
+    bgStamp = stamp;
+  }
+  return bgModule;
+}
+
+// While the server listens on this machine only, it answers requests addressed to it by a local
+// name and, for the API, sent by its own page. A page on another site can make the browser send a
+// request here (its host name may even resolve to this machine); such a request is refused.
+const LOCAL_NAMES = new Set(["localhost", "127.0.0.1", "::1"]);
+
+function hostName(value) {
+  try {
+    return new URL("http://" + String(value || "")).hostname.replace(/^\[|\]$/g, "").toLowerCase();
+  } catch (_) {
+    return "";
+  }
+}
+
+// HOST is a bind address, not a URL host: the IPv6 loopback is written "::1" here, without brackets.
+const LOCAL_ONLY = LOCAL_NAMES.has(String(HOST).replace(/^\[|\]$/g, "").toLowerCase());
+
+function isAllowedRequest(req) {
+  if (!LOCAL_ONLY) return true; // HOST was set to serve other machines on purpose
+  if (!LOCAL_NAMES.has(hostName(req.headers.host))) return false;
+  const origin = req.headers.origin;
+  if (req.method === "POST" && origin) {
+    try {
+      return new URL(origin).host === req.headers.host;
+    } catch (_) {
+      return false;
+    }
+  }
+  return true;
 }
 
 async function openUpstreamStream(body, signal) {
@@ -69,12 +121,14 @@ function writeSse(res, obj) {
 }
 
 async function readJsonBody(req) {
-  let raw = "";
+  const chunks = [];
+  let bytes = 0;
   for await (const chunk of req) {
-    raw += chunk;
-    if (raw.length > 12 * 1024 * 1024) throw new Error("Payload too large");
+    bytes += chunk.length;
+    if (bytes > 12 * 1024 * 1024) throw new Error("Payload too large");
+    chunks.push(chunk);
   }
-  return JSON.parse(raw || "{}");
+  return JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
 }
 
 function openSse(res) {
@@ -117,21 +171,23 @@ const server = http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url, "http://localhost");
 
+    if (!isAllowedRequest(req)) {
+      res.writeHead(403, { "Content-Type": "text/plain; charset=utf-8" });
+      res.end("Forbidden");
+      return;
+    }
+
     if (req.method === "GET" && (url.pathname === "/" || url.pathname === "/index.html")) {
       res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" });
       res.end(fs.readFileSync(DEMO_HTML, "utf8"));
       return;
     }
 
-    if (req.method === "GET" && url.pathname === "/ext/content.css") {
-      res.writeHead(200, { "Content-Type": "text/css; charset=utf-8", "Cache-Control": "no-store" });
-      res.end(fs.readFileSync(path.join(EXT_DIR, "content.css"), "utf8"));
-      return;
-    }
-
-    if (req.method === "GET" && url.pathname === "/ext/content.js") {
-      res.writeHead(200, { "Content-Type": "application/javascript; charset=utf-8", "Cache-Control": "no-store" });
-      res.end(fs.readFileSync(path.join(EXT_DIR, "content.js"), "utf8"));
+    // The extension files the demo page uses: the content script, its stylesheet, the interface text it needs and the icon.
+    const extFile = req.method === "GET" ? EXT_FILES[url.pathname] : undefined;
+    if (extFile) {
+      res.writeHead(200, { "Content-Type": extFile.type, "Cache-Control": "no-store" });
+      res.end(fs.readFileSync(path.join(EXT_DIR, extFile.name)));
       return;
     }
 
@@ -360,7 +416,7 @@ const server = http.createServer(async (req, res) => {
         return;
       }
 
-      const cacheKey = `${model}|${target}|${glossary.length}:${dataUrl.length}:${dataUrl.slice(-64)}`;
+      const cacheKey = `${model}|${target}|${sha256Hex(glossary)}|${sha256Hex(dataUrl)}`;
       const hit = lruGet(visionMemCache, cacheKey);
       if (hit) {
         writeSse(res, { type: "DONE", ok: true, ...hit, cached: true, elapsedMs: 0 });
@@ -443,10 +499,20 @@ const server = http.createServer(async (req, res) => {
     res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
     res.end("Not found");
   } catch (err) {
-    sendJson(res, 200, { ok: false, status: 0, body: String((err && err.message) || err) });
+    const failure = { ok: false, status: 0, body: String((err && err.message) || err) };
+    if (!res.headersSent) {
+      sendJson(res, 200, failure);
+    } else if (!res.writableEnded) {
+      // The event stream was already open: report the failure as its last event.
+      writeSse(res, { type: "DONE", ...failure });
+      res.end();
+    }
   }
 });
 
 server.listen(PORT, HOST, () => {
   console.log(`[bili-study-demo] listening on http://${HOST}:${PORT}`);
+  if (!LOCAL_ONLY) {
+    console.warn(`[bili-study-demo] WARNING: listening on ${HOST}, so anyone on your network can use the API keys configured on this server through this service.`);
+  }
 });

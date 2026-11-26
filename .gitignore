@@ -12,6 +12,7 @@
 !/.github/
 !/package.json
 !/package-lock.json
+!/tools/
 
 # Build output
 bin/

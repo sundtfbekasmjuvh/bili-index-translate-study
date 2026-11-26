@@ -3,18 +3,14 @@
 // 四条流式请求路径的行为: SSE 增量与分块边界, 非 SSE JSON 回退, 取消, 网络错误, 学习卡 4 张封顶.
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const { storageArea } = require("../support/fake-storage");
 
 const settings = { proxy: "" };
 const local = { glossary: "" };
 const calls = [];
 let respond;
 
-globalThis.chrome = {
-  storage: {
-    sync: { get: async (defaults) => ({ ...defaults, ...settings }) },
-    local: { get: async (defaults) => ({ ...defaults, ...local }) }
-  }
-};
+globalThis.chrome = { storage: { sync: storageArea(settings), local: storageArea(local) } };
 globalThis.fetch = async (url, init) => {
   calls.push({ url: String(url), body: JSON.parse(init.body) });
   if (init.signal && init.signal.aborted) throw new DOMException("The operation was aborted.", "AbortError");
@@ -102,6 +98,95 @@ test("streamTranslation 对空输出和非 JSON 正文返回错误", async () =>
   assert.match(html.body, /JSON/);
 });
 
+test("streamTranslation 把没有换行结尾的最后一行也计入译文", async () => {
+  reset();
+  respond = () => sseResponse([delta("你好"), delta("世界").trimEnd()]);
+  const res = await bg.streamTranslation(unique("hello"), () => {});
+  assert.equal(res.ok, true);
+  assert.equal(res.text, "你好世界");
+});
+
+test("streamTranslation 把流里的 error 事件作为错误返回, 并取消上游流", async () => {
+  reset();
+  const stats = {};
+  respond = () =>
+    sseResponse(
+      [delta("你"), 'data: {"error":{"message":"model overloaded","type":"server_error"}}\n\n', delta("好"), "data: [DONE]\n\n"],
+      stats
+    );
+  const res = await bg.streamTranslation(unique("hello"), () => {});
+  assert.deepEqual(res, { ok: false, status: 0, body: "model overloaded" });
+  assert.equal(stats.cancelled, true);
+
+  respond = () => sseResponse([delta("你"), 'data: {"error":"quota exceeded"}\n\n']);
+  const plain = await bg.streamTranslation(unique("hello"), () => {});
+  assert.equal(plain.body, "quota exceeded");
+
+  // delta 里不是字符串的 content (null, 数组) 不计入译文.
+  respond = () =>
+    sseResponse([
+      'data: {"choices":[{"delta":{"content":null}}],"error":null}\n\n',
+      'data: {"choices":[{"delta":{"content":[{"type":"text","text":"x"}]}}]}\n\n',
+      delta("好"),
+      "data: [DONE]\n\n"
+    ]);
+  const odd = await bg.streamTranslation(unique("hello"), () => {});
+  assert.equal(odd.text, "好");
+});
+
+test("超时按空闲时间计: 一直有数据的长回复不被切断, 停滞的流报出超时", async (t) => {
+  reset();
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const settle = () => new Promise((resolve) => setImmediate(resolve));
+  let push = null;
+  respond = (init) => {
+    const body = new ReadableStream({
+      start(controller) {
+        push = (chunk) => controller.enqueue(encoder.encode(chunk));
+        init.signal.addEventListener("abort", () => {
+          try {
+            controller.error(new DOMException("The operation was aborted.", "AbortError"));
+          } catch (_) {}
+        });
+      }
+    });
+    return new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } });
+  };
+  const opened = async () => {
+    while (!push) await settle();
+  };
+
+  // 三段数据各隔 30 秒, 总共 90 秒, 每次间隔都短于 35 秒的上限.
+  const slow = bg.streamTranslation(unique("hello"), () => {});
+  await opened();
+  for (const part of ["一", "二", "三"]) {
+    t.mock.timers.tick(30000);
+    await settle();
+    push(delta(part));
+    await settle();
+  }
+  push("data: [DONE]\n\n");
+  const done = await slow;
+  assert.equal(done.ok, true);
+  assert.equal(done.text, "一二三");
+
+  // 收到一段后再无数据: 34 秒时还在等, 满 35 秒报超时.
+  push = null;
+  let settled = false;
+  const stalled = bg.streamTranslation(unique("hello"), () => {}).then((res) => {
+    settled = true;
+    return res;
+  });
+  await opened();
+  push(delta("一"));
+  await settle();
+  t.mock.timers.tick(34000);
+  await settle();
+  assert.equal(settled, false);
+  t.mock.timers.tick(1000);
+  assert.deepEqual(await stalled, { ok: false, status: 0, body: "Request timed out after 35 s" });
+});
+
 test("streamTranslation 把网络异常报告为 status 0", async () => {
   reset();
   respond = () => {
@@ -164,6 +249,37 @@ test("streamVisionTranslation 只在译文变化时推送, 结束时带原文并
     ["调度器重试", ""]
   ]);
   assert.equal(calls[0].body.messages[0].content[1].image_url.url.startsWith("data:image/png;base64,AAAA"), true);
+});
+
+test("streamTranslation 在 [DONE] 后停止读取并取消上游流", async () => {
+  reset();
+  const stats = {};
+  respond = () => sseResponse([delta("hello"), "data: [DONE]\n\n", delta("hello")], stats);
+  const res = await bg.streamTranslation(unique("hello"), () => {});
+  assert.equal(res.ok, true);
+  assert.equal(res.text, "hello");
+  assert.equal(stats.cancelled, true);
+});
+
+test("streamVisionTranslation 的缓存区分长度相同, 只在非抽样位置不同的图片", async () => {
+  reset();
+  // 旧的抽样哈希只读每 floor(len/512) 个字符, 两张图只在抽样点之间不同时会碰撞.
+  const prefix = "data:image/png;base64,";
+  const filler = "A".repeat(12000 - prefix.length);
+  const imageA = prefix + filler;
+  // 12000 / 512 取整为 23, 抽样下标为 0, 23, 46...; 下标 24 不在其中.
+  const imageB = imageA.slice(0, 24) + "B" + imageA.slice(25);
+  let n = 0;
+  respond = () => jsonResponse("\u3016\u8bd1\u6587\u3017图" + ++n);
+  const a = await bg.streamVisionTranslation(imageA, "", () => {});
+  const b = await bg.streamVisionTranslation(imageB, "", () => {});
+  assert.equal(a.text, "图1");
+  assert.equal(b.cached, undefined);
+  assert.equal(b.text, "图2");
+  assert.equal(calls.length, 2);
+  const again = await bg.streamVisionTranslation(imageA, "", () => {});
+  assert.equal(again.cached, true);
+  assert.equal(again.text, "图1");
 });
 
 test("streamVisionTranslation 解析 JSON 回退, 无可读文本时报错", async () => {

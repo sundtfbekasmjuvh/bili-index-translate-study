@@ -7,6 +7,7 @@ using BiliIndexTranslate.Core.Geometry;
 using BiliIndexTranslate.Core.Selection;
 using BiliIndexTranslate.Core.Study;
 using BiliIndexTranslate.Core.Translation;
+using BiliIndexTranslate.App.Localization;
 
 namespace BiliIndexTranslate.App.Popup;
 
@@ -155,6 +156,15 @@ internal sealed class PopupPresenter : IDisposable
         _timings.Record(TimingCategory.Render, sw.Elapsed.TotalMilliseconds);
     }
 
+    /// <summary>Text that is still being generated. Not timed: render time is recorded for the final result only.</summary>
+    public void ShowPartialTranslation(SelectionSnapshot snapshot, string partial, string? caption)
+    {
+        if (snapshot.Anchor is null) return;
+        var w = Window;
+        w.ShowTranslation(snapshot, partial, caption, partial: true);
+        Present(snapshot.Anchor, firstShow: !_visible);
+    }
+
     public void ShowVisionTranslation(SelectionSnapshot snapshot, string translation, string? caption)
     {
         if (snapshot.Anchor is null) return;
@@ -282,6 +292,18 @@ internal sealed class PopupPresenter : IDisposable
         StudyDeckResult? ok = null;
         TranslationError? error = null;
 
+        // Partial decks arrive faster than the card can be laid out and placed. The window is given the
+        // newest one after the pending rendering and input have been handled; the ones in between are skipped.
+        var live = new LatestValueRelay<StudyDeckResult>(
+            deliver => _ = _dispatcher.BeginInvoke(DispatcherPriority.Background, deliver),
+            partial =>
+            {
+                if (seq != _studySeq || !_studyVisible || !ReferenceEquals(_studyOwner, owner) || _studyWindow is null)
+                    return;
+                _studyWindow.ShowPartialDeck(sourceText, partial);
+                PlaceStudy(animate: false);
+            });
+
         try
         {
             ok = await _studyProvider!(
@@ -289,14 +311,7 @@ internal sealed class PopupPresenter : IDisposable
                 modelOverride,
                 partial =>
                 {
-                    if (cts.IsCancellationRequested) return;
-                    _ = _dispatcher.BeginInvoke(DispatcherPriority.Normal, new Action(() =>
-                    {
-                        if (seq != _studySeq || !_studyVisible || !ReferenceEquals(_studyOwner, owner) || _studyWindow is null)
-                            return;
-                        _studyWindow.ShowPartialDeck(sourceText, partial);
-                        PlaceStudy(animate: false);
-                    }));
+                    if (!cts.IsCancellationRequested) live.Offer(partial);
                 },
                 cts.Token).ConfigureAwait(false);
         }
@@ -310,13 +325,15 @@ internal sealed class PopupPresenter : IDisposable
         }
         catch (Exception ex)
         {
-            error = new TranslationError(TranslationErrorKind.Network, $"Unexpected error ({ex.GetType().Name}).", RequestRoute.Direct);
+            error = new TranslationError(TranslationErrorKind.Network, Loc.T("App_UnexpectedError", ex.GetType().Name), RequestRoute.Direct);
         }
 
         if (cts.IsCancellationRequested) return;
 
         _ = _dispatcher.BeginInvoke(DispatcherPriority.Normal, new Action(() =>
         {
+            // The result below is final; a partial deck that is still waiting must not be drawn over it.
+            live.Clear();
             if (seq != _studySeq || !_studyVisible || !ReferenceEquals(_studyOwner, owner) || _studyWindow is null)
                 return;
 

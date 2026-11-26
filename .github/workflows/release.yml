@@ -12,8 +12,14 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # The release is packaged only after the whole CI (unit, end-to-end and desktop) has passed on this commit.
+  ci:
+    name: CI
+    uses: ./.github/workflows/ci.yml
+
   release:
     name: Package and draft the release
+    needs: ci
     runs-on: windows-latest
     timeout-minutes: 30
     permissions:
@@ -26,6 +32,13 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: 0
+
+      # A release is cut from main only (see the README): refuse a tag that points anywhere else.
+      - name: Check that the tag is on main
+        run: |
+          git merge-base --is-ancestor $env:GITHUB_SHA origin/main
+          if ($LASTEXITCODE -ne 0) { throw "Tag $env:TAG does not point to a commit on main" }
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -33,7 +46,7 @@ jobs:
 
       - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
         with:
-          dotnet-version: 8.0.x
+          dotnet-version: 10.0.x
 
       - name: Extension and sandbox tests
         run: node --test "tests/**/*.test.js"
@@ -44,13 +57,83 @@ jobs:
       - name: Package
         run: ./.github/scripts/package-release.ps1 -Tag $env:TAG -OutDir dist
 
+      # Installer and update packages (Velopack). The files go to a folder of their own, so dist keeps holding
+      # exactly the four files the Package step wrote.
+      - name: Install vpk
+        run: |
+          dotnet tool install -g vpk --version 1.2.161
+          if ($LASTEXITCODE -ne 0) { throw "dotnet tool install vpk failed with exit code $LASTEXITCODE" }
+
+      - name: Publish the self-contained build for Velopack
+        run: |
+          dotnet publish BiliIndexTranslate.Desktop/src/BiliIndexTranslate.App/BiliIndexTranslate.App.csproj -c Release -r win-x64 --self-contained true -o "$env:RUNNER_TEMP/velopack-publish"
+          if ($LASTEXITCODE -ne 0) { throw "dotnet publish failed with exit code $LASTEXITCODE" }
+
+      # The previous release is needed to build a delta package. The very first Velopack release has no
+      # predecessor: then the download is allowed to fail, but only when no published release carries releases.win.json.
+      - name: Download the previous Velopack release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $out = Join-Path $env:RUNNER_TEMP "velopack-out"
+          New-Item -ItemType Directory -Force -Path $out | Out-Null
+          vpk download github --repoUrl "https://github.com/$env:GITHUB_REPOSITORY" --token $env:GH_TOKEN --channel win --outputDir $out
+          if ($LASTEXITCODE -ne 0) {
+            $code = $LASTEXITCODE
+            $found = gh api "repos/$env:GITHUB_REPOSITORY/releases?per_page=100" --jq '[.[] | select(.draft == false and .prerelease == false) | .assets[].name] | index("releases.win.json")'
+            if ($LASTEXITCODE -ne 0) { throw "vpk download failed with exit code $code and the release list could not be read" }
+            if ("$found" -match '^\d+$') { throw "vpk download failed with exit code $code although a published release has releases.win.json" }
+            Write-Host "No earlier Velopack release found; this one is built without a delta package."
+          }
+          # What was downloaded: those files belong to older releases and are not uploaded again.
+          $before = @(Get-ChildItem -LiteralPath $out -File | ForEach-Object { (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash + "  " + $_.Name })
+          [IO.File]::WriteAllLines((Join-Path $env:RUNNER_TEMP "velopack-before.txt"), [string[]]$before)
+          $global:LASTEXITCODE = 0
+
+      - name: Velopack pack
+        run: |
+          $version = $env:TAG.Substring(1)
+          vpk pack --packId BiliIndexTranslate.Desktop --packVersion $version --packDir "$env:RUNNER_TEMP/velopack-publish" --mainExe BiliIndexTranslate.exe --packTitle "Bili Index Translate" --icon BiliIndexTranslate.Desktop/src/BiliIndexTranslate.App/Assets/app.ico --runtime win-x64 --channel win --noPortable --outputDir "$env:RUNNER_TEMP/velopack-out"
+          if ($LASTEXITCODE -ne 0) { throw "vpk pack failed with exit code $LASTEXITCODE" }
+
       # The release stays a draft so its notes can be reviewed before it is published.
+      # Velopack's updater reads only published releases, so installed apps see this version after it is published.
       - name: Draft the GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $assets = @(Get-ChildItem -LiteralPath dist -File | Where-Object { $_.Extension -eq ".zip" -or $_.Name -eq "SHA256SUMS.txt" } | ForEach-Object FullName)
-          if ($assets.Count -ne 4) { throw "Expected 3 ZIPs and SHA256SUMS.txt in dist, found $($assets.Count) files" }
+          $version = $env:TAG.Substring(1)
+          $zips = @(Get-ChildItem -LiteralPath dist -File | Where-Object { $_.Extension -eq ".zip" })
+          $sums = @(Get-ChildItem -LiteralPath dist -File | Where-Object { $_.Name -eq "SHA256SUMS.txt" })
+          if ($zips.Count -ne 3 -or $sums.Count -ne 1) { throw "Expected 3 ZIPs and SHA256SUMS.txt in dist, found $($zips.Count) ZIPs and $($sums.Count) sums files" }
+          $assets = @($zips + $sums | ForEach-Object FullName)
+
+          # Velopack files of this version: everything in the output folder that is new or changed since the download.
+          $out = Join-Path $env:RUNNER_TEMP "velopack-out"
+          $before = @{}
+          foreach ($line in [IO.File]::ReadAllLines((Join-Path $env:RUNNER_TEMP "velopack-before.txt"))) {
+            if ($line.Length -gt 66) { $before[$line.Substring(66)] = $line.Substring(0, 64) }
+          }
+          $velopack = @(Get-ChildItem -LiteralPath $out -File | Where-Object {
+            -not $before.ContainsKey($_.Name) -or $before[$_.Name] -ne (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash
+          })
+          if (-not ($velopack | Where-Object { $_.Name -like "*-Setup.exe" })) { throw "vpk produced no Setup.exe in $out" }
+          if (-not ($velopack | Where-Object { $_.Name -eq "BiliIndexTranslate.Desktop-$version-full.nupkg" })) { throw "vpk produced no BiliIndexTranslate.Desktop-$version-full.nupkg in $out" }
+          if (-not ($velopack | Where-Object { $_.Name -eq "releases.win.json" })) { throw "vpk produced no releases.win.json in $out" }
+          $assets += @($velopack | ForEach-Object FullName)
+
+          # package-release.ps1 lists the ZIPs in SHA256SUMS.txt. The installer and the update packages are
+          # downloads too, so they are added in the same "<sha256>  <name>" form (LF, UTF-8 without BOM).
+          $extraSums = @($velopack | Where-Object { $_.Name -like "*-Setup.exe" -or $_.Extension -eq ".nupkg" } | Sort-Object Name | ForEach-Object {
+            (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant() + "  " + $_.Name
+          })
+          [IO.File]::AppendAllText($sums[0].FullName, (($extraSums -join "`n") + "`n"), [Text.UTF8Encoding]::new($false))
+          Write-Host "SHA256SUMS.txt:"
+          Get-Content -LiteralPath $sums[0].FullName | ForEach-Object { Write-Host "  $_" }
+
+          Write-Host "Uploading $($assets.Count) files:"
+          $assets | ForEach-Object { Write-Host "  $(Split-Path -Leaf $_)" }
+
           $isDraft = gh release view $env:TAG --repo $env:GITHUB_REPOSITORY --json isDraft --jq .isDraft 2>$null
           if ($LASTEXITCODE -ne 0) {
             gh release create $env:TAG @assets --repo $env:GITHUB_REPOSITORY --verify-tag --draft --title $env:TAG --generate-notes

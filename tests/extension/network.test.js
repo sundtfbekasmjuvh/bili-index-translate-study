@@ -2,6 +2,7 @@
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const { storageArea } = require("../support/fake-storage");
 
 const BASE = "https://index-translate.bilibili.com/v1";
 const RELAY = "https://relay.example.test/https://index-translate.bilibili.com/v1";
@@ -11,12 +12,7 @@ const settings = { proxy: "" };
 const calls = [];
 let respond;
 
-globalThis.chrome = {
-  storage: {
-    sync: { get: async (defaults) => ({ ...defaults, ...settings }) },
-    local: { get: async (defaults) => ({ ...defaults }) }
-  }
-};
+globalThis.chrome = { storage: { sync: storageArea(settings), local: storageArea({}) } };
 globalThis.fetch = async (url, init) => {
   calls.push({ url: String(url), body: JSON.parse(init.body) });
   return respond();

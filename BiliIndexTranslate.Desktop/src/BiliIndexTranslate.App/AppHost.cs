@@ -6,6 +6,7 @@ using System.Windows.Threading;
 using BiliIndexTranslate.App.Diagnostics;
 using BiliIndexTranslate.App.Input;
 using BiliIndexTranslate.App.Native;
+using BiliIndexTranslate.App.Ocr;
 using BiliIndexTranslate.App.Onboarding;
 using BiliIndexTranslate.App.Popup;
 using BiliIndexTranslate.App.Settings;
@@ -13,6 +14,7 @@ using BiliIndexTranslate.App.Themes;
 using BiliIndexTranslate.App.Tracking;
 using BiliIndexTranslate.App.Tray;
 using BiliIndexTranslate.App.Uia;
+using BiliIndexTranslate.App.Updates;
 using BiliIndexTranslate.Core.Diagnostics;
 using BiliIndexTranslate.Core.Geometry;
 using BiliIndexTranslate.Core.Selection;
@@ -20,6 +22,7 @@ using BiliIndexTranslate.Core.Session;
 using BiliIndexTranslate.Core.Settings;
 using BiliIndexTranslate.Core.Study;
 using BiliIndexTranslate.Core.Translation;
+using BiliIndexTranslate.App.Localization;
 
 namespace BiliIndexTranslate.App;
 
@@ -63,6 +66,7 @@ internal sealed class AppHost : IDisposable
     private InputHookThread _hooks = null!;
     private SourceWindowTracker _tracker = null!;
     private TrayIcon _tray = null!;
+    private UpdateService _updates = null!;
 
     private readonly DispatcherTimer _stabTimer = new(DispatcherPriority.Input);
     private readonly DispatcherTimer _probeWatchdog = new(DispatcherPriority.Background);
@@ -84,6 +88,7 @@ internal sealed class AppHost : IDisposable
     private string? _hotkeyError;
     private string? _snipHotkeyError;
     private CancellationTokenSource? _visionCts;
+    private CancellationTokenSource? _ocrCopyCts;
     private long _visionSeq;
     private bool _visionActive;
     private ScreenSnipCapture? _lastVisionCapture;
@@ -92,6 +97,7 @@ internal sealed class AppHost : IDisposable
     private DiagnosticsWindow? _diagnosticsWindow;
     private WelcomeWindow? _welcomeWindow;
     private StreamWriter? _fileLog;
+    private bool _saveFailureShown;
     private EventWaitHandle? _activateEvent;
     private RegisteredWaitHandle? _activateWait;
     private bool _started;
@@ -107,7 +113,7 @@ internal sealed class AppHost : IDisposable
         _translator = new OpenAiCompatibleTranslator(_transport, TimeSpan.FromSeconds(20));
         _studyService = new StudyCardService(_transport, TimeSpan.FromSeconds(30));
         _visionService = new VisionTranslationService(_transport, TimeSpan.FromSeconds(35));
-        _coordinator = new TranslationCoordinator(_translator, _cache, Post, _timings, _log, maxConcurrency: 2);
+        _coordinator = new TranslationCoordinator(_translator, _cache, Post, _timings, _log, maxConcurrency: 2, postPartial: PostBackground);
         _theme = new ThemeManager(app);
     }
 
@@ -115,6 +121,13 @@ internal sealed class AppHost : IDisposable
     {
         if (_disposed) return;
         _dispatcher.BeginInvoke(DispatcherPriority.Normal, action);
+    }
+
+    /// <summary>Streamed partial text yields to pending rendering and input, so it never starves the UI.</summary>
+    private void PostBackground(Action action)
+    {
+        if (_disposed) return;
+        _dispatcher.BeginInvoke(DispatcherPriority.Background, action);
     }
 
     // ---- startup ----------------------------------------------------------------------------------
@@ -127,6 +140,7 @@ internal sealed class AppHost : IDisposable
 
         var load = _store.Load();
         _settings = load.Settings;
+        Loc.Instance.Apply(_settings.UiLanguage);
         if (load.Note is not null) _log.Info("settings", load.Note);
         if (load.WasMigrated) { _log.Info("settings", "migrated to schema v2"); TrySave(); }
         ConfigureFileLogging(_settings.DiagnosticsFileLogging);
@@ -194,6 +208,7 @@ internal sealed class AppHost : IDisposable
         _tray.AutoTranslateToggled += enabled => { if (_settings.AutoTranslate != enabled) { _settings.AutoTranslate = enabled; ApplySettings(_settings, notifySession: true); } };
         _tray.ExcludeAppToggled += (name, excluded) => { _settings.SetProcessExcluded(name, excluded); ApplySettings(_settings, notifySession: excluded); _log.Info("settings", $"{name}: {(excluded ? "excluded" : "included")}"); };
         _tray.SnipRegionRequested += StartScreenSnipAndTranslate;
+        _tray.OcrCopyRequested += StartScreenOcrCopy;
         _tray.TranslateClipboardRequested += TranslateClipboard;
         _tray.SettingsRequested += OpenSettings;
         _tray.DiagnosticsRequested += OpenDiagnostics;
@@ -209,13 +224,21 @@ internal sealed class AppHost : IDisposable
 
         try
         {
-            _activateEvent = new EventWaitHandle(false, EventResetMode.AutoReset, Program.ActivateEventName);
+            _activateEvent = new EventWaitHandle(false, EventResetMode.AutoReset, Program.ActivateName);
             _activateWait = ThreadPool.RegisterWaitForSingleObject(_activateEvent, (_, _) => Post(() => { _log.Info("app", "second instance signalled; opening settings"); OpenSettings(); }), null, -1, false);
         }
         catch (Exception ex) { _log.Warn("app", $"activation event unavailable: {ex.GetType().Name}"); }
 
         if (!_hooks.HooksInstalled)
-            _tray.ShowNotice("Bili Index Translate", "Input hooks could not be installed; automatic translation will not work. See Diagnostics.", warning: true);
+            _tray.ShowNotice("Bili Index Translate", Loc.T("App_HooksFailed"), warning: true);
+
+        // Updates: only an installed (Velopack) build ever contacts GitHub; for a portable or development run Configure does nothing.
+        _updates = new UpdateService(Post, _log);
+        _updates.UpdateReady += OnUpdateReady;
+        _updates.DownloadFailed += (reason, manual) => { if (manual) _settingsWindow?.ShowUpdateDownloadFailed(reason); };
+        _tray.RestartUpdateRequested += RestartAndUpdate;
+        if (_updates.ReadyVersion is not null) _tray.SetUpdateReady(true); // downloaded in an earlier run, not installed yet
+        _updates.Configure(_settings.AutoCheckForUpdates);
 
         _log.Info("app", $"ready · auto={_settings.AutoTranslate} delay={_settings.StabilizationDelayMs}ms target={_settings.TargetLanguage} model={_settings.Model} relay={_settings.UseRelay}");
         if (_forceWelcome || !_settings.OnboardingCompleted) OpenWelcome(force: false);
@@ -288,6 +311,10 @@ internal sealed class AppHost : IDisposable
 
             case SessionEffect.ShowTranslation show:
                 _popup.ShowTranslation(show.Snapshot, show.Result, Caption(show.Snapshot, show.Result.Route, show.Result.FromCache));
+                break;
+
+            case SessionEffect.ShowPartialTranslation partial:
+                _popup.ShowPartialTranslation(partial.Snapshot, partial.PartialText, Caption(partial.Snapshot, null, false, streaming: true));
                 break;
 
             case SessionEffect.ShowError err:
@@ -511,7 +538,7 @@ internal sealed class AppHost : IDisposable
     private TranslationRequest BuildRequest(string text, AppSettings s)
     {
         var lang = s.ResolvedTargetLanguage;
-        return new TranslationRequest(text.Trim(), lang.Code, lang.PromptName, s.SourceLanguage, s.Model, s.BaseUrl, s.UseRelay, s.RelayPrefix, s.ApiKey, s.GlossaryText);
+        return new TranslationRequest(text.Trim(), lang.Code, lang.PromptName, s.SourceLanguage, s.Model, s.BaseUrl, s.UseRelay, s.RelayPrefix, s.ApiKey, s.GlossaryText, s.ApiFormat, s.CustomTemplate);
     }
 
     private void StartTranslation(long requestId, SelectionSnapshot snapshot)
@@ -522,16 +549,21 @@ internal sealed class AppHost : IDisposable
             Dispatch(new SessionEvent.TranslationCompleted(requestId, cached));
             return;
         }
-        _coordinator.Start(requestId, request, (id, outcome) => Dispatch(new SessionEvent.TranslationCompleted(id, outcome)));
+        _coordinator.Start(
+            requestId,
+            request,
+            (id, outcome) => Dispatch(new SessionEvent.TranslationCompleted(id, outcome)),
+            (id, text) => Dispatch(new SessionEvent.TranslationProgress(id, text)));
     }
 
-    private string? Caption(SelectionSnapshot snapshot, RequestRoute? route, bool fromCache)
+    private string? Caption(SelectionSnapshot snapshot, RequestRoute? route, bool fromCache, bool streaming = false)
     {
-        var parts = new List<string>(3);
-        if (fromCache) parts.Add("cached");
-        if (route == RequestRoute.Relay || (route is null && _settings.UseRelay)) parts.Add("relay");
-        if (snapshot.Origin == SelectionOrigin.Clipboard) parts.Add("clipboard");
-        else if (_anchorFromPointer) parts.Add("near pointer");
+        var parts = new List<string>(4);
+        if (streaming) parts.Add(Loc.T("Caption_Streaming"));
+        if (fromCache) parts.Add(Loc.T("Caption_Cached"));
+        if (route == RequestRoute.Relay || (route is null && _settings.UseRelay)) parts.Add(Loc.T("Caption_Relay"));
+        if (snapshot.Origin == SelectionOrigin.Clipboard) parts.Add(Loc.T("Caption_Clipboard"));
+        else if (_anchorFromPointer) parts.Add(Loc.T("Caption_NearPointer"));
         return parts.Count == 0 ? null : string.Join(" · ", parts);
     }
 
@@ -542,7 +574,7 @@ internal sealed class AppHost : IDisposable
         try
         {
             var result = await _translator.TranslateAsync(request, ct);
-            return (true, $"OK · {result.ElapsedMs:0} ms via {result.Route.ToString().ToLowerInvariant()} · “{Truncate(result.Translation, 40)}”");
+            return (true, Loc.T("App_TestOk", $"{result.ElapsedMs:0}", result.Route.ToString().ToLowerInvariant(), Truncate(result.Translation, 40)));
         }
         catch (TranslationException ex)
         {
@@ -642,7 +674,7 @@ internal sealed class AppHost : IDisposable
             return;
         }
 
-        _tray.ShowNotice("Bili Index Translate", "The clipboard has neither text nor an image.");
+        _tray.ShowNotice("Bili Index Translate", Loc.T("App_ClipboardEmpty"));
     }
 
     // ---- Zero-OCR Vision Screen Snip --------------------------------------------------------------
@@ -681,9 +713,30 @@ internal sealed class AppHost : IDisposable
             SelectionOrigin.ScreenSnip,
             0);
 
+        var route = VisionRouting.Decide(_settings.VisionMode, _settings.ApiFormat);
+        if (route == VisionRoute.Unsupported)
+        {
+            // Cloud-only mode with a DeepLX or custom endpoint: nothing is sent; say what to change.
+            _visionSeq++;
+            var unsupported = DeeplxProtocol.Unsupported("Image translation", _settings.UseRelay ? RequestRoute.Relay : RequestRoute.Direct, _settings.ApiFormat);
+            _log.Warn("vision", $"unsupported: mode={_settings.VisionMode} format={_settings.ApiFormat}");
+            _popup.ShowError(snapshot, unsupported with { Message = unsupported.Message + " " + Loc.T("Vision_CloudUnsupportedHint") }, null);
+            return;
+        }
+
+        if (route == VisionRoute.Local)
+        {
+            var localSeq = ++_visionSeq;
+            var localCts = new CancellationTokenSource();
+            _visionCts = localCts;
+            _popup.ShowLoading(snapshot, Loc.T("Vision_LoadingLocal"));
+            _ = RunLocalVisionAsync(localSeq, snapshot, capture.DataUrl, _settings.Clone(), localCts);
+            return;
+        }
+
         var target = _settings.ResolvedTargetLanguage;
         var visionModel = VisionPromptBuilder.ResolveVisionModel(_settings.VisionModel);
-        _popup.ShowLoading(snapshot, $"{visionModel} · 识图直译中…");
+        _popup.ShowLoading(snapshot, Loc.T("Vision_Loading", visionModel));
 
         var req = new ImageTranslationRequest(
             capture.DataUrl,
@@ -694,7 +747,8 @@ internal sealed class AppHost : IDisposable
             _settings.UseRelay,
             _settings.RelayPrefix,
             _settings.ApiKey,
-            _settings.GlossaryText);
+            _settings.GlossaryText,
+            _settings.ApiFormat);
 
         var seq = ++_visionSeq;
         var cts = new CancellationTokenSource();
@@ -711,6 +765,22 @@ internal sealed class AppHost : IDisposable
         ImageTranslationResult? ok = null;
         TranslationError? error = null;
 
+        // Deltas arrive faster than the popup can be laid out and placed. The popup is given the newest
+        // one after the pending rendering and input have been handled, and the ones in between are skipped.
+        var live = new LatestValueRelay<ImageTranslationDelta>(
+            deliver =>
+            {
+                if (!_disposed) _dispatcher.BeginInvoke(DispatcherPriority.Background, deliver);
+            },
+            delta =>
+            {
+                if (seq != _visionSeq || !_visionActive) return;
+                var liveSnap = string.IsNullOrWhiteSpace(delta.ExtractedSourceText)
+                    ? baseSnapshot
+                    : baseSnapshot with { Text = delta.ExtractedSourceText };
+                _popup.ShowVisionTranslation(liveSnap, delta.Translation, Loc.T("Vision_Streaming", delta.Model));
+            });
+
         try
         {
             ok = await _visionService.TranslateImageAsync(
@@ -718,15 +788,7 @@ internal sealed class AppHost : IDisposable
                 cts.Token,
                 delta =>
                 {
-                    if (cts.IsCancellationRequested) return;
-                    Post(() =>
-                    {
-                        if (seq != _visionSeq || !_visionActive) return;
-                        var liveSnap = string.IsNullOrWhiteSpace(delta.ExtractedSourceText)
-                            ? baseSnapshot
-                            : baseSnapshot with { Text = delta.ExtractedSourceText };
-                        _popup.ShowVisionTranslation(liveSnap, delta.Translation, $"{delta.Model} · 识图流式中…");
-                    });
+                    if (!cts.IsCancellationRequested) live.Offer(delta);
                 }).ConfigureAwait(false);
         }
         catch (TranslationException ex)
@@ -739,22 +801,24 @@ internal sealed class AppHost : IDisposable
         }
         catch (Exception ex)
         {
-            error = new TranslationError(TranslationErrorKind.Network, $"Unexpected vision error ({ex.GetType().Name}).", RequestRoute.Direct);
+            error = new TranslationError(TranslationErrorKind.Network, Loc.T("App_UnexpectedVisionError", ex.GetType().Name), RequestRoute.Direct);
         }
 
         if (cts.IsCancellationRequested) return;
 
         Post(() =>
         {
+            // The result below is final; a delta that is still waiting must not be drawn over it.
+            live.Clear();
             if (seq != _visionSeq || !_visionActive) return;
 
             if (ok is not null)
             {
                 _log.Info("vision", $"ok via {ok.Route} {ok.ElapsedMs:0} ms ({ok.Model}), srcChars={ok.ExtractedSourceText.Length}");
                 var finalSnap = baseSnapshot with { Text = ok.ExtractedSourceText };
-                var glossaryPart = ok.GlossaryHitCount > 0 ? $" · 术语×{ok.GlossaryHitCount}" : string.Empty;
-                var speedPart = ok.IsCached ? " · ⚡瞬时" : $" · {ok.Route.ToString().ToLowerInvariant()}";
-                _popup.ShowVisionTranslation(finalSnap, ok.Translation, $"{ok.Model} · 识图{glossaryPart}{speedPart}");
+                var glossaryPart = ok.GlossaryHitCount > 0 ? " · " + Loc.T("Caption_Glossary", ok.GlossaryHitCount) : string.Empty;
+                var speedPart = ok.IsCached ? " · " + Loc.T("Caption_Instant") : $" · {ok.Route.ToString().ToLowerInvariant()}";
+                _popup.ShowVisionTranslation(finalSnap, ok.Translation, $"{ok.Model} · {Loc.T("Vision_Tag")}{glossaryPart}{speedPart}");
             }
             else if (error is not null && error.Kind != TranslationErrorKind.Cancelled)
             {
@@ -762,6 +826,203 @@ internal sealed class AppHost : IDisposable
                 _popup.ShowError(baseSnapshot, error, error.Route == RequestRoute.Relay ? "relay" : null);
             }
         });
+    }
+
+    // ---- Local OCR: read the image on this PC, then translate the recognized text -------------------
+
+    /// <summary>
+    /// Same lifecycle as <see cref="RunVisionRequestAsync"/>: the token in <see cref="_visionCts"/> cancels it, and
+    /// <see cref="_visionSeq"/> / <see cref="_visionActive"/> discard whatever finishes after the card was closed or replaced.
+    /// The screenshot never leaves the process; only the recognized text goes to the translation service.
+    /// </summary>
+    private async Task RunLocalVisionAsync(
+        long seq,
+        SelectionSnapshot baseSnapshot,
+        string dataUrl,
+        AppSettings s,
+        CancellationTokenSource cts)
+    {
+        OcrOutcome ocr;
+        try
+        {
+            ocr = await Task.Run(() => WindowsOcr.RecognizeAsync(dataUrl, cts.Token), cts.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            return;
+        }
+        catch (Exception ex)
+        {
+            ocr = new OcrOutcome(string.Empty, OcrFailure.Error, ex.GetType().Name);
+        }
+
+        if (cts.IsCancellationRequested) return;
+
+        if (!ocr.IsSuccess)
+        {
+            Post(() =>
+            {
+                if (seq != _visionSeq || !_visionActive) return;
+                _log.Warn("vision", $"local OCR failed: {ocr.Failure} {ocr.Detail}");
+                _popup.ShowError(baseSnapshot, OcrError(ocr), null);
+            });
+            return;
+        }
+
+        var srcSnap = baseSnapshot with { Text = ocr.Text };
+        var modelLabel = ModelLabel(s);
+        var captionStreaming = Loc.T("Vision_LocalStreaming", modelLabel);
+
+        Post(() =>
+        {
+            if (seq != _visionSeq || !_visionActive) return;
+            _log.Info("vision", $"local OCR ok, chars={ocr.Text.Length}");
+            _popup.ShowLoading(srcSnap, Loc.T("Vision_LocalTranslating", modelLabel));
+        });
+
+        var live = new LatestValueRelay<string>(
+            deliver =>
+            {
+                if (!_disposed) _dispatcher.BeginInvoke(DispatcherPriority.Background, deliver);
+            },
+            partial =>
+            {
+                if (seq != _visionSeq || !_visionActive) return;
+                _popup.ShowVisionTranslation(srcSnap, partial, captionStreaming);
+            });
+
+        TranslationResult? ok = null;
+        TranslationError? error = null;
+        try
+        {
+            ok = await _translator.TranslateAsync(
+                BuildRequest(ocr.Text, s),
+                cts.Token,
+                partial =>
+                {
+                    if (!cts.IsCancellationRequested) live.Offer(partial);
+                }).ConfigureAwait(false);
+        }
+        catch (TranslationException ex)
+        {
+            error = ex.Error;
+        }
+        catch (OperationCanceledException)
+        {
+            return;
+        }
+        catch (Exception ex)
+        {
+            error = new TranslationError(TranslationErrorKind.Network, Loc.T("App_UnexpectedVisionError", ex.GetType().Name), RequestRoute.Direct);
+        }
+
+        if (cts.IsCancellationRequested) return;
+
+        Post(() =>
+        {
+            live.Clear();
+            if (seq != _visionSeq || !_visionActive) return;
+
+            if (ok is not null)
+            {
+                _log.Info("vision", $"local ok via {ok.Route} {ok.ElapsedMs:0} ms ({ok.Model}), srcChars={ocr.Text.Length}");
+                var glossaryPart = ok.GlossaryHitCount > 0 ? " · " + Loc.T("Caption_Glossary", ok.GlossaryHitCount) : string.Empty;
+                _popup.ShowVisionTranslation(srcSnap, ok.Translation, $"{ok.Model} · {Loc.T("Vision_LocalTag")}{glossaryPart} · {ok.Route.ToString().ToLowerInvariant()}");
+            }
+            else if (error is not null && error.Kind != TranslationErrorKind.Cancelled)
+            {
+                _log.Warn("vision", $"local fail {error}");
+                _popup.ShowError(srcSnap, error, error.Route == RequestRoute.Relay ? "relay" : null);
+            }
+        });
+    }
+
+    private static string ModelLabel(AppSettings s) => s.ApiFormat switch
+    {
+        ApiFormat.Deeplx => DeeplxProtocol.ModelLabel,
+        ApiFormat.Custom => s.CustomTemplate.Label,
+        _ => s.Model,
+    };
+
+    private static string OcrFailureMessage(OcrOutcome ocr) => ocr.Failure switch
+    {
+        OcrFailure.EngineUnavailable => Loc.T("Ocr_EngineUnavailable"),
+        OcrFailure.NoText => Loc.T("Ocr_NoText") + " " + Loc.T("Ocr_NoTextHint"),
+        OcrFailure.InvalidImage => Loc.T("Ocr_ImageFailed", ocr.Detail ?? "?"),
+        _ => Loc.T("Ocr_Failed", ocr.Detail ?? "?"),
+    };
+
+    private static TranslationError OcrError(OcrOutcome ocr)
+        => new(TranslationErrorKind.EmptyResult, OcrFailureMessage(ocr), RequestRoute.Direct);
+
+    // ---- Recognize screen text and copy it (local only, no network) ---------------------------------
+
+    private void StartScreenOcrCopy()
+    {
+        if (ScreenSnipOverlay.IsActive) return;
+
+        if (_popup.IsVisible) Dispatch(new SessionEvent.UserClosed());
+        DismissVisionPopup();
+
+        var capture = ScreenSnipOverlay.CaptureInteractive();
+        if (capture is not { } cap || string.IsNullOrWhiteSpace(cap.DataUrl))
+            return;
+
+        CancelOcrCopy();
+        var cts = new CancellationTokenSource();
+        _ocrCopyCts = cts;
+        _ = RunOcrCopyAsync(cap.DataUrl, cts);
+    }
+
+    private async Task RunOcrCopyAsync(string dataUrl, CancellationTokenSource cts)
+    {
+        OcrOutcome ocr;
+        try
+        {
+            ocr = await Task.Run(() => WindowsOcr.RecognizeAsync(dataUrl, cts.Token), cts.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            return;
+        }
+        catch (Exception ex)
+        {
+            ocr = new OcrOutcome(string.Empty, OcrFailure.Error, ex.GetType().Name);
+        }
+
+        if (cts.IsCancellationRequested) return;
+
+        Post(() =>
+        {
+            if (!ReferenceEquals(_ocrCopyCts, cts)) return;
+            var title = Loc.T("Ocr_CopyTitle");
+            if (!ocr.IsSuccess)
+            {
+                _log.Warn("ocr", $"copy: recognition failed: {ocr.Failure} {ocr.Detail}");
+                _tray.ShowNotice(title, OcrFailureMessage(ocr), warning: true);
+                return;
+            }
+
+            var count = ocr.Text.EnumerateRunes().Count();
+            if (ClipboardFallback.TryWriteText(ocr.Text))
+            {
+                _log.Info("ocr", $"copy: ok, chars={count}");
+                _tray.ShowNotice(title, Loc.T("Ocr_Copied", count));
+            }
+            else
+            {
+                _log.Warn("ocr", "copy: clipboard busy");
+                _tray.ShowNotice(title, Loc.T("Ocr_CopyFailed"), warning: true);
+            }
+        });
+    }
+
+    private void CancelOcrCopy()
+    {
+        if (_ocrCopyCts is null) return;
+        try { _ocrCopyCts.Cancel(); } catch (Exception) { }
+        _ocrCopyCts.Dispose();
+        _ocrCopyCts = null;
     }
 
     private void DismissVisionPopup()
@@ -791,16 +1052,19 @@ internal sealed class AppHost : IDisposable
 
     // ---- settings --------------------------------------------------------------------------------------
 
-    private void ApplySettings(AppSettings next, bool notifySession)
+    /// <summary>Applies the settings and writes them to disk. Returns why they could not be written, or null.</summary>
+    private string? ApplySettings(AppSettings next, bool notifySession, bool notifySaveFailure = true)
     {
         var previous = _settings;
         _settings = next.Normalize();
-        TrySave();
+        var saveError = TrySave(notifySaveFailure);
+        Loc.Instance.Apply(_settings.UiLanguage);
 
         _session.Options = new SessionOptions(_settings.AutoTranslate, _settings.StabilizationDelayMs);
         _theme.Apply(_settings.Theme);
         _popup.Configure(_settings.TextScale, _settings.ShowOriginalByDefault);
         _tray.SetAutoTranslate(_settings.AutoTranslate);
+        _updates?.Configure(_settings.AutoCheckForUpdates);
         if (previous.Hotkey != _settings.Hotkey || previous.HotkeyEnabled != _settings.HotkeyEnabled) ApplyHotkey();
         if (previous.SnipHotkey != _settings.SnipHotkey || previous.SnipHotkeyEnabled != _settings.SnipHotkeyEnabled) ApplySnipHotkey();
         if (previous.UseUiaSelectionEvents != _settings.UseUiaSelectionEvents) _observer.SetSelectionEvents(_settings.UseUiaSelectionEvents);
@@ -808,18 +1072,28 @@ internal sealed class AppHost : IDisposable
 
         var serviceChanged = previous.BaseUrl != _settings.BaseUrl || previous.UseRelay != _settings.UseRelay || previous.RelayPrefix != _settings.RelayPrefix
                              || previous.Model != _settings.Model || previous.VisionModel != _settings.VisionModel || previous.GlossaryText != _settings.GlossaryText
-                             || previous.TargetLanguage != _settings.TargetLanguage || previous.ApiKey != _settings.ApiKey;
+                             || previous.TargetLanguage != _settings.TargetLanguage || previous.ApiKey != _settings.ApiKey
+                             || previous.ApiFormat != _settings.ApiFormat || previous.CustomTemplate != _settings.CustomTemplate;
         if (serviceChanged)
         {
             _studyService.ClearVolatileCache();
             _visionService.ClearVolatileCache();
-            _log.Info("settings", $"service: target={_settings.TargetLanguage} model={_settings.Model} vision={_settings.VisionModel} relay={_settings.UseRelay} host={HostOf(_settings)}");
+            _log.Info("settings", $"service: format={_settings.ApiFormat} target={_settings.TargetLanguage} model={_settings.Model} vision={_settings.VisionModel} relay={_settings.UseRelay} host={HostOf(_settings)}");
         }
         if (notifySession) Dispatch(new SessionEvent.SettingsChanged());
+        return saveError;
     }
 
+    /// <summary>What answers the requests: the model, or the name of a format that has no model.</summary>
+    private static string ServiceLabel(AppSettings s) => s.ApiFormat switch
+    {
+        ApiFormat.Deeplx => DeeplxProtocol.ModelLabel,
+        ApiFormat.Custom => s.CustomTemplate.Label,
+        _ => s.Model,
+    };
+
     private static string HostOf(AppSettings s)
-        => EndpointResolver.TryResolve(s.BaseUrl, s.UseRelay, s.RelayPrefix, out var ep, out _) ? ep!.DisplayHost : "(invalid)";
+        => EndpointResolver.TryResolve(s.ApiFormat, s.BaseUrl, s.UseRelay, s.RelayPrefix, s.ApiKey, out var ep, out _) ? ep!.DisplayHost : "(invalid)";
 
     private void ApplyHotkey()
     {
@@ -840,7 +1114,7 @@ internal sealed class AppHost : IDisposable
         else
         {
             _log.Warn("hotkey", error + " Automatic translation is unaffected.");
-            _tray.ShowNotice("Shortcut unavailable", error + " Automatic translation still works; change the shortcut in Settings.", warning: true);
+            _tray.ShowNotice(Loc.T("App_ShortcutUnavailable"), Loc.T("App_ShortcutUnavailableHint", error), warning: true);
         }
         _settingsWindow?.SetHotkeyStatus(error);
     }
@@ -852,7 +1126,7 @@ internal sealed class AppHost : IDisposable
         else
         {
             _log.Warn("hotkey", error);
-            _tray.ShowNotice("Snip shortcut unavailable", error + " You can still snip from the tray menu or change it in Settings.", warning: true);
+            _tray.ShowNotice(Loc.T("App_SnipShortcutUnavailable"), Loc.T("App_SnipShortcutUnavailableHint", error), warning: true);
         }
         _settingsWindow?.SetSnipHotkeyStatus(error);
     }
@@ -863,10 +1137,28 @@ internal sealed class AppHost : IDisposable
         _saveTimer.Start();
     }
 
-    private void TrySave()
+    /// <summary>Writes the settings file. Returns null when it was written, otherwise the reason it was not.</summary>
+    private string? TrySave(bool notify = true)
     {
-        try { _store.Save(_settings); }
-        catch (Exception ex) { _log.Error("settings", $"save failed: {ex.GetType().Name}: {ex.Message}"); }
+        try
+        {
+            _store.Save(_settings);
+            _saveFailureShown = false;
+            return null;
+        }
+        catch (Exception ex)
+        {
+            _log.Error("settings", $"save failed: {ex.GetType().Name}: {ex.Message}");
+            var reason = Loc.T("App_SettingsNotSavedReason", ex.GetType().Name, ex.Message);
+            // The Settings window shows the reason itself. Other saves run in the background, so the tray says it,
+            // once per run of failures. The tray does not exist yet during start-up; the log entry covers that case.
+            if (notify && !_saveFailureShown && _tray is not null)
+            {
+                _saveFailureShown = true;
+                _tray.ShowNotice(Loc.T("App_SettingsNotSaved"), reason, warning: true);
+            }
+            return reason;
+        }
     }
 
     private void ConfigureFileLogging(bool enabled)
@@ -887,7 +1179,7 @@ internal sealed class AppHost : IDisposable
             _log.SetSink(entry => { lock (writer) writer.WriteLine(entry.ToString()); });
             _log.Info("diag", "file logging enabled");
         }
-        catch (Exception ex) { _log.Warn("diag", $"file logging unavailable: {ex.GetType().Name}"); }
+        catch (Exception ex) { _log.Warn("diag", $"file logging unavailable: {ex.GetType().Name}: {ex.Message}"); }
     }
 
     // ---- windows -------------------------------------------------------------------------------------
@@ -899,7 +1191,8 @@ internal sealed class AppHost : IDisposable
             _settingsWindow.Activate();
             return;
         }
-        _settingsWindow = new SettingsWindow(_settings, _store.FilePath, TestConnectionAsync, s => ApplySettings(s, notifySession: true));
+        _settingsWindow = new SettingsWindow(_settings, _store.FilePath, TestConnectionAsync, s => ApplySettings(s, notifySession: true, notifySaveFailure: false),
+            new SettingsUpdateInfo(_updates.IsInstalled, _updates.CurrentVersionText, _updates.CheckNowAsync));
         _settingsWindow.SetHotkeyStatus(_hotkeyError);
         _settingsWindow.SetSnipHotkeyStatus(_snipHotkeyError);
         _settingsWindow.Closed += (_, _) => _settingsWindow = null;
@@ -927,7 +1220,7 @@ internal sealed class AppHost : IDisposable
             return;
         }
         _welcomeWindow = new WelcomeWindow();
-        if (!_hooks.HooksInstalled) _welcomeWindow.SetWarning("Input hooks are unavailable on this system, so selections cannot be detected automatically. The fallback shortcut may still work.");
+        if (!_hooks.HooksInstalled) _welcomeWindow.SetWarning(Loc.T("App_HooksWarning"));
         _welcomeWindow.SettingsRequested += OpenSettings;
         _welcomeWindow.Finished += dontShow =>
         {
@@ -944,7 +1237,7 @@ internal sealed class AppHost : IDisposable
         sb.Append($"v{typeof(AppHost).Assembly.GetName().Version} · {Environment.OSVersion.Version} · .NET {Environment.Version} · ");
         sb.Append($"session {_session.State} · hooks {(_hooks.HooksInstalled ? "ok" : "MISSING")} · uia {(_observer.IsAlive ? "ok" : "stopped")} · ");
         sb.Append($"cache {_cache.Count} entries, {_cache.Hits} hits / {_cache.Misses} misses · in-flight {_coordinator.ActiveCount} · ");
-        sb.Append($"target {_settings.TargetLanguage} · {_settings.Model} · {HostOf(_settings)} · relay {(_settings.UseRelay ? "on" : "off")} · auto {(_settings.AutoTranslate ? "on" : "off")} · delay {_settings.StabilizationDelayMs} ms");
+        sb.Append($"target {_settings.TargetLanguage} · {ServiceLabel(_settings)} · {HostOf(_settings)} · relay {(_settings.UseRelay ? "on" : "off")} · auto {(_settings.AutoTranslate ? "on" : "off")} · delay {_settings.StabilizationDelayMs} ms");
         try
         {
             var monitors = new List<string>();
@@ -968,7 +1261,25 @@ internal sealed class AppHost : IDisposable
     {
         _log.Info("app", "exit requested");
         Dispose();
+        // A downloaded update is installed by the updater once this process has ended; no restart.
+        _updates?.ApplyOnExit();
         _app.Shutdown();
+    }
+
+    private void OnUpdateReady(string version)
+    {
+        _tray.SetUpdateReady(true);
+        _tray.ShowNotice("Bili Index Translate", Loc.T("Update_Ready", version));
+        _settingsWindow?.ShowUpdateDownloaded(version);
+    }
+
+    /// <summary>Tray: "Restart and update". Everything is stopped and saved first, because Velopack ends the process at once.</summary>
+    private void RestartAndUpdate()
+    {
+        _log.Info("app", "restart for update requested");
+        Dispose();
+        if (_updates.ApplyAndRestart()) return;
+        _app.Shutdown(); // the updater could not be started: leave the app as a normal exit would
     }
 
     public void Dispose()
@@ -985,6 +1296,7 @@ internal sealed class AppHost : IDisposable
         TrySave();
 
         CancelVisionRequest();
+        CancelOcrCopy();
         _studyService.ClearVolatileCache();
         _visionService.ClearVolatileCache();
         _activateWait?.Unregister(null);
@@ -996,6 +1308,7 @@ internal sealed class AppHost : IDisposable
         SafeDispose(_popup);
         try { _settingsWindow?.Close(); _diagnosticsWindow?.Close(); _welcomeWindow?.Close(); } catch (Exception) { }
         SafeDispose(_tray);
+        SafeDispose(_updates);
         SafeDispose(_transport);
         SafeDispose(_theme);
         _log.Info("app", "stopped");

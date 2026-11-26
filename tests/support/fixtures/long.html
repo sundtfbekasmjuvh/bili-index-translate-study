@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Extension e2e long page</title>
+  <style>
+    body { font: 16px/1.5 sans-serif; margin: 24px; max-width: 760px; }
+  </style>
+</head>
+<body>
+  <h1>Changelog</h1>
+  <script>
+    // 900 paragraphs: more than the extension observes at once, so the ones near the viewport must be re-chosen after a jump.
+    for (let i = 0; i < 900; i++) {
+      const p = document.createElement("p");
+      p.id = "p" + i;
+      p.textContent = "Entry " + i + " records one change made to the scheduler.";
+      document.body.appendChild(p);
+    }
+  </script>
+</body>
+</html>

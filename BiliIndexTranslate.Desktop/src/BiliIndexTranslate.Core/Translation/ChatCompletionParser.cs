@@ -50,13 +50,77 @@ public static class ChatCompletionParser
                 content = textEl.GetString();
 
             if (content is null) { error = "Response has no message content."; return false; }
-            var cleaned = StripThink(content);
-            if (cleaned.Length == 0) { error = "The service returned an empty translation."; return false; }
-
-            translation = cleaned;
-            return true;
+            return TryFinalize(content, out translation, out error);
         }
     }
+
+    /// <summary>
+    /// The cleaning and validation every finished translation goes through, whether it arrived as one
+    /// JSON body or was accumulated from a stream: strip reasoning blocks and whitespace, reject empty.
+    /// </summary>
+    public static bool TryFinalize(string? content, out string translation, out string? error)
+    {
+        translation = string.Empty;
+        error = null;
+        var cleaned = StripThink(content);
+        if (cleaned.Length == 0) { error = "The service returned an empty translation."; return false; }
+        translation = cleaned;
+        return true;
+    }
+
+    /// <summary>
+    /// What may be shown while a reply is still arriving: nothing while a reasoning block is open (or
+    /// the text could still turn into one), otherwise the text after the last closing tag, trimmed.
+    /// </summary>
+    public static string VisibleStreamingText(string? accumulated)
+    {
+        if (string.IsNullOrEmpty(accumulated)) return string.Empty;
+        const string open = "<think>";
+        const string close = "</think>";
+        var closeIdx = accumulated.LastIndexOf(close, StringComparison.OrdinalIgnoreCase);
+        if (closeIdx >= 0) return accumulated[(closeIdx + close.Length)..].Trim();
+
+        var s = accumulated.TrimStart();
+        if (s.StartsWith(open, StringComparison.OrdinalIgnoreCase)) return string.Empty;
+        if (s.Length > 0 && s.Length < open.Length && open.StartsWith(s, StringComparison.OrdinalIgnoreCase)) return string.Empty;
+        return s.TrimEnd();
+    }
+
+    /// <summary>
+    /// Reads one <c>data:</c> payload of a streamed completion and returns the text it adds ("" when the
+    /// chunk carries none or cannot be read). Some services report a failure inside the stream instead of
+    /// through the HTTP status; <paramref name="error"/> then holds their message and the stream is over.
+    /// </summary>
+    public static string ReadStreamDelta(string dataJson, out string? error)
+    {
+        error = null;
+        try
+        {
+            using var doc = JsonDocument.Parse(dataJson);
+            var root = doc.RootElement;
+            if (root.ValueKind != JsonValueKind.Object) return string.Empty;
+
+            if (root.TryGetProperty("error", out var errEl) && errEl.ValueKind is not (JsonValueKind.Null or JsonValueKind.Undefined))
+            {
+                error = DescribeError(errEl);
+                return string.Empty;
+            }
+
+            if (!root.TryGetProperty("choices", out var choices) || choices.ValueKind != JsonValueKind.Array || choices.GetArrayLength() == 0)
+                return string.Empty;
+            var first = choices[0];
+            if (first.ValueKind == JsonValueKind.Object
+                && first.TryGetProperty("delta", out var delta) && delta.ValueKind == JsonValueKind.Object
+                && delta.TryGetProperty("content", out var content) && content.ValueKind == JsonValueKind.String)
+                return content.GetString() ?? string.Empty;
+        }
+        catch (JsonException) { }
+        return string.Empty;
+    }
+
+    /// <summary>The error raised when a service reports a failure inside a stream that started with HTTP 200.</summary>
+    public static TranslationException StreamFailure(string serviceMessage, RequestRoute route)
+        => new(new TranslationError(TranslationErrorKind.Http, "The service reported an error: " + serviceMessage, route));
 
     /// <summary>Strips CoT <c>&lt;think&gt;...&lt;/think&gt;</c> reasoning blocks emitted by Qwen3.5 / R1 models.</summary>
     public static string StripThink(string? raw)
@@ -116,7 +180,7 @@ public static class ChatCompletionParser
            || s.StartsWith("<body", StringComparison.OrdinalIgnoreCase)
            || (s.Length > 0 && s[0] == '<' && !s.StartsWith("<?xml", StringComparison.OrdinalIgnoreCase));
 
-    private static string Shorten(string s)
+    internal static string Shorten(string s)
     {
         s = s.Replace('\r', ' ').Replace('\n', ' ').Trim();
         return s.Length > 160 ? s[..160] + "…" : s;

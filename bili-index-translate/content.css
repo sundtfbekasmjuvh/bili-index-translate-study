@@ -153,6 +153,27 @@ html[data-bit-theme="dark"] {
   #bili-index-study-panel[data-open] {
     animation: none;
   }
+
+  /* Skeleton shimmer, immersive loading pulse, capsule fade and every hover transition of the extension's own elements. */
+  #bili-index-translate-panel,
+  #bili-index-translate-panel *,
+  #bili-index-study-panel,
+  #bili-index-study-panel *,
+  #bili-index-imm-bar,
+  #bili-index-imm-bar *,
+  [data-bit-imm] {
+    animation: none !important;
+    transition: none !important;
+  }
+}
+
+/* ---- Keyboard focus outline for the extension's own controls ---- */
+
+#bili-index-translate-panel button:focus-visible,
+#bili-index-study-panel button:focus-visible,
+#bili-index-imm-bar button:focus-visible {
+  outline: 2px solid #2563eb;
+  outline-offset: 2px;
 }
 
 /* ---- Crisp Inline SVG Icons ---- */
@@ -850,6 +871,102 @@ html[data-bit-theme="dark"] .bit-imm-block {
   animation: bit-pulse 1.15s ease-in-out infinite;
 }
 
+/* Annotate mode: one compact row of "word · gloss" labels under the paragraph */
+.bit-imm-block[data-notes] {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 3px 4px;
+  margin-top: 3px;
+  padding-top: 0;
+  padding-bottom: 0;
+  line-height: 1.3;
+}
+
+.bit-imm-block .bit-imm-note,
+.bit-imm-block .bit-imm-known {
+  all: unset;
+  box-sizing: border-box;
+  display: inline-block;
+  max-width: 100%;
+  padding: 0 7px;
+  border-radius: 999px;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 18px;
+  letter-spacing: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+
+.bit-imm-block .bit-imm-note {
+  color: #1e40af;
+  background: rgba(37, 99, 235, 0.09);
+  border: 1px solid rgba(37, 99, 235, 0.18);
+  line-height: 16px;
+}
+
+.bit-imm-block .bit-imm-note:hover,
+.bit-imm-block .bit-imm-note[aria-expanded="true"] {
+  background: rgba(37, 99, 235, 0.18);
+}
+
+.bit-imm-block .bit-imm-known {
+  color: #fff;
+  background: #2563eb;
+  line-height: 18px;
+}
+
+.bit-imm-block .bit-imm-known:hover {
+  background: #1d4ed8;
+}
+
+.bit-imm-block .bit-imm-note:focus-visible,
+.bit-imm-block .bit-imm-known:focus-visible {
+  outline: 2px solid #2563eb;
+  outline-offset: 1px;
+}
+
+@media (prefers-color-scheme: dark) {
+  .bit-imm-block .bit-imm-note {
+    color: #bfdbfe;
+    background: rgba(96, 165, 250, 0.14);
+    border-color: rgba(96, 165, 250, 0.3);
+  }
+  .bit-imm-block .bit-imm-known {
+    color: #0f172a;
+    background: #93c5fd;
+  }
+  .bit-imm-block .bit-imm-note:focus-visible,
+  .bit-imm-block .bit-imm-known:focus-visible {
+    outline-color: #93c5fd;
+  }
+}
+
+html[data-bit-theme="dark"] .bit-imm-block .bit-imm-note {
+  color: #bfdbfe;
+  background: rgba(96, 165, 250, 0.14);
+  border-color: rgba(96, 165, 250, 0.3);
+}
+
+html[data-bit-theme="dark"] .bit-imm-block .bit-imm-note:hover,
+html[data-bit-theme="dark"] .bit-imm-block .bit-imm-note[aria-expanded="true"] {
+  background: rgba(96, 165, 250, 0.26);
+}
+
+html[data-bit-theme="dark"] .bit-imm-block .bit-imm-known {
+  color: #0f172a;
+  background: #93c5fd;
+}
+
+html[data-bit-theme="dark"] .bit-imm-block .bit-imm-note:focus-visible,
+html[data-bit-theme="dark"] .bit-imm-block .bit-imm-known:focus-visible {
+  outline-color: #93c5fd;
+}
+
 /* Target-only view mode (zero DOM node movement — preserves React/Vue hydration) */
 html[data-bit-imm-mode="target-only"] [data-bit-imm-host][data-bit-imm-ready="1"] {
   font-size: 0 !important;
@@ -941,7 +1058,7 @@ html[data-bit-theme="dark"] #bili-index-imm-bar {
   white-space: nowrap;
 }
 
-#bili-index-imm-bar .bit-imm-btn {
+#bili-index-imm-bar :is(.bit-imm-btn, .bit-imm-annot-btn, .bit-imm-undo) {
   all: unset;
   box-sizing: border-box;
   padding: 2px 7px;
@@ -955,25 +1072,37 @@ html[data-bit-theme="dark"] #bili-index-imm-bar {
 }
 
 @media (prefers-color-scheme: dark) {
-  #bili-index-imm-bar .bit-imm-btn {
+  #bili-index-imm-bar :is(.bit-imm-btn, .bit-imm-annot-btn, .bit-imm-undo) {
     color: #cbd5e1;
     background: rgba(255, 255, 255, 0.08);
   }
 }
 
-html[data-bit-theme="dark"] #bili-index-imm-bar .bit-imm-btn {
+html[data-bit-theme="dark"] #bili-index-imm-bar :is(.bit-imm-btn, .bit-imm-annot-btn, .bit-imm-undo) {
   color: #cbd5e1;
   background: rgba(255, 255, 255, 0.08);
 }
 
-#bili-index-imm-bar .bit-imm-btn:hover {
+#bili-index-imm-bar :is(.bit-imm-btn, .bit-imm-annot-btn, .bit-imm-undo):hover {
   background: rgba(37, 99, 235, 0.12);
   color: #2563eb;
 }
 
-#bili-index-imm-bar .bit-imm-btn[data-active] {
+#bili-index-imm-bar :is(.bit-imm-btn, .bit-imm-annot-btn, .bit-imm-undo)[data-active] {
   background: rgba(37, 99, 235, 0.14);
   color: #2563eb;
+}
+
+#bili-index-imm-bar .bit-imm-notice {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+
+#bili-index-imm-bar .bit-imm-notice:empty {
+  display: none;
 }
 
 #bili-index-imm-bar .bit-imm-close {

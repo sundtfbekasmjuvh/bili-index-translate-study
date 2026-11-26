@@ -1,34 +1,94 @@
 // background.js
 "use strict";
 
+// Interface text. The service worker loads it with importScripts; Node (unit tests, the sandbox) with require.
+const I18N =
+  typeof module !== "undefined" && module.exports ? require("./i18n.js") : (importScripts("i18n.js"), globalThis.BiliI18n);
+
+// Pure functions of "annotate hard words only" mode (word picking, prompt, reply parsing). Loaded like i18n.js.
+const ANNOTATE =
+  typeof module !== "undefined" && module.exports ? require("./annotate.js") : (importScripts("annotate.js"), globalThis.BiliAnnotate);
+
 const DEFAULTS = {
   base: "https://index-translate.bilibili.com/v1",
   proxy: "",
+  apiType: "openai",
+  customName: "",
+  customMethod: "POST",
+  customHeaders: "",
+  customBody: "",
+  customResultPath: "",
+  customErrorPath: "",
   model: "Index-Translate-9B",
   immersiveModel: "Index-Translate-2B",
   visionModel: "Index-Translate-35B-A3B",
-  key: "bili",
-  target: "中文"
+  target: "中文",
+  uiLang: "auto"
 };
 
+// Kept in chrome.storage.local: the glossary because of its size, the API key so that it stays on
+// this device instead of being uploaded to the browser account by chrome.storage.sync.
 const LOCAL_DEFAULTS = {
-  glossary: ""
+  glossary: "",
+  key: "bili"
 };
+
+// "Annotate hard words only" settings, kept in chrome.storage.local and read separately from
+// LOCAL_DEFAULTS. annotateLevels: zh is an HSK level (1-7), en/es a frequency-rank cut-off. annotateKnown
+// holds base-form keys only: words the reader marked as known, never sentences or addresses.
+const ANNOTATE_DEFAULTS = {
+  annotateEnabled: false,
+  annotateLevels: { zh: 4, en: 5000, es: 5000 },
+  annotateKnown: { v: 1, zh: [], en: [], es: [] }
+};
+const ANNOTATE_LANGS = ["zh", "en", "es"];
+const ANNOTATE_WORDLIST_FILES = { zh: "data/hsk30.txt", en: "data/freq-en.txt", es: "data/freq-es.txt" };
+const ANNOTATE_OFFICIAL_HOST = "index-translate.bilibili.com";
+const ANNOTATE_OFFICIAL_MODEL = "Index-Translate-9B";
+const ANNOTATE_MERGE_MAX_WORDS = 24;
+const ANNOTATE_MAX_KNOWN = 50000;
+const ANNOTATE_MAX_KEY = 32;
 
 const MENU_ID = "bili-translate-selection";
 const MENU_STUDY_ID = "bili-study-selection";
 const MENU_IMAGE_ID = "bili-translate-image";
 const MENU_IMMERSIVE_ID = "bili-immersive-page";
+// Context menu entries: id, title key, context.
+const MENUS = [
+  [MENU_ID, "menu.translate", "selection"],
+  [MENU_STUDY_ID, "menu.study", "selection"],
+  [MENU_IMAGE_ID, "menu.image", "image"],
+  [MENU_IMMERSIVE_ID, "menu.immersive", "page"]
+];
 const MAX_LEN = 3000;
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
 const TIMEOUT_MS = 35000;
 const MAX_ERROR_BODY = 4000;
+
+// Automatic retry for rate limits and temporary server errors (see retryRequest). Only a response whose
+// status is listed is retried; network errors, timeouts and cancellation never are. Tests may change fields.
+const RETRY_POLICY = {
+  maxRetries: 2,
+  baseDelayMs: 500,
+  maxDelayMs: 8000,
+  statuses: [429, 500, 502, 503, 504]
+};
+
+// apiType "deeplx": Base URL is a DeepLX-style translate endpoint instead of an OpenAI-compatible root.
+const API_TYPE_DEEPLX = "deeplx";
+const DEEPLX_LABEL = "DeepLX";
+
+// apiType "custom": the request and the place of the translation in the reply come from a template.
+const API_TYPE_CUSTOM = "custom";
+const CUSTOM_LABEL = "Custom API";
 
 // Strictly volatile in-RAM session LRU micro-cache (never persisted to chrome.storage or disk).
 const MEM_CACHE_LIMIT = 64;
 const volatileTranslateCache = new Map();
 const volatileStudyCache = new Map();
 const volatileVisionCache = new Map();
+// Annotate mode: "model|target|base|glossLang|paragraph" -> { key: { w, gloss } }.
+const volatileAnnotateCache = new Map();
 
 // Parsed glossary cache in RAM (rebuilt only when user edits options).
 let cachedGlossaryRaw = null;
@@ -51,15 +111,11 @@ function lruSet(map, key, val) {
   }
 }
 
-function fastStringHash(str) {
-  let h = 2166136261;
-  const s = String(str || "");
-  const step = Math.max(1, Math.floor(s.length / 512));
-  for (let i = 0; i < s.length; i += step) {
-    h ^= s.charCodeAt(i);
-    h = Math.imul(h, 16777619);
-  }
-  return (h >>> 0).toString(36) + ":" + s.length;
+// Cache keys must cover the whole input: a sampled hash lets two different images of equal length
+// share a key and return the wrong translation. Matches the desktop client's SHA-256 keys.
+async function sha256Hex(str) {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(String(str || "")));
+  return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
 function arrayBufferToBase64(buf) {
@@ -76,14 +132,54 @@ function stripSlashes(url) {
   return String(url || "").trim().replace(/\/+$/, "");
 }
 
-async function getSettings() {
-  const syncCfg = await chrome.storage.sync.get(DEFAULTS);
-  let glossary = "";
-  if (chrome.storage.local) {
-    const localCfg = await chrome.storage.local.get(LOCAL_DEFAULTS);
-    glossary = String(localCfg.glossary || "");
+// Versions up to 1.4.1 stored the API key in chrome.storage.sync. Move it to chrome.storage.local and
+// delete the synced copy. A key already saved on this device wins over the synced one. Runs before
+// every settings read, so a key synced in later by an older install is moved as well.
+async function migrateKeyToLocal() {
+  const synced = await chrome.storage.sync.get("key");
+  if (!Object.prototype.hasOwnProperty.call(synced, "key")) return false;
+  const local = await chrome.storage.local.get("key");
+  if (!Object.prototype.hasOwnProperty.call(local, "key")) {
+    await chrome.storage.local.set({ key: String(synced.key ?? "") });
   }
-  return { ...syncCfg, glossary };
+  await chrome.storage.sync.remove("key");
+  return true;
+}
+
+// Language of the messages and menu titles this worker produces: the uiLang setting, or the browser's
+// language while it is "auto". Every request reads the settings first, which refreshes it; only a check
+// made before that read (an empty selection, say) can still use the language the worker started with.
+let uiLang = I18N.resolveLang("auto");
+
+function tr(key, ...args) {
+  return I18N.translate(uiLang, key, ...args);
+}
+
+function menuTitles() {
+  const titles = {};
+  for (const [id, titleKey] of MENUS) titles[id] = tr(titleKey);
+  return titles;
+}
+
+// On install or update, writes the defaults of settings that are not stored yet. A setting already
+// stored is never written back: reading everything and writing it all back would overwrite a value
+// saved in between (by the options page, or by a test setting a local endpoint) with the old one.
+async function fillMissingSyncDefaults() {
+  const stored = await chrome.storage.sync.get(null);
+  const missing = {};
+  for (const [key, value] of Object.entries(DEFAULTS)) {
+    if (!Object.prototype.hasOwnProperty.call(stored || {}, key)) missing[key] = value;
+  }
+  if (Object.keys(missing).length > 0) await chrome.storage.sync.set(missing);
+  return missing;
+}
+
+async function getSettings() {
+  await migrateKeyToLocal();
+  const syncCfg = await chrome.storage.sync.get(DEFAULTS);
+  uiLang = I18N.resolveLang(syncCfg.uiLang);
+  const localCfg = await chrome.storage.local.get(LOCAL_DEFAULTS);
+  return { ...syncCfg, glossary: String(localCfg.glossary || ""), key: String(localCfg.key ?? "") };
 }
 
 function isIndexModelOrHost(model, baseUrl) {
@@ -879,9 +975,129 @@ function extractPartialStudyDeck(partialRaw, sourceText) {
   };
 }
 
+// ---- Direct connection to the official endpoint ---------------------------------------------
+// The official endpoint answers HTTP 412 to a request that carries an extension's Origin header, so
+// that header is removed, and the client name set, on the requests this extension sends there. The
+// rule names the extension's own ID as the initiator, which is only known at run time; a rule in
+// the manifest cannot do that and would also rewrite what web pages send to the same host.
+const DIRECT_RULE_ID = 1;
+
+function directHeaderRule(extensionId) {
+  return {
+    id: DIRECT_RULE_ID,
+    priority: 1,
+    action: {
+      type: "modifyHeaders",
+      requestHeaders: [
+        { header: "origin", operation: "remove" },
+        { header: "user-agent", operation: "set", value: "Index-Translate-Client/1.0" }
+      ]
+    },
+    condition: {
+      urlFilter: "||index-translate.bilibili.com/v1/",
+      initiatorDomains: [extensionId]
+    }
+  };
+}
+
+// What a rule does, independent of how the browser writes it back (key order, header case).
+function directRuleSignature(rule) {
+  const action = (rule && rule.action) || {};
+  const condition = (rule && rule.condition) || {};
+  const headers = (action.requestHeaders || []).map((h) =>
+    [String(h.header).toLowerCase(), h.operation, h.value || ""].join(":")
+  );
+  return JSON.stringify([rule && rule.priority, action.type, headers, condition.urlFilter, condition.initiatorDomains || []]);
+}
+
+// Dynamic rules are kept by the browser across restarts, so the rule is written only when it is
+// missing or differs from the one this version wants. Returns whether it was written.
+async function installDirectRule() {
+  const dnr = typeof chrome !== "undefined" && chrome.declarativeNetRequest;
+  if (!dnr || typeof dnr.updateDynamicRules !== "function") return false;
+  const wanted = directHeaderRule(chrome.runtime.id);
+  const current = (await dnr.getDynamicRules()).find((rule) => rule.id === DIRECT_RULE_ID);
+  if (current && directRuleSignature(current) === directRuleSignature(wanted)) return false;
+  await dnr.updateDynamicRules({ removeRuleIds: [DIRECT_RULE_ID], addRules: [wanted] });
+  return true;
+}
+
+// Requests wait for this, so the first one after an install or update is not sent without the rule.
+let directRuleReady = null;
+
+function ensureDirectRule() {
+  if (!directRuleReady) {
+    directRuleReady = installDirectRule().catch((err) => {
+      console.warn("[Bili Index Translate] direct-connection rule not installed:", err);
+      return false;
+    });
+  }
+  return directRuleReady;
+}
+
+// ---- Retry on 429 / temporary server errors ---------------------------------------------------
+
+// Retry-After: seconds (decimals allowed), or an HTTP date (always contains a weekday or month name).
+// Returns milliseconds, or null when absent or anything else.
+function parseRetryAfter(value) {
+  if (value === null || value === undefined) return null;
+  const text = String(value).trim();
+  if (/^\d+(\.\d+)?$/.test(text)) return Number(text) * 1000;
+  if (!/[A-Za-z]/.test(text)) return null;
+  const at = Date.parse(text);
+  if (Number.isNaN(at)) return null;
+  return Math.max(0, at - Date.now());
+}
+
+// Wait before retry number `retried` + 1; null means the server asks for more than maxDelayMs, so give up.
+function retryDelayMs(retryAfter, retried) {
+  const asked = parseRetryAfter(retryAfter);
+  if (asked !== null) return asked > RETRY_POLICY.maxDelayMs ? null : asked;
+  const jitter = 0.8 + Math.random() * 0.4;
+  return RETRY_POLICY.baseDelayMs * Math.pow(2, retried) * jitter;
+}
+
+// A wait that ends at once, by rejecting, when the signal fires; timer and listener are always cleaned up.
+function abortableDelay(ms, signal) {
+  return new Promise((resolve, reject) => {
+    if (signal && signal.aborted) {
+      reject(new Error("Cancelled"));
+      return;
+    }
+    let timer = null;
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(new Error("Cancelled"));
+    };
+    timer = setTimeout(() => {
+      if (signal) signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    if (signal) signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+// Runs attempt() until it returns a response that is not retryable. attempt() resolves to something with
+// `status`; retryAfter(r) gives its Retry-After header value; discard(r) frees the previous body. Thrown
+// errors (network, timeout, cancel) pass straight through. onWait() is called when a wait starts and when
+// the next attempt starts, so an idle timer cannot fire in between. Cancelling during the wait rejects.
+async function retryRequest(attempt, { retryAfter, discard, signal, onWait }) {
+  for (let retried = 0; ; retried++) {
+    const r = await attempt();
+    if (!RETRY_POLICY.statuses.includes(r.status) || retried >= RETRY_POLICY.maxRetries) return r;
+    const wait = retryDelayMs(retryAfter(r), retried);
+    if (wait === null) return r;
+    if (discard) await discard(r);
+    if (onWait) onWait();
+    await abortableDelay(wait, signal);
+    if (onWait) onWait();
+  }
+}
+
 // ---- API & Streaming --------------------------------------------------------------------
 
-async function postChat(prefix, key, body, externalSignal) {
+// One HTTP request with the shared timeout and caller-abort handling. bodyText is sent as is.
+async function sendRequest(url, method, headers, bodyText, externalSignal) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
   const onAbort = () => controller.abort();
@@ -890,20 +1106,19 @@ async function postChat(prefix, key, body, externalSignal) {
     else externalSignal.addEventListener("abort", onAbort, { once: true });
   }
   try {
-    const res = await fetch(stripSlashes(prefix) + "/chat/completions", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": "Bearer " + key
-      },
-      body: JSON.stringify(body),
+    await ensureDirectRule();
+    const res = await fetch(url, {
+      method: method,
+      headers: headers,
+      body: bodyText,
       signal: controller.signal
     });
     const raw = await res.text();
-    return { ok: res.ok, status: res.status, raw: raw };
+    const retryAfter = res.headers && res.headers.get ? res.headers.get("retry-after") : null;
+    return { ok: res.ok, status: res.status, raw: raw, retryAfter: retryAfter };
   } catch (err) {
     if (err && err.name === "AbortError") {
-      throw new Error(externalSignal && externalSignal.aborted ? "Cancelled" : "Request timed out after " + TIMEOUT_MS / 1000 + " s");
+      throw new Error(externalSignal && externalSignal.aborted ? "Cancelled" : tr("bg.timeout", TIMEOUT_MS / 1000));
     }
     throw err;
   } finally {
@@ -912,7 +1127,24 @@ async function postChat(prefix, key, body, externalSignal) {
   }
 }
 
+async function postJson(url, headers, body, externalSignal) {
+  return sendRequest(url, "POST", headers, JSON.stringify(body), externalSignal);
+}
+
+async function postChat(prefix, key, body, externalSignal) {
+  return postJson(
+    stripSlashes(prefix) + "/chat/completions",
+    {
+      "Content-Type": "application/json",
+      "Authorization": "Bearer " + key
+    },
+    body,
+    externalSignal
+  );
+}
+
 async function openChatStream(prefix, key, body, signal) {
+  await ensureDirectRule();
   return fetch(stripSlashes(prefix) + "/chat/completions", {
     method: "POST",
     headers: {
@@ -925,23 +1157,601 @@ async function openChatStream(prefix, key, body, signal) {
   });
 }
 
-async function fetchImageAsDataUrl(srcUrl) {
-  const url = String(srcUrl || "").trim();
-  if (!url) throw new Error("Empty image URL.");
-  if (url.startsWith("data:image/")) return url;
+// ---- DeepLX-compatible translate endpoints -------------------------------------------------
+// Contract: POST { text, source_lang, target_lang } -> { code: 200, data: "translation" }.
+// There is no prompt, so this format only translates plain text: the glossary is not applied and
+// Study Cards and image translation are refused instead of being sent to an endpoint that cannot do them.
 
-  const res = await fetch(url, { credentials: "omit" });
-  if (!res.ok) throw new Error("Failed to fetch image (HTTP " + res.status + ").");
-  const buf = await res.arrayBuffer();
-  if (buf.byteLength === 0) throw new Error("Image is empty.");
-  if (buf.byteLength > MAX_IMAGE_BYTES) throw new Error("Image exceeds 8 MB limit; use Alt+S region snip instead.");
-
-  const rawType = (res.headers.get("content-type") || "image/png").split(";")[0].trim().toLowerCase();
-  const mime = rawType.startsWith("image/") ? rawType : "image/png";
-  return "data:" + mime + ";base64," + arrayBufferToBase64(buf);
+function isDeeplx(s) {
+  return String((s && s.apiType) || "").trim().toLowerCase() === API_TYPE_DEEPLX;
 }
 
-async function callChatCompletion(messages, s, temperature = 0.0, activeModel = "", maxTokens = undefined) {
+// DeepL target codes and the names they are recognised by (English, Chinese, native), lower-cased.
+const DEEPLX_LANGUAGE_NAMES = [
+  ["AR", ["arabic", "阿拉伯语"]],
+  ["BG", ["bulgarian", "保加利亚语"]],
+  ["CS", ["czech", "捷克语", "čeština"]],
+  ["DA", ["danish", "丹麦语", "dansk"]],
+  ["DE", ["german", "德语", "德文", "deutsch"]],
+  ["EL", ["greek", "希腊语"]],
+  ["EN", ["english", "英语", "英文"]],
+  ["ES", ["spanish", "西班牙语", "español"]],
+  ["ET", ["estonian", "爱沙尼亚语"]],
+  ["FI", ["finnish", "芬兰语", "suomi"]],
+  ["FR", ["french", "法语", "法文", "français"]],
+  ["HE", ["hebrew", "希伯来语"]],
+  ["HU", ["hungarian", "匈牙利语", "magyar"]],
+  ["ID", ["indonesian", "印尼语", "印度尼西亚语", "bahasa indonesia"]],
+  ["IT", ["italian", "意大利语", "italiano"]],
+  ["JA", ["japanese", "日语", "日文", "日本語"]],
+  ["KO", ["korean", "韩语", "韩文", "한국어"]],
+  ["LT", ["lithuanian", "立陶宛语"]],
+  ["LV", ["latvian", "拉脱维亚语"]],
+  ["NB", ["norwegian", "挪威语", "norsk"]],
+  ["NL", ["dutch", "荷兰语", "nederlands"]],
+  ["PL", ["polish", "波兰语", "polski"]],
+  ["PT", ["portuguese", "葡萄牙语", "português"]],
+  ["RO", ["romanian", "罗马尼亚语", "română"]],
+  ["RU", ["russian", "俄语", "俄文", "русский"]],
+  ["SK", ["slovak", "斯洛伐克语"]],
+  ["SL", ["slovenian", "斯洛文尼亚语"]],
+  ["SV", ["swedish", "瑞典语", "svenska"]],
+  ["TH", ["thai", "泰语"]],
+  ["TR", ["turkish", "土耳其语", "türkçe"]],
+  ["UK", ["ukrainian", "乌克兰语", "українська"]],
+  ["VI", ["vietnamese", "越南语", "tiếng việt"]]
+];
+
+// Maps the free-text target language to a DeepL code. A value that already looks like a code
+// (PT-BR, it, en_us) is passed through upper-cased, so any language the server supports can be set.
+function deeplxTargetLang(target) {
+  const t = String(target || DEFAULTS.target).trim();
+  if (isSimplifiedChineseTarget(t)) return "ZH";
+  if (/traditional|繁體|繁体|^zh[-_]?(tw|hk|hant)/i.test(t)) return "ZH-HANT";
+  if (/^[a-z]{2,3}([-_][a-z0-9]{2,4})?$/i.test(t)) return t.replace("_", "-").toUpperCase();
+  const name = t.toLowerCase();
+  for (const [code, names] of DEEPLX_LANGUAGE_NAMES) {
+    if (names.some((n) => name.includes(n))) return code;
+  }
+  if (/chinese|中文|汉语/i.test(t)) return "ZH";
+  return t;
+}
+
+// The endpoint is used as entered. "{apiKey}" (or "{{apiKey}}") in it is replaced with the key, as in
+// https://host/translate?token={apiKey}; without a placeholder the key is sent as a Bearer token.
+function buildDeeplxRequest(endpoint, key, text, target) {
+  const k = String(key || "").trim();
+  const raw = stripSlashes(endpoint);
+  const url = raw.replace(/\{\{apiKey\}\}|\{apiKey\}/gi, () => encodeURIComponent(k));
+  const headers = { "Content-Type": "application/json" };
+  if (k && url === raw) headers["Authorization"] = "Bearer " + k;
+  return {
+    url: url,
+    headers: headers,
+    body: { text: String(text || ""), source_lang: "auto", target_lang: deeplxTargetLang(target) }
+  };
+}
+
+// DeepLX reports failures either as an HTTP error or as HTTP 200 with a non-200 "code".
+function parseDeeplxResponse(raw, httpStatus) {
+  let data;
+  try {
+    data = JSON.parse(raw);
+  } catch (_) {
+    return { ok: false, status: httpStatus, body: tr("bg.notJson", String(raw).slice(0, MAX_ERROR_BODY)) };
+  }
+  const code = data && typeof data.code === "number" ? data.code : 200;
+  if (code !== 200) {
+    return { ok: false, status: code, body: String((data && data.message) || raw).slice(0, MAX_ERROR_BODY) };
+  }
+  const text = data && typeof data.data === "string" ? data.data.trim() : "";
+  if (!text) {
+    return { ok: false, status: httpStatus, body: tr("bg.deeplxNoData", String(raw).slice(0, MAX_ERROR_BODY)) };
+  }
+  return { ok: true, text: text };
+}
+
+// ---- Text-only engines: DeepLX and custom JSON APIs -----------------------------------------
+// Both translate plain text with one request and one final result. Neither has a prompt, so the
+// glossary is not applied and Study Cards and image translation are refused. They share the cache,
+// the Alt+A batch handling and the error shape; an engine only says how to send text and read the reply.
+
+// studyCard: false tells the page not to advertise the Study Card next to this translation.
+function engineEntry(engine, text, via) {
+  return { text: text, model: engine.label, via: via, glossaryHits: 0, studyCard: false };
+}
+
+function engineCacheKey(engine, s, text) {
+  return engine.cachePrefix + "|" + s.target + "|" + stripSlashes(s.base) + "||" + text;
+}
+
+// One request, one final text: DeepLX does not stream. As with the chat paths, a relay replaces the
+// Base URL only when it is configured, and nothing is retried on another route.
+async function deeplxRequest(s, text, externalSignal) {
+  const relay = stripSlashes(s.proxy);
+  const via = relay ? "relay" : "direct";
+  const req = buildDeeplxRequest(relay || s.base, s.key, text, s.target);
+
+  let r;
+  try {
+    r = await retryRequest(() => postJson(req.url, req.headers, req.body, externalSignal), {
+      retryAfter: (x) => x.retryAfter,
+      signal: externalSignal
+    });
+  } catch (err) {
+    if (externalSignal && externalSignal.aborted) {
+      return { ok: false, cancelled: true, status: 0, body: "Cancelled" };
+    }
+    return { ok: false, status: 0, body: String((err && err.message) || err) };
+  }
+  if (!r.ok) {
+    return { ok: false, status: r.status, body: r.raw.slice(0, MAX_ERROR_BODY), via: via };
+  }
+  return { ...parseDeeplxResponse(r.raw, r.status), via: via };
+}
+
+// lineBatch: a DeepLX service translates line by line, so paragraphs can share one request.
+function deeplxEngine(s) {
+  return {
+    label: DEEPLX_LABEL,
+    cachePrefix: DEEPLX_LABEL,
+    lineBatch: true,
+    request: (text, signal) => deeplxRequest(s, text, signal)
+  };
+}
+
+// ---- Custom JSON API template ----------------------------------------------------------------
+// The request is described in the options instead of in code: URL, method, headers and body are
+// templates, and a path says where the translation is in the JSON reply. Placeholders:
+//   {text}        the text to translate
+//   {texts}       every text of the request as a JSON array (body only); one request per Alt+A batch
+//   {apiKey}      the API Key field
+//   {target}      the Target language field exactly as entered
+//   {targetLang}  the target as a DeepL-style code (ZH, EN, PT-BR); {targetLangLower} in lower case
+// Values are escaped for where they land: URL-encoded in the URL and in form bodies, JSON-escaped in
+// JSON bodies (write "{text}" inside the quotes of a string), stripped of line breaks in headers.
+
+const CUSTOM_PLACEHOLDER =
+  /\{\{(texts|text|apiKey|targetLangLower|targetLang|target)\}\}|\{(texts|text|apiKey|targetLangLower|targetLang|target)\}/gi;
+
+function fillCustomTemplate(template, values, encode) {
+  return String(template).replace(CUSTOM_PLACEHOLDER, (_, a, b) => encode(values[(a || b).toLowerCase()]));
+}
+
+function encodeRaw(v) {
+  return Array.isArray(v) ? JSON.stringify(v) : String(v);
+}
+
+function encodeForUrl(v) {
+  return encodeURIComponent(encodeRaw(v));
+}
+
+function encodeForHeader(v) {
+  return encodeRaw(v).replace(/[\r\n]+/g, " ");
+}
+
+// Inside a JSON string: the escaped characters without the surrounding quotes. {texts} is a whole array literal.
+function encodeForJson(v) {
+  return Array.isArray(v) ? JSON.stringify(v) : JSON.stringify(String(v)).slice(1, -1);
+}
+
+// Paths like data.translations[0].text. A key is a string token, [n] a number, and [*] (null) collects
+// every element of an array. Returns null when the path is empty or malformed.
+function parseJsonPath(path) {
+  const src = String(path || "").trim().replace(/^\$\.?/, "");
+  if (!/^(?:[^.\[\]\s]+|\[(?:\d+|\*)\])(?:\.[^.\[\]\s]+|\[(?:\d+|\*)\])*$/.test(src)) return null;
+  const tokens = [];
+  const re = /\[(\d+|\*)\]|[^.\[\]]+/g;
+  let m;
+  while ((m = re.exec(src)) !== null) {
+    tokens.push(m[1] === undefined ? m[0] : m[1] === "*" ? null : Number(m[1]));
+  }
+  return tokens;
+}
+
+// Every value the path reaches: at most one without [*], any number with it.
+function readJsonPath(data, tokens) {
+  let nodes = [data];
+  for (const t of tokens) {
+    const next = [];
+    for (const n of nodes) {
+      if (t === null) {
+        if (Array.isArray(n)) next.push(...n);
+      } else if (typeof t === "number") {
+        if (Array.isArray(n) && t < n.length) next.push(n[t]);
+      } else if (n && typeof n === "object" && !Array.isArray(n) && Object.prototype.hasOwnProperty.call(n, t)) {
+        next.push(n[t]);
+      }
+    }
+    nodes = next;
+  }
+  return nodes;
+}
+
+function customConfigError(message) {
+  return { ok: false, error: message };
+}
+
+function parseCustomTemplate(s) {
+  const method = String(s.customMethod || "").trim().toUpperCase() === "GET" ? "GET" : "POST";
+  const bodyTemplate = method === "GET" ? "" : String(s.customBody || "").trim();
+
+  const headers = [];
+  let contentType = "";
+  for (const rawLine of String(s.customHeaders || "").split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith("#")) continue;
+    const m = /^([A-Za-z0-9_-]+)\s*:\s*(.*)$/.exec(line);
+    if (!m) return customConfigError(tr("bg.custom.headerLine", line.slice(0, 80)));
+    headers.push([m[1], m[2]]);
+    if (m[1].toLowerCase() === "content-type") contentType = m[2];
+  }
+  if (bodyTemplate && !contentType) {
+    contentType = "application/json";
+    headers.push(["Content-Type", contentType]);
+  }
+
+  const resultPathText = String(s.customResultPath || "").trim();
+  const resultPath = parseJsonPath(resultPathText);
+  if (!resultPath) {
+    return customConfigError(
+      resultPathText ? tr("bg.custom.resultPathInvalid", resultPathText) : tr("bg.custom.resultPathEmpty")
+    );
+  }
+  const errorPathText = String(s.customErrorPath || "").trim();
+  const errorPath = errorPathText ? parseJsonPath(errorPathText) : null;
+  if (errorPathText && !errorPath) return customConfigError(tr("bg.custom.errorPathInvalid", errorPathText));
+
+  const endpoint = stripSlashes(s.proxy) || stripSlashes(s.base);
+  const batch = /\{\{?texts\}?\}/i.test(bodyTemplate);
+  if (!batch && !/\{\{?text\}?\}/i.test(endpoint + "\n" + bodyTemplate)) {
+    return customConfigError(tr("bg.custom.noText"));
+  }
+
+  return {
+    ok: true,
+    method: method,
+    headers: headers,
+    bodyTemplate: bodyTemplate,
+    form: /x-www-form-urlencoded/i.test(contentType),
+    json: /json/i.test(contentType),
+    resultPath: resultPath,
+    resultPathText: resultPathText,
+    errorPath: errorPath,
+    batch: batch
+  };
+}
+
+function buildCustomRequest(tpl, endpoint, key, texts, target) {
+  const t = String(target || DEFAULTS.target).trim();
+  const lang = deeplxTargetLang(t);
+  const values = {
+    text: texts[0],
+    texts: texts,
+    apikey: String(key || "").trim(),
+    target: t,
+    targetlang: lang,
+    targetlanglower: lang.toLowerCase()
+  };
+
+  const headers = {};
+  for (const [name, value] of tpl.headers) headers[name] = fillCustomTemplate(value, values, encodeForHeader);
+  const request = { url: fillCustomTemplate(stripSlashes(endpoint), values, encodeForUrl), headers: headers, body: undefined };
+
+  if (tpl.bodyTemplate) {
+    const encode = tpl.form ? encodeForUrl : tpl.json ? encodeForJson : encodeRaw;
+    request.body = fillCustomTemplate(tpl.bodyTemplate, values, encode);
+    if (tpl.json) {
+      try {
+        JSON.parse(request.body);
+      } catch (_) {
+        return { error: tr("bg.custom.bodyNotJson") };
+      }
+    }
+  }
+  return request;
+}
+
+// Reads the translations at the result path. A batch template ({texts}) must return one translation per
+// text; otherwise everything the path reaches is one translation (some services split it into pieces).
+function parseCustomResponse(raw, httpStatus, httpOk, tpl, expected) {
+  let data;
+  let isJson = true;
+  try {
+    data = JSON.parse(raw);
+  } catch (_) {
+    isJson = false;
+  }
+
+  let errorText = "";
+  if (isJson && tpl.errorPath) {
+    const found = readJsonPath(data, tpl.errorPath).find((v) => typeof v === "string" && v.trim());
+    if (found) errorText = found.trim();
+  }
+  const snippet = String(raw).slice(0, MAX_ERROR_BODY);
+
+  if (!httpOk) return { ok: false, status: httpStatus, body: errorText ? errorText.slice(0, MAX_ERROR_BODY) : snippet };
+  if (!isJson) return { ok: false, status: httpStatus, body: tr("bg.notJson", snippet) };
+
+  const texts = [];
+  let valid = true;
+  for (const v of readJsonPath(data, tpl.resultPath)) {
+    if (typeof v === "string") texts.push(v);
+    else if (Array.isArray(v) && v.every((x) => typeof x === "string")) texts.push(...v);
+    else valid = false;
+  }
+  const missing = {
+    ok: false,
+    status: httpStatus,
+    body: errorText || tr("bg.customNoResult", tpl.resultPathText, snippet)
+  };
+  if (!valid || texts.length === 0) return missing;
+
+  if (tpl.batch) {
+    const out = texts.map((x) => x.trim());
+    if (out.length !== expected || !out.every(Boolean)) {
+      return {
+        ok: false,
+        status: httpStatus,
+        mismatch: true,
+        body: tr("bg.customCount", expected, tpl.resultPathText, out.filter(Boolean).length)
+      };
+    }
+    return { ok: true, texts: out };
+  }
+
+  const text = texts.join("").trim();
+  return text ? { ok: true, texts: [text] } : missing;
+}
+
+// Same rules as the other paths: a relay replaces the URL only when it is configured, one request,
+// no retry on another route. A template that cannot work is reported without sending anything.
+async function customRequest(s, tpl, texts, externalSignal) {
+  if (!tpl.ok) return { ok: false, status: 0, body: tpl.error };
+  const relay = stripSlashes(s.proxy);
+  const via = relay ? "relay" : "direct";
+  const req = buildCustomRequest(tpl, relay || s.base, s.key, texts, s.target);
+  if (req.error) return { ok: false, status: 0, body: req.error };
+
+  let r;
+  try {
+    r = await retryRequest(() => sendRequest(req.url, tpl.method, req.headers, req.body, externalSignal), {
+      retryAfter: (x) => x.retryAfter,
+      signal: externalSignal
+    });
+  } catch (err) {
+    if (externalSignal && externalSignal.aborted) {
+      return { ok: false, cancelled: true, status: 0, body: "Cancelled" };
+    }
+    return { ok: false, status: 0, body: String((err && err.message) || err) };
+  }
+  return { ...parseCustomResponse(r.raw, r.status, r.ok, tpl, texts.length), via: via };
+}
+
+function customEngine(s) {
+  const label = String(s.customName || "").trim() || CUSTOM_LABEL;
+  const tpl = parseCustomTemplate(s);
+  const send = (texts, signal) => customRequest(s, tpl, texts, signal);
+  const engine = {
+    label: label,
+    cachePrefix: "custom:" + label,
+    lineBatch: false,
+    request: async (text, signal) => {
+      const r = await send([text], signal);
+      if (r.ok) return { ok: true, text: r.texts[0], via: r.via };
+      const { mismatch, ...error } = r;
+      return error;
+    }
+  };
+  if (tpl.ok && tpl.batch) engine.requestMany = send;
+  return engine;
+}
+
+// Used by the options page before saving, so a template that cannot work is reported there.
+function checkApiConfig(s) {
+  if (String((s && s.apiType) || "").trim().toLowerCase() !== API_TYPE_CUSTOM) return { ok: true };
+  const tpl = parseCustomTemplate(s);
+  if (!tpl.ok) return { ok: false, error: tpl.error };
+  const req = buildCustomRequest(tpl, stripSlashes(s.proxy) || s.base, s.key, ["sample"], s.target);
+  return req.error ? { ok: false, error: req.error } : { ok: true };
+}
+
+// null for the OpenAI-compatible format, which goes through the chat paths.
+function textEngine(s) {
+  if (isDeeplx(s)) return deeplxEngine(s);
+  if (String((s && s.apiType) || "").trim().toLowerCase() === API_TYPE_CUSTOM) return customEngine(s);
+  return null;
+}
+
+async function engineTranslate(engine, s, text, externalSignal) {
+  const cacheKey = engineCacheKey(engine, s, text);
+  const hit = lruGet(volatileTranslateCache, cacheKey);
+  if (hit) return { ok: true, ...hit, cached: true };
+
+  const r = await engine.request(text, externalSignal);
+  if (!r.ok) return r;
+  const out = engineEntry(engine, r.text, r.via);
+  lruSet(volatileTranslateCache, cacheKey, out);
+  return { ok: true, ...out };
+}
+
+// Endpoints whose reply to a merged request did not give one translation per paragraph; Alt+A no
+// longer merges paragraphs for them.
+const noMergedBatch = new Set();
+
+// Alt+A batch. Where the engine allows it, the uncached paragraphs go out as one request: a batch
+// template ({texts}) sends them as an array, and a line-based service (DeepLX) gets one single-line
+// paragraph per line and the reply is split back by line. When the reply does not have exactly one
+// translation per paragraph, the endpoint is remembered and its paragraphs are sent one by one, as
+// are paragraphs an engine cannot merge. A failed paragraph is left out of the result; the batch
+// itself fails only when it produced no translation at all.
+async function engineImmersiveBatch(engine, s, items, onProgress, externalSignal) {
+  const segments = {};
+  let pending = [];
+  let translated = 0;
+
+  for (let i = 0; i < items.length; i++) {
+    const txt = items[i];
+    if (!txt) {
+      segments[i] = "";
+      continue;
+    }
+    const hit = lruGet(volatileTranslateCache, engineCacheKey(engine, s, txt));
+    if (hit) {
+      segments[i] = hit.text;
+      translated++;
+    } else {
+      pending.push(i);
+    }
+  }
+
+  if (pending.length === 0) {
+    return { ok: true, segments: segments, model: engine.label, via: "direct", cached: true };
+  }
+
+  const report = (via) => {
+    if (typeof onProgress === "function") {
+      onProgress({ segments: { ...segments }, model: engine.label, via: via });
+    }
+  };
+  if (translated > 0) report("cache");
+
+  const commit = (i, text, via) => {
+    segments[i] = text;
+    translated++;
+    lruSet(volatileTranslateCache, engineCacheKey(engine, s, items[i]), engineEntry(engine, text, via));
+  };
+
+  let firstError = null;
+  const endpoint = engine.cachePrefix + "|" + (stripSlashes(s.proxy) || stripSlashes(s.base));
+  if (pending.length > 1 && !noMergedBatch.has(endpoint)) {
+    let merged = null;
+    if (engine.requestMany) {
+      merged = await engine.requestMany(pending.map((i) => items[i]), externalSignal);
+    } else if (engine.lineBatch && pending.every((i) => !/[\r\n]/.test(items[i]))) {
+      const r = await engine.request(pending.map((i) => items[i]).join("\n"), externalSignal);
+      if (r.ok) {
+        const lines = r.text.split(/\r?\n/).map((line) => line.trim());
+        merged =
+          lines.length === pending.length && lines.every(Boolean)
+            ? { ok: true, texts: lines, via: r.via }
+            : { ok: false, mismatch: true };
+      } else {
+        merged = r;
+      }
+    }
+
+    if (merged) {
+      if (merged.cancelled) return merged;
+      if (merged.ok) {
+        pending.forEach((i, k) => commit(i, merged.texts[k], merged.via));
+        report(merged.via);
+        pending = [];
+      } else if (merged.mismatch) {
+        noMergedBatch.add(endpoint);
+      } else {
+        // Sending the same paragraphs one by one would fail the same way; do not multiply the failure.
+        firstError = merged;
+        pending = [];
+      }
+    }
+  }
+
+  for (const i of pending) {
+    const r = await engine.request(items[i], externalSignal);
+    if (r.cancelled) return r;
+    if (!r.ok) {
+      if (!firstError) firstError = r;
+      // Retries are already used up: the service is limiting or down, so stop sending. A 500 may come
+      // from this paragraph alone, so it does not stop the others.
+      if (r.status !== 500 && RETRY_POLICY.statuses.includes(r.status)) break;
+      continue;
+    }
+    commit(i, r.text, r.via);
+    report(r.via);
+  }
+
+  if (translated === 0) return firstError;
+  return {
+    ok: true,
+    segments: segments,
+    model: engine.label,
+    via: stripSlashes(s.proxy) ? "relay" : "direct",
+    glossaryHits: 0
+  };
+}
+
+// featureKey names the feature (bg.feature.image or bg.feature.study) that the text-only format cannot do.
+function textOnlyUnsupported(featureKey, engine) {
+  return {
+    ok: false,
+    status: 0,
+    body: tr("bg.unsupported", tr(featureKey), tr(engine.label === DEEPLX_LABEL ? "bg.format.deeplx" : "bg.format.custom"))
+  };
+}
+
+// Reads a response body but stops as soon as it grows past maxBytes, so an oversized download is
+// dropped instead of being buffered in full. Returns null when the limit is exceeded.
+async function readBodyCapped(res, maxBytes) {
+  if (!res.body) return new Uint8Array(await res.arrayBuffer());
+  const reader = res.body.getReader();
+  const chunks = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > maxBytes) {
+      await reader.cancel().catch(() => {});
+      return null;
+    }
+    chunks.push(value);
+  }
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return bytes;
+}
+
+async function fetchImageAsDataUrl(srcUrl, timeoutMs = TIMEOUT_MS) {
+  const url = String(srcUrl || "").trim();
+  if (!url) throw new Error(tr("bg.image.emptyUrl"));
+  if (url.startsWith("data:image/")) return url;
+
+  const tooLarge = tr("bg.image.tooLarge");
+  const controller = new AbortController();
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeoutMs);
+  try {
+    const res = await fetch(url, { credentials: "omit", signal: controller.signal });
+    if (!res.ok) throw new Error(tr("bg.image.http", res.status));
+    // Content-Length can be missing or wrong, so it only allows an early refusal; the capped read is the limit.
+    if (Number(res.headers.get("content-length")) > MAX_IMAGE_BYTES) throw new Error(tooLarge);
+    const bytes = await readBodyCapped(res, MAX_IMAGE_BYTES);
+    if (!bytes) throw new Error(tooLarge);
+    if (bytes.byteLength === 0) throw new Error(tr("bg.image.empty"));
+
+    const rawType = (res.headers.get("content-type") || "image/png").split(";")[0].trim().toLowerCase();
+    const mime = rawType.startsWith("image/") ? rawType : "image/png";
+    return "data:" + mime + ";base64," + arrayBufferToBase64(bytes);
+  } catch (err) {
+    if (timedOut) throw new Error(tr("bg.image.timeout", timeoutMs / 1000));
+    throw err;
+  } finally {
+    clearTimeout(timer);
+    controller.abort(); // ends a download that was refused before its body was read
+  }
+}
+
+// options.signal cancels the request; options.retry retries rate limits and temporary server errors
+// (RETRY_POLICY), as the streaming paths do. The result carries finishReason ("" when the reply has none).
+async function callChatCompletion(messages, s, temperature = 0.0, activeModel = "", maxTokens = undefined, options = undefined) {
   const model = String(activeModel || s.model || DEFAULTS.model).trim();
   const base = stripSlashes(s.base);
   const relay = stripSlashes(s.proxy);
@@ -959,7 +1769,12 @@ async function callChatCompletion(messages, s, temperature = 0.0, activeModel = 
   if (maxTokens) body.max_tokens = maxTokens;
 
   const via = relay ? "relay" : "direct";
-  const r = await postChat(relay || base, s.key, body);
+  const signal = options && options.signal;
+  const send = () => postChat(relay || base, s.key, body, signal);
+  const r =
+    options && options.retry
+      ? await retryRequest(send, { retryAfter: (x) => x.retryAfter, signal: signal })
+      : await send();
 
   if (!r.ok) {
     return { ok: false, status: r.status, body: r.raw.slice(0, MAX_ERROR_BODY), via: via };
@@ -972,7 +1787,7 @@ async function callChatCompletion(messages, s, temperature = 0.0, activeModel = 
     return {
       ok: false,
       status: r.status,
-      body: "Response is not JSON: " + r.raw.slice(0, MAX_ERROR_BODY),
+      body: tr("bg.notJson", r.raw.slice(0, MAX_ERROR_BODY)),
       via: via
     };
   }
@@ -983,12 +1798,13 @@ async function callChatCompletion(messages, s, temperature = 0.0, activeModel = 
     return {
       ok: false,
       status: r.status,
-      body: "No choices[0].message.content in: " + r.raw.slice(0, MAX_ERROR_BODY),
+      body: tr("bg.noContent", r.raw.slice(0, MAX_ERROR_BODY)),
       via: via
     };
   }
 
-  return { ok: true, content: stripThink(content), model: model, via: via };
+  const finishReason = choice && typeof choice.finish_reason === "string" ? choice.finish_reason : "";
+  return { ok: true, content: stripThink(content), model: model, via: via, finishReason: finishReason };
 }
 
 async function readCompletionContent(res) {
@@ -996,9 +1812,17 @@ async function readCompletionContent(res) {
   return (j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content) || "";
 }
 
+// An error object some OpenAI-compatible servers send inside the stream instead of an HTTP status.
+function streamErrorText(error) {
+  if (typeof error === "string") return error;
+  const message = error && typeof error.message === "string" ? error.message : "";
+  return (message || JSON.stringify(error) || "").slice(0, MAX_ERROR_BODY);
+}
+
 // Returns the raw completion text. For SSE responses onText receives the accumulated text after each
-// delta; returning false from onText cancels the rest of the stream.
-async function readChatContent(res, onText) {
+// delta; returning false from onText cancels the rest of the stream. onActivity is called for every
+// chunk that arrives, so that the caller can tell a slow stream from a stalled one.
+async function readChatContent(res, onText, onActivity) {
   const ctype = String(res.headers.get("content-type") || "").toLowerCase();
   if (!ctype.includes("event-stream") || !res.body) return readCompletionContent(res);
 
@@ -1007,60 +1831,101 @@ async function readChatContent(res, onText) {
   let sseBuf = "";
   let full = "";
 
-  while (true) {
-    const { value, done } = await reader.read();
-    if (done) return full;
-    sseBuf += decoder.decode(value, { stream: true });
-    const lines = sseBuf.split(/\r?\n/);
-    sseBuf = lines.pop() || "";
+  // false: stop reading (the terminator arrived, or onText asked to stop).
+  const consume = (line) => {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith("data:")) return true;
+    const payload = trimmed.slice(5).trim();
+    if (!payload) return true;
+    // Anything after the terminator is not part of this completion.
+    if (payload === "[DONE]") return false;
+    let chunkObj;
+    try {
+      chunkObj = JSON.parse(payload);
+    } catch (_) {
+      return true;
+    }
+    if (chunkObj && chunkObj.error) throw new Error(streamErrorText(chunkObj.error));
+    const choice = chunkObj && Array.isArray(chunkObj.choices) ? chunkObj.choices[0] : null;
+    const delta = choice && choice.delta && typeof choice.delta.content === "string" ? choice.delta.content : "";
+    if (!delta) return true;
+    full += delta;
+    return typeof onText !== "function" || onText(full) !== false;
+  };
 
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (!trimmed.startsWith("data:")) continue;
-      const payload = trimmed.slice(5).trim();
-      if (!payload || payload === "[DONE]") continue;
-      let keepReading = true;
-      try {
-        const chunkObj = JSON.parse(payload);
-        const delta = (chunkObj.choices && chunkObj.choices[0] && chunkObj.choices[0].delta && chunkObj.choices[0].delta.content) || "";
-        if (delta) {
-          full += delta;
-          if (typeof onText === "function") keepReading = onText(full) !== false;
-        }
-      } catch (_) {}
-      if (!keepReading) {
-        try { await reader.cancel(); } catch (_) {}
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (typeof onActivity === "function") onActivity();
+      if (done) {
+        // A last line that was not ended by a line break is still part of the completion.
+        sseBuf += decoder.decode();
+        if (sseBuf) consume(sseBuf);
         return full;
       }
+      sseBuf += decoder.decode(value, { stream: true });
+      const lines = sseBuf.split(/\r?\n/);
+      sseBuf = lines.pop() || "";
+
+      for (const line of lines) {
+        if (!consume(line)) {
+          try { await reader.cancel(); } catch (_) {}
+          return full;
+        }
+      }
     }
+  } catch (err) {
+    try { await reader.cancel(); } catch (_) {}
+    throw err;
   }
 }
 
 // Shared lifecycle of the streaming paths: timeout, caller abort, route choice and HTTP errors.
+// The timeout is an idle limit: it restarts whenever the stream delivers something (handleResponse
+// passes `touch` to readChatContent), so a long reply that keeps flowing is not cut off.
 async function runChatStream(s, base, body, externalSignal, handleResponse) {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+  let timedOut = false;
+  let timer = null;
+  const touch = () => {
+    clearTimeout(timer);
+    timer = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, TIMEOUT_MS);
+  };
   const onAbort = () => controller.abort();
   if (externalSignal) {
     if (externalSignal.aborted) controller.abort();
     else externalSignal.addEventListener("abort", onAbort, { once: true });
   }
+  touch();
 
   try {
     const relay = stripSlashes(s.proxy);
     const via = relay ? "relay" : "direct";
-    const res = await openChatStream(relay || base, s.key, body, controller.signal);
+    const res = await retryRequest(() => openChatStream(relay || base, s.key, body, controller.signal), {
+      retryAfter: (x) => (x.headers && x.headers.get ? x.headers.get("retry-after") : null),
+      discard: async (x) => {
+        try {
+          await x.body.cancel();
+        } catch (_) {}
+      },
+      signal: controller.signal,
+      onWait: touch
+    });
 
     if (!res.ok) {
       const errRaw = await res.text();
       return { ok: false, status: res.status, body: errRaw.slice(0, MAX_ERROR_BODY), via: via };
     }
 
-    return await handleResponse(res, via);
+    return await handleResponse(res, via, touch);
   } catch (err) {
     if (externalSignal && externalSignal.aborted) {
       return { ok: false, cancelled: true, status: 0, body: "Cancelled" };
     }
+    if (timedOut) return { ok: false, status: 0, body: tr("bg.timeout", TIMEOUT_MS / 1000) };
     return { ok: false, status: 0, body: String((err && err.message) || err) };
   } finally {
     clearTimeout(timer);
@@ -1070,10 +1935,12 @@ async function runChatStream(s, base, body, externalSignal, handleResponse) {
 
 async function streamTranslation(text, onDelta, externalSignal) {
   text = String(text || "").trim();
-  if (!text) return { ok: false, status: 0, body: "Nothing to translate." };
-  if (text.length > MAX_LEN) return { ok: false, status: 0, body: "Selection is longer than " + MAX_LEN + " characters." };
+  if (!text) return { ok: false, status: 0, body: tr("bg.nothingToTranslate") };
+  if (text.length > MAX_LEN) return { ok: false, status: 0, body: tr("bg.tooLong", MAX_LEN) };
 
   const s = await getSettings();
+  const textOnly = textEngine(s);
+  if (textOnly) return engineTranslate(textOnly, s, text, externalSignal);
   const activeModel = String(s.model || DEFAULTS.model).trim();
   const base = stripSlashes(s.base);
   const hits = matchGlossaryHits(s.glossary, text);
@@ -1096,16 +1963,16 @@ async function streamTranslation(text, onDelta, externalSignal) {
     base
   );
 
-  return runChatStream(s, base, body, externalSignal, async (res, via) => {
+  return runChatStream(s, base, body, externalSignal, async (res, via, touch) => {
     const raw = await readChatContent(res, (full) => {
       const visible = stripThink(full);
       if (visible && typeof onDelta === "function") {
         onDelta({ text: visible, model: activeModel, via: via, glossaryHits: hits.length });
       }
-    });
+    }, touch);
 
     const clean = stripThink(raw);
-    if (!clean) return { ok: false, status: 200, body: "Empty translation.", via: via };
+    if (!clean) return { ok: false, status: 200, body: tr("bg.emptyTranslation"), via: via };
     const out = { text: clean, model: activeModel, via: via, glossaryHits: hits.length };
     lruSet(volatileTranslateCache, cacheKey, out);
     return { ok: true, ...out };
@@ -1115,13 +1982,15 @@ async function streamTranslation(text, onDelta, externalSignal) {
 async function streamVisionTranslation(imageDataUrl, modelOverride, onDelta, externalSignal) {
   const dataUrl = String(imageDataUrl || "").trim();
   if (!dataUrl.startsWith("data:image/")) {
-    return { ok: false, status: 0, body: "Invalid image payload." };
+    return { ok: false, status: 0, body: tr("bg.invalidImage") };
   }
 
   const s = await getSettings();
+  const textOnly = textEngine(s);
+  if (textOnly) return textOnlyUnsupported("bg.feature.image", textOnly);
   const activeModel = resolveVisionModel(s.visionModel, modelOverride);
   const base = stripSlashes(s.base);
-  const cacheKey = activeModel + "|" + s.target + "|" + base + "|" + fastStringHash(s.glossary) + "|" + fastStringHash(dataUrl);
+  const cacheKey = activeModel + "|" + s.target + "|" + base + "|" + (await sha256Hex(s.glossary)) + "|" + (await sha256Hex(dataUrl));
   const hit = lruGet(volatileVisionCache, cacheKey);
   if (hit) {
     return { ok: true, ...hit, cached: true };
@@ -1139,7 +2008,7 @@ async function streamVisionTranslation(imageDataUrl, modelOverride, onDelta, ext
     base
   );
 
-  return runChatStream(s, base, body, externalSignal, async (res, via) => {
+  return runChatStream(s, base, body, externalSignal, async (res, via, touch) => {
     let lastShown = "";
     const raw = await readChatContent(res, (full) => {
       const parsed = parseVisionDualOutput(full);
@@ -1153,11 +2022,11 @@ async function streamVisionTranslation(imageDataUrl, modelOverride, onDelta, ext
           vision: true
         });
       }
-    });
+    }, touch);
 
     const finalParsed = parseVisionDualOutput(raw);
     if (!finalParsed.translation) {
-      return { ok: false, status: 200, body: "No readable text found in image.", via: via };
+      return { ok: false, status: 200, body: tr("bg.noTextInImage"), via: via };
     }
     const hits = finalParsed.sourceText ? matchGlossaryHits(s.glossary, finalParsed.sourceText).length : 0;
     const out = {
@@ -1175,9 +2044,11 @@ async function streamVisionTranslation(imageDataUrl, modelOverride, onDelta, ext
 
 async function streamImmersiveBatch(rawItems, modelOverride, onProgress, externalSignal) {
   const items = Array.isArray(rawItems) ? rawItems.map((x) => String(x || "").trim()) : [];
-  if (items.length === 0) return { ok: false, status: 0, body: "Empty batch." };
+  if (items.length === 0) return { ok: false, status: 0, body: tr("bg.emptyBatch") };
 
   const s = await getSettings();
+  const textOnly = textEngine(s);
+  if (textOnly) return engineImmersiveBatch(textOnly, s, items, onProgress, externalSignal);
   const activeModel = String(modelOverride || s.immersiveModel || DEFAULTS.immersiveModel || s.model).trim();
   const base = stripSlashes(s.base);
   const parsedEntries = parseGlossary(s.glossary);
@@ -1236,7 +2107,7 @@ async function streamImmersiveBatch(rawItems, modelOverride, onProgress, externa
       ? { 0: visible.replace(/^\u3016P0\u3017\s*/, "").trim() }
       : parseAnchoredSegments(visible, uncachedTexts.length);
 
-  return runChatStream(s, base, body, externalSignal, async (res, via) => {
+  return runChatStream(s, base, body, externalSignal, async (res, via, touch) => {
     const applyParsedMap = (parsedSubMap, commitCache) => {
       let changed = false;
       for (let subIdx = 0; subIdx < uncachedIndices.length; subIdx++) {
@@ -1274,19 +2145,397 @@ async function streamImmersiveBatch(rawItems, modelOverride, onProgress, externa
           glossaryHits: batchHits.length
         });
       }
-    });
+    }, touch);
 
     applyParsedMap(parseBatch(stripThink(raw)), true);
     return { ok: true, segments: finalSegments, model: activeModel, via: via, glossaryHits: batchHits.length };
   });
 }
 
+// ---- Annotate-only mode ---------------------------------------------------------------------
+// Instead of translating a paragraph, the model glosses only the words the reader may not know.
+// Word picking, the prompt and reply parsing live in annotate.js; this part does settings, word
+// lists, requests, fallbacks, the cache and the stored "known" words.
+
+const emptyAnnotateKnown = () => ({ v: 1, zh: [], en: [], es: [] });
+
+// A key is a word, never a phrase or an address: Han characters only for zh; for en/es a lower-case
+// word of letters and combining marks with apostrophes inside (don't), as annotate.js produces them.
+function validAnnotateKey(lang, key) {
+  if (typeof key !== "string" || key.length === 0 || key.length > ANNOTATE_MAX_KEY) return false;
+  if (lang === "zh") return /^\p{Script=Han}+$/u.test(key);
+  if (lang === "en" || lang === "es") return /^\p{L}[\p{L}\p{M}']*$/u.test(key) && key === key.toLowerCase();
+  return false;
+}
+
+// Storage is user-writable and older builds may have stored other shapes: keep what is usable, drop the rest.
+function normalizeAnnotateKnown(raw) {
+  const out = emptyAnnotateKnown();
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return out;
+  for (const lang of ANNOTATE_LANGS) {
+    if (!Array.isArray(raw[lang])) continue;
+    const seen = new Set();
+    for (const key of raw[lang]) {
+      if (out[lang].length >= ANNOTATE_MAX_KNOWN) break;
+      if (!validAnnotateKey(lang, key) || seen.has(key)) continue;
+      seen.add(key);
+      out[lang].push(key);
+    }
+  }
+  return out;
+}
+
+function normalizeAnnotateLevels(raw) {
+  const def = ANNOTATE_DEFAULTS.annotateLevels;
+  const src = raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {};
+  const pick = (value, fallback, min, max) => {
+    const n = typeof value === "number" ? value : typeof value === "string" && value.trim() !== "" ? Number(value) : NaN;
+    return Number.isFinite(n) ? Math.min(max, Math.max(min, Math.round(n))) : fallback;
+  };
+  return {
+    zh: pick(src.zh, def.zh, 1, 7),
+    en: pick(src.en, def.en, 1, 50000),
+    es: pick(src.es, def.es, 1, 50000)
+  };
+}
+
+// withKnown false leaves the stored words unread (the switch is off, or only the switch is needed).
+async function getAnnotateConfig(withKnown = true) {
+  const defaults = { annotateEnabled: ANNOTATE_DEFAULTS.annotateEnabled, annotateLevels: ANNOTATE_DEFAULTS.annotateLevels };
+  if (withKnown) defaults.annotateKnown = ANNOTATE_DEFAULTS.annotateKnown;
+  const raw = await chrome.storage.local.get(defaults);
+  return {
+    annotateEnabled: raw.annotateEnabled === true,
+    annotateLevels: normalizeAnnotateLevels(raw.annotateLevels),
+    annotateKnown: withKnown ? normalizeAnnotateKnown(raw.annotateKnown) : null
+  };
+}
+
+function annotateAvailable(s, annotateCfg) {
+  if (!annotateCfg || annotateCfg.annotateEnabled !== true) return false;
+  if (textEngine(s)) return false;
+  return ANNOTATE.glossLangForTarget(s && s.target) !== null;
+}
+
+// The official address always uses 9B (2B follows the format too unreliably); any other address uses the model the user set.
+function annotateModelFor(s) {
+  let host = "";
+  try {
+    host = new URL(stripSlashes(s.base)).hostname.toLowerCase();
+  } catch (_) {}
+  return host === ANNOTATE_OFFICIAL_HOST ? ANNOTATE_OFFICIAL_MODEL : String(s.model || DEFAULTS.model).trim();
+}
+
+// Word lists load on first use, one language at a time, and stay in RAM as Maps.
+let annotateTables = {};
+let annotateTableLoads = {};
+
+// For tests: tables is { zh, en, es } of Maps (or list text), null clears them.
+function setAnnotateWordlists(tables) {
+  annotateTables = {};
+  annotateTableLoads = {};
+  if (!tables) return;
+  for (const lang of ANNOTATE_LANGS) {
+    if (tables[lang] === undefined) continue;
+    annotateTables[lang] = tables[lang] instanceof Map ? tables[lang] : ANNOTATE.parseWordlist(lang, tables[lang]);
+  }
+}
+
+function loadAnnotateTable(lang) {
+  if (annotateTables[lang]) return Promise.resolve(annotateTables[lang]);
+  if (!annotateTableLoads[lang]) {
+    annotateTableLoads[lang] = (async () => {
+      const res = await fetch(chrome.runtime.getURL(ANNOTATE_WORDLIST_FILES[lang]));
+      if (!res.ok) throw new Error("word list " + lang + ": HTTP " + res.status);
+      const map = ANNOTATE.parseWordlist(lang, await res.text());
+      if (map.size === 0) throw new Error("word list " + lang + " is empty");
+      annotateTables[lang] = map;
+      return map;
+    })().finally(() => {
+      delete annotateTableLoads[lang];
+    });
+  }
+  return annotateTableLoads[lang];
+}
+
+async function loadAnnotateTables(langs) {
+  const out = {};
+  await Promise.all(langs.map(async (lang) => (out[lang] = await loadAnnotateTable(lang))));
+  return out;
+}
+
+const annotateKnownSets = (known) => ({ zh: new Set(known.zh), en: new Set(known.en), es: new Set(known.es) });
+
+// items: [{ text, lang }] (lang is the page's lang attribute, may be empty). exclude: { zh, en, es } keys
+// already annotated on this page. Result: { ok, segments, notes, model }; a paragraph appears in one of
+// segments and notes. An HTTP error or a timeout fails the whole batch instead of falling back step by step.
+async function streamAnnotateBatch(rawItems, exclude, onProgress, signal) {
+  const items = Array.isArray(rawItems)
+    ? rawItems.map((x) => ({ text: String((x && x.text) || "").trim(), lang: String((x && x.lang) || "") }))
+    : [];
+  const texts = items.map((x) => x.text);
+  const s = await getSettings();
+  const cfg = await getAnnotateConfig(false).catch(() => null);
+  if (items.length === 0 || !annotateAvailable(s, cfg)) return streamImmersiveBatch(texts, "", onProgress, signal);
+
+  const cancelled = () => ({ ok: false, cancelled: true, status: 0, body: "Cancelled" });
+  const isCancelled = () => !!(signal && signal.aborted);
+  const glossLang = ANNOTATE.glossLangForTarget(s.target);
+  const model = annotateModelFor(s);
+  const base = stripSlashes(s.base);
+  const cacheKey = (text) => model + "|" + s.target + "|" + base + "|" + glossLang + "|" + text;
+
+  const langs = items.map((x) => ANNOTATE.detectLang(x.text, x.lang));
+  const fallback = new Set(); // paragraphs that get a whole-paragraph translation
+  langs.forEach((lang, i) => {
+    if (!ANNOTATE_LANGS.includes(lang)) fallback.add(i);
+  });
+
+  let tables = null;
+  let known = null;
+  const wanted = ANNOTATE_LANGS.filter((lang) => langs.includes(lang));
+  if (wanted.length > 0) {
+    try {
+      tables = await loadAnnotateTables(wanted);
+      known = annotateKnownSets((await getAnnotateConfig(true)).annotateKnown);
+    } catch (_) {
+      tables = null; // no word list or no stored words: this batch is translated instead
+    }
+    if (!tables) langs.forEach((_, i) => fallback.add(i));
+  }
+
+  try {
+    // Pick words. Keys picked for earlier paragraphs are excluded from later ones (one gloss per word per page).
+    const skip = { zh: new Set(), en: new Set(), es: new Set() };
+    if (exclude && typeof exclude === "object") {
+      for (const lang of ANNOTATE_LANGS) if (Array.isArray(exclude[lang])) for (const k of exclude[lang]) skip[lang].add(String(k));
+    }
+    const picks = {};
+    const levels = cfg.annotateLevels;
+    for (let i = 0; i < items.length; i++) {
+      if (fallback.has(i)) continue;
+      const lang = langs[i];
+      const picked = ANNOTATE.pickCandidates({
+        text: items[i].text,
+        lang,
+        tables,
+        level: levels[lang],
+        known: known[lang],
+        exclude: skip[lang]
+      });
+      for (const c of picked) skip[lang].add(c.key);
+      picks[i] = picked;
+    }
+
+    const rawNotes = {};
+    const noteOf = (i, p, gloss) => ({ w: p.w, gloss: gloss, key: p.key, lang: langs[i] });
+    const todo = [];
+    for (const i of Object.keys(picks).map(Number)) {
+      if (picks[i].length === 0) {
+        rawNotes[i] = [];
+        continue;
+      }
+      const cached = lruGet(volatileAnnotateCache, cacheKey(items[i].text));
+      // A word whose gloss was dropped is cached with gloss "" so that the paragraph still counts as answered.
+      if (cached && picks[i].every((p) => cached[p.key])) {
+        rawNotes[i] = picks[i].map((p) => noteOf(i, p, cached[p.key].gloss)).filter((n) => n.gloss);
+      } else {
+        todo.push(i);
+      }
+    }
+
+    // Asks for one group of paragraphs. Returns { fail } for an HTTP error, { bad: true } for an unusable
+    // reply, otherwise { glosses } (one list per paragraph).
+    const ask = async (group) => {
+      if (isCancelled()) return { fail: cancelled() };
+      const words = group.flatMap((i) => picks[i].map((p) => p.w));
+      const { messages } = ANNOTATE.buildAnnotatePrompt(
+        group.map((i) => ({ text: items[i].text, words: picks[i].map((p) => p.w) })),
+        glossLang
+      );
+      const res = await callChatCompletion(messages, s, 0, model, group.length > 1 ? 1500 : 600, { signal, retry: true });
+      if (isCancelled()) return { fail: cancelled() };
+      // A 2xx reply that is not usable (not JSON, no content) is a format failure, not an HTTP error.
+      if (!res.ok) return res.status >= 200 && res.status < 300 ? { bad: true } : { fail: res };
+      const parsed = ANNOTATE.parseAnnotateReply(res.content, words, { finishReason: res.finishReason, glossLang });
+      if (!parsed.ok) return { bad: true };
+      let at = 0;
+      return { glosses: group.map((i) => parsed.glosses.slice(at, (at += picks[i].length))) };
+    };
+
+    const accept = (i, glosses) => {
+      const all = picks[i].map((p, n) => noteOf(i, p, glosses[n] || ""));
+      rawNotes[i] = all.filter((n) => n.gloss);
+      const entry = { ...(lruGet(volatileAnnotateCache, cacheKey(items[i].text)) || {}) };
+      for (const n of all) entry[n.key] = { w: n.w, gloss: n.gloss };
+      if (Object.keys(entry).length > 0) lruSet(volatileAnnotateCache, cacheKey(items[i].text), entry);
+    };
+
+    const askSingle = async (i) => {
+      const r = await ask([i]);
+      if (r.fail) return r.fail;
+      if (r.bad) fallback.add(i);
+      else accept(i, r.glosses[0]);
+      return null;
+    };
+
+    // Groups in page order, each with at most ANNOTATE_MERGE_MAX_WORDS words.
+    const groups = [];
+    let current = [];
+    let count = 0;
+    for (const i of todo) {
+      if (current.length > 0 && count + picks[i].length > ANNOTATE_MERGE_MAX_WORDS) {
+        groups.push(current);
+        current = [];
+        count = 0;
+      }
+      current.push(i);
+      count += picks[i].length;
+    }
+    if (current.length > 0) groups.push(current);
+
+    for (const group of groups) {
+      if (group.length === 1) {
+        const failed = await askSingle(group[0]);
+        if (failed) return failed;
+        continue;
+      }
+      const r = await ask(group);
+      if (r.fail) return r.fail;
+      if (r.bad) {
+        for (const i of group) {
+          const failed = await askSingle(i);
+          if (failed) return failed;
+        }
+      } else {
+        group.forEach((i, n) => accept(i, r.glosses[n]));
+      }
+    }
+
+    // Paragraphs that could not be annotated are translated whole.
+    const segments = {};
+    let translatedModel = "";
+    const order = [...fallback].sort((a, b) => a - b);
+    if (order.length > 0) {
+      if (isCancelled()) return cancelled();
+      const r = await streamImmersiveBatch(
+        order.map((i) => texts[i]),
+        "",
+        typeof onProgress === "function"
+          ? (p) => {
+              const mapped = {};
+              for (const [j, text] of Object.entries((p && p.segments) || {})) mapped[order[j]] = text;
+              onProgress({ ...p, segments: mapped });
+            }
+          : undefined,
+        signal
+      );
+      if (!r.ok) return r;
+      order.forEach((i, j) => {
+        segments[i] = (r.segments && r.segments[j]) || "";
+      });
+      translatedModel = r.model || "";
+    }
+
+    // The reader may have marked words as known while the requests were running.
+    // If the switch was turned off meanwhile, the stored words are not read again.
+    let latest = known;
+    try {
+      if ((await getAnnotateConfig(false)).annotateEnabled) {
+        latest = annotateKnownSets((await getAnnotateConfig(true)).annotateKnown);
+      }
+    } catch (_) {}
+    const notes = {};
+    for (const [i, list] of Object.entries(rawNotes)) {
+      if (fallback.has(Number(i))) continue;
+      notes[i] = list.filter(
+        (n) => n.gloss && validAnnotateKey(n.lang, n.key) && !(latest && latest[n.lang] && latest[n.lang].has(n.key))
+      );
+    }
+    const annotated = Object.keys(notes).length > 0;
+    return { ok: true, segments, notes, model: annotated || !translatedModel ? model : translatedModel };
+  } catch (err) {
+    if (isCancelled()) return cancelled();
+    return { ok: false, status: 0, body: String((err && err.message) || err) };
+  }
+}
+
+// Every change of annotateKnown (mark, undo, clear) is a read-modify-write run one after the other on
+// this chain, so two tabs marking at once cannot overwrite each other. A failed step does not block the next.
+let annotateWriteChain = Promise.resolve();
+
+// fn(cfg) returns { known, result }: known (if any) is written, result is the answer. With requireEnabled
+// the switch is checked first and, when it is off, the stored words are not read at all.
+function updateAnnotateKnown(fn, { requireEnabled = false } = {}) {
+  const run = annotateWriteChain.then(async () => {
+    if (requireEnabled && !(await getAnnotateConfig(false)).annotateEnabled) return { ok: false };
+    const cfg = await getAnnotateConfig(true);
+    const out = fn(cfg);
+    if (out.known) await chrome.storage.local.set({ annotateKnown: out.known });
+    return out.result;
+  });
+  annotateWriteChain = run.catch(() => {});
+  return run;
+}
+
+// From a page (content.js): mark or undo, only while the switch is on.
+async function annotateMark(msg) {
+  const lang = msg && msg.lang;
+  const key = msg && msg.key;
+  if (!ANNOTATE_LANGS.includes(lang) || !validAnnotateKey(lang, key)) return { ok: false, error: "invalid" };
+  if (msg.known !== undefined && typeof msg.known !== "boolean") return { ok: false, error: "invalid" };
+  const mark = msg.known !== false;
+  return updateAnnotateKnown((cfg) => {
+    const list = cfg.annotateKnown[lang];
+    const at = list.indexOf(key);
+    let changed = false;
+    if (mark && at < 0) {
+      if (list.length >= ANNOTATE_MAX_KNOWN) return { result: { ok: false, error: "limit" } };
+      list.push(key);
+      changed = true;
+    } else if (!mark && at >= 0) {
+      list.splice(at, 1);
+      changed = true;
+    }
+    return { known: changed ? cfg.annotateKnown : null, result: { ok: true, count: list.length } };
+  }, { requireEnabled: true });
+}
+
+// From the options page: remove one stored word. Works with the switch off too, like clearing, so the
+// reader can still manage what was kept. Any stored string can be removed, valid or not.
+async function annotateRemove(msg) {
+  const lang = msg && msg.lang;
+  const key = msg && msg.key;
+  if (!ANNOTATE_LANGS.includes(lang) || typeof key !== "string" || key.length === 0) return { ok: false, error: "invalid" };
+  return updateAnnotateKnown((cfg) => {
+    const list = cfg.annotateKnown[lang];
+    const at = list.indexOf(key);
+    if (at >= 0) list.splice(at, 1);
+    return { known: at >= 0 ? cfg.annotateKnown : null, result: { ok: true, count: list.length } };
+  });
+}
+
+function annotateClear() {
+  return updateAnnotateKnown(() => ({ known: emptyAnnotateKnown(), result: { ok: true } }));
+}
+
+// Waits for the writes queued so far, so the list shows them.
+async function annotateList() {
+  await annotateWriteChain;
+  const { annotateKnown } = await getAnnotateConfig(true);
+  const counts = {};
+  for (const lang of ANNOTATE_LANGS) counts[lang] = annotateKnown[lang].length;
+  return { ok: true, words: { zh: annotateKnown.zh, en: annotateKnown.en, es: annotateKnown.es }, counts };
+}
+
 async function streamStudyCard(text, modelOverride, onPartial, externalSignal) {
   text = String(text || "").trim();
-  if (!text) return { ok: false, status: 0, body: "Nothing to analyze." };
-  if (text.length > MAX_LEN) return { ok: false, status: 0, body: "Selection is longer than " + MAX_LEN + " characters." };
+  if (!text) return { ok: false, status: 0, body: tr("bg.nothingToAnalyze") };
+  if (text.length > MAX_LEN) return { ok: false, status: 0, body: tr("bg.tooLong", MAX_LEN) };
 
   const s = await getSettings();
+  const textOnly = textEngine(s);
+  if (textOnly) return textOnlyUnsupported("bg.feature.study", textOnly);
   const base = stripSlashes(s.base);
   const activeModel = resolveStudyModel(s.model, modelOverride);
   const hits = matchGlossaryHits(s.glossary, text);
@@ -1308,7 +2557,7 @@ async function streamStudyCard(text, modelOverride, onPartial, externalSignal) {
     base
   );
 
-  return runChatStream(s, base, body, externalSignal, async (res, via) => {
+  return runChatStream(s, base, body, externalSignal, async (res, via, touch) => {
     let lastEmitSignature = "";
     let cappedDeck = null;
     const raw = await readChatContent(res, (full) => {
@@ -1329,10 +2578,10 @@ async function streamStudyCard(text, modelOverride, onPartial, externalSignal) {
         };
         return false;
       }
-    });
+    }, touch);
 
     const deck = cappedDeck || parseStudyCardJson(raw, text);
-    if (!deck) return { ok: false, status: 200, body: "Empty study card response.", via: via };
+    if (!deck) return { ok: false, status: 200, body: tr("bg.emptyStudy"), via: via };
     lruSet(volatileStudyCache, cacheKey, { deck: deck, model: activeModel, via: via });
     return { ok: true, deck: deck, model: activeModel, via: via };
   });
@@ -1340,10 +2589,12 @@ async function streamStudyCard(text, modelOverride, onPartial, externalSignal) {
 
 async function translate(text) {
   text = String(text || "").trim();
-  if (!text) return { ok: false, status: 0, body: "Nothing to translate." };
-  if (text.length > MAX_LEN) return { ok: false, status: 0, body: "Selection is longer than " + MAX_LEN + " characters." };
+  if (!text) return { ok: false, status: 0, body: tr("bg.nothingToTranslate") };
+  if (text.length > MAX_LEN) return { ok: false, status: 0, body: tr("bg.tooLong", MAX_LEN) };
 
   const s = await getSettings();
+  const textOnly = textEngine(s);
+  if (textOnly) return engineTranslate(textOnly, s, text);
   const activeModel = String(s.model || DEFAULTS.model).trim();
   const base = stripSlashes(s.base);
   const hits = matchGlossaryHits(s.glossary, text);
@@ -1366,10 +2617,12 @@ async function translate(text) {
 
 async function generateStudyCard(text, modelOverride) {
   text = String(text || "").trim();
-  if (!text) return { ok: false, status: 0, body: "Nothing to analyze." };
-  if (text.length > MAX_LEN) return { ok: false, status: 0, body: "Selection is longer than " + MAX_LEN + " characters." };
+  if (!text) return { ok: false, status: 0, body: tr("bg.nothingToAnalyze") };
+  if (text.length > MAX_LEN) return { ok: false, status: 0, body: tr("bg.tooLong", MAX_LEN) };
 
   const s = await getSettings();
+  const textOnly = textEngine(s);
+  if (textOnly) return textOnlyUnsupported("bg.feature.study", textOnly);
   const base = stripSlashes(s.base);
   const activeModel = resolveStudyModel(s.model, modelOverride);
   const hits = matchGlossaryHits(s.glossary, text);
@@ -1381,17 +2634,173 @@ async function generateStudyCard(text, modelOverride) {
   if (!res.ok) return res;
 
   const deck = parseStudyCardJson(res.content, text);
-  if (!deck) return { ok: false, status: 200, body: "Empty study card response.", via: res.via };
+  if (!deck) return { ok: false, status: 200, body: tr("bg.emptyStudy"), via: res.via };
   const out = { deck: deck, model: res.model, via: res.via };
   lruSet(volatileStudyCache, cacheKey, out);
   return { ok: true, ...out };
 }
 
+// ---- Streaming ports ------------------------------------------------------------------------
+// A page asks for a stream by opening a port with one of these names and posting the start message.
+// Progress goes back as `progress` messages and the outcome as a single `done` message.
+const STREAM_PORTS = {
+  "bili-translate-stream": {
+    start: "START_TRANSLATE_STREAM",
+    progress: "DELTA",
+    done: "DONE",
+    run: (msg, onProgress, signal) => streamTranslation(msg.text, onProgress, signal)
+  },
+  "bili-image-stream": {
+    start: "START_IMAGE_STREAM",
+    progress: "DELTA",
+    done: "DONE",
+    run: (msg, onProgress, signal) => streamVisionTranslation(msg.dataUrl, msg.modelOverride, onProgress, signal)
+  },
+  "bili-immersive-stream": {
+    start: "START_IMMERSIVE_BATCH",
+    progress: "BATCH_DELTA",
+    done: "BATCH_DONE",
+    // Progress carries every paragraph of the batch; only the ones that changed are sent on.
+    segments: true,
+    run: (msg, onProgress, signal) => streamImmersiveBatch(msg.items, msg.modelOverride, onProgress, signal)
+  },
+  "bili-annotate-stream": {
+    start: "START_ANNOTATE_BATCH",
+    progress: "BATCH_DELTA",
+    done: "BATCH_DONE",
+    // Only translated paragraphs travel as progress; `notes` is only in the final message.
+    segments: true,
+    run: (msg, onProgress, signal) => streamAnnotateBatch(msg.items, msg.exclude, onProgress, signal)
+  },
+  "bili-study-stream": {
+    start: "START_STUDY_STREAM",
+    progress: "PARTIAL",
+    done: "DONE",
+    run: (msg, onProgress, signal) => streamStudyCard(msg.text, msg.modelOverride, onProgress, signal)
+  }
+};
+
+// A model emits far more deltas than a page can show, and each progress message is copied to the
+// page and laid out there. The first one is sent at once and later ones at most every
+// STREAM_FLUSH_MS; each carries the newest state, so skipping the states in between loses nothing.
+const STREAM_FLUSH_MS = 33;
+
+function coalesce(send, intervalMs) {
+  let pending = null;
+  let timer = null;
+  let lastSent = -Infinity;
+  const flush = () => {
+    timer = null;
+    if (pending === null) return;
+    const payload = pending;
+    pending = null;
+    lastSent = Date.now();
+    send(payload);
+  };
+  return {
+    push(payload) {
+      pending = payload;
+      if (timer !== null) return;
+      const wait = lastSent + intervalMs - Date.now();
+      if (wait <= 0) flush();
+      else timer = setTimeout(flush, wait);
+    },
+    // Drops what has not been sent yet: the final message replaces it, or nobody is listening.
+    cancel() {
+      clearTimeout(timer);
+      timer = null;
+      pending = null;
+    }
+  };
+}
+
+function handleStreamPort(port) {
+  const spec = port && STREAM_PORTS[port.name];
+  if (!spec) return;
+  if (!fromTabScript(port.sender)) {
+    try { port.disconnect(); } catch (_) {}
+    return;
+  }
+
+  const abortCtrl = new AbortController();
+  let open = true;
+  let started = false;
+  const post = (type, payload) => {
+    if (!open) return;
+    try { port.postMessage({ type: type, ...payload }); } catch (_) {}
+  };
+
+  const sentSegments = {};
+  const progress = coalesce((payload) => {
+    if (spec.segments) {
+      const changed = {};
+      let any = false;
+      for (const [index, text] of Object.entries(payload.segments || {})) {
+        if (sentSegments[index] === text) continue;
+        sentSegments[index] = changed[index] = text;
+        any = true;
+      }
+      if (!any) return;
+      payload = { ...payload, segments: changed };
+    }
+    post(spec.progress, payload);
+  }, STREAM_FLUSH_MS);
+
+  port.onDisconnect.addListener(() => {
+    open = false;
+    progress.cancel();
+    abortCtrl.abort();
+  });
+
+  port.onMessage.addListener((msg) => {
+    if (started || !msg || msg.type !== spec.start) return;
+    started = true;
+    // The page waits for the final message, so a failure before the request is reported as one too.
+    Promise.resolve()
+      .then(() => spec.run(msg, progress.push, abortCtrl.signal))
+      .catch((err) => ({ ok: false, status: 0, body: String((err && err.message) || err) }))
+      .then((finalRes) => {
+        progress.cancel();
+        if (!(finalRes && finalRes.cancelled)) post(spec.done, finalRes);
+      });
+  });
+}
+
 // ---- Messaging, Streaming Ports, Commands & Context Menu ----------------------------------
+
+// Who may send what: extension pages (options) and page scripts (content.js) are told apart by sender.
+function isOwnId(sender) {
+  return !!(sender && typeof chrome.runtime.id === "string" && sender.id === chrome.runtime.id);
+}
+function fromExtensionPage(sender) {
+  return isOwnId(sender) && typeof sender.url === "string" && sender.url.startsWith(chrome.runtime.getURL(""));
+}
+function fromTabScript(sender) {
+  return isOwnId(sender) && !!sender.tab && typeof sender.tab.id === "number";
+}
+const MESSAGE_SENDERS = {
+  BILI_CHECK_API_CONFIG: [fromExtensionPage],
+  BILI_MIGRATE_SETTINGS: [fromExtensionPage],
+  BILI_STUDY_CARD: [fromTabScript],
+  BILI_CAPTURE_TAB: [fromTabScript],
+  BILI_GET_IMMERSIVE_PREFS: [fromTabScript],
+  BILI_PURGE_VOLATILE: [fromTabScript],
+  BILI_ANNOTATE_MARK: [fromTabScript],
+  BILI_ANNOTATE_REMOVE: [fromExtensionPage],
+  BILI_ANNOTATE_CLEAR: [fromExtensionPage],
+  BILI_ANNOTATE_LIST: [fromExtensionPage],
+  BILI_TRANSLATE: [fromExtensionPage, fromTabScript]
+};
 
 if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.onMessage) {
   chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (!msg) return false;
+
+    const allowed = Object.prototype.hasOwnProperty.call(MESSAGE_SENDERS, msg.type) ? MESSAGE_SENDERS[msg.type] : null;
+    if (allowed && !allowed.some((check) => check(sender))) {
+      sendResponse({ ok: false, status: 0, body: "Forbidden sender" });
+      return false;
+    }
 
     if (msg.type === "BILI_TRANSLATE") {
       translate(msg.text)
@@ -1412,24 +2821,60 @@ if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.onMessage)
     }
 
     if (msg.type === "BILI_CAPTURE_TAB") {
-      const winId = sender && sender.tab ? sender.tab.windowId : chrome.windows.WINDOW_ID_CURRENT;
       chrome.tabs
-        .captureVisibleTab(winId, { format: "png" })
+        .captureVisibleTab(sender.tab.windowId, { format: "png" })
         .then((dataUrl) => sendResponse({ ok: true, dataUrl: dataUrl }))
         .catch((err) => sendResponse({ ok: false, body: String((err && err.message) || err) }));
       return true;
     }
 
     if (msg.type === "BILI_GET_IMMERSIVE_PREFS") {
-      getSettings()
-        .then((s) =>
+      Promise.all([getSettings(), getAnnotateConfig(false).catch(() => null)])
+        .then(([s, annotateCfg]) => {
+          const textOnly = textEngine(s);
           sendResponse({
             ok: true,
-            immersiveModel: s.immersiveModel || DEFAULTS.immersiveModel,
-            target: s.target || DEFAULTS.target
-          })
-        )
+            immersiveModel: textOnly ? textOnly.label : s.immersiveModel || DEFAULTS.immersiveModel,
+            modelSwitch: !textOnly,
+            target: s.target || DEFAULTS.target,
+            annotate: annotateAvailable(s, annotateCfg)
+          });
+        })
         .catch(() => sendResponse({ ok: false }));
+      return true;
+    }
+
+    const annotateOps = {
+      BILI_ANNOTATE_MARK: () => annotateMark(msg),
+      BILI_ANNOTATE_REMOVE: () => annotateRemove(msg),
+      BILI_ANNOTATE_CLEAR: () => annotateClear(),
+      BILI_ANNOTATE_LIST: () => annotateList()
+    };
+    if (Object.prototype.hasOwnProperty.call(annotateOps, msg.type)) {
+      const run = annotateOps[msg.type]();
+      run.then(sendResponse, () => sendResponse({ ok: false }));
+      return true;
+    }
+
+    if (msg.type === "BILI_CHECK_API_CONFIG") {
+      // The options page asks before it saves, so answer in the language the page is showing.
+      const settings = msg.settings || {};
+      const savedLang = uiLang;
+      uiLang = I18N.resolveLang(settings.uiLang);
+      try {
+        sendResponse(checkApiConfig(settings));
+      } finally {
+        uiLang = savedLang;
+      }
+      return false;
+    }
+
+    // The options page reads storage itself; it asks for this first so that it never shows a stale key.
+    if (msg.type === "BILI_MIGRATE_SETTINGS") {
+      migrateKeyToLocal().then(
+        () => sendResponse({ ok: true }),
+        (err) => sendResponse({ ok: false, error: String((err && err.message) || err) })
+      );
       return true;
     }
 
@@ -1437,6 +2882,7 @@ if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.onMessage)
       volatileTranslateCache.clear();
       volatileStudyCache.clear();
       volatileVisionCache.clear();
+      volatileAnnotateCache.clear();
       sendResponse({ ok: true });
       return false;
     }
@@ -1444,162 +2890,54 @@ if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.onMessage)
     return false;
   });
 
-  if (chrome.runtime.onConnect) {
-    chrome.runtime.onConnect.addListener((port) => {
-      if (!port) return;
+  if (chrome.runtime.onConnect) chrome.runtime.onConnect.addListener(handleStreamPort);
 
-      if (port.name === "bili-translate-stream") {
-        const abortCtrl = new AbortController();
-        let disconnected = false;
-        port.onDisconnect.addListener(() => {
-          disconnected = true;
-          abortCtrl.abort();
-        });
-        port.onMessage.addListener((msg) => {
-          if (!msg || msg.type !== "START_TRANSLATE_STREAM") return;
-          streamTranslation(
-            msg.text,
-            (delta) => {
-              if (!disconnected) {
-                try { port.postMessage({ type: "DELTA", ...delta }); } catch (_) {}
-              }
-            },
-            abortCtrl.signal
-          ).then((finalRes) => {
-            if (!disconnected && !(finalRes && finalRes.cancelled)) {
-              try { port.postMessage({ type: "DONE", ...finalRes }); } catch (_) {}
-            }
-          });
-        });
-        return;
-      }
-
-      if (port.name === "bili-image-stream") {
-        const abortCtrl = new AbortController();
-        let disconnected = false;
-        port.onDisconnect.addListener(() => {
-          disconnected = true;
-          abortCtrl.abort();
-        });
-        port.onMessage.addListener((msg) => {
-          if (!msg || msg.type !== "START_IMAGE_STREAM") return;
-          streamVisionTranslation(
-            msg.dataUrl,
-            msg.modelOverride,
-            (delta) => {
-              if (!disconnected) {
-                try { port.postMessage({ type: "DELTA", ...delta }); } catch (_) {}
-              }
-            },
-            abortCtrl.signal
-          ).then((finalRes) => {
-            if (!disconnected && !(finalRes && finalRes.cancelled)) {
-              try { port.postMessage({ type: "DONE", ...finalRes }); } catch (_) {}
-            }
-          });
-        });
-        return;
-      }
-
-      if (port.name === "bili-immersive-stream") {
-        const abortCtrl = new AbortController();
-        let disconnected = false;
-        port.onDisconnect.addListener(() => {
-          disconnected = true;
-          abortCtrl.abort();
-        });
-        port.onMessage.addListener((msg) => {
-          if (!msg || msg.type !== "START_IMMERSIVE_BATCH") return;
-          streamImmersiveBatch(
-            msg.items,
-            msg.modelOverride,
-            (progress) => {
-              if (!disconnected) {
-                try { port.postMessage({ type: "BATCH_DELTA", ...progress }); } catch (_) {}
-              }
-            },
-            abortCtrl.signal
-          ).then((finalRes) => {
-            if (!disconnected && !(finalRes && finalRes.cancelled)) {
-              try { port.postMessage({ type: "BATCH_DONE", ...finalRes }); } catch (_) {}
-            }
-          });
-        });
-        return;
-      }
-
-      if (port.name === "bili-study-stream") {
-        const abortCtrl = new AbortController();
-        let disconnected = false;
-        port.onDisconnect.addListener(() => {
-          disconnected = true;
-          abortCtrl.abort();
-        });
-        port.onMessage.addListener((msg) => {
-          if (!msg || msg.type !== "START_STUDY_STREAM") return;
-          streamStudyCard(
-            msg.text,
-            msg.modelOverride,
-            (progress) => {
-              if (!disconnected) {
-                try { port.postMessage({ type: "PARTIAL", ...progress }); } catch (_) {}
-              }
-            },
-            abortCtrl.signal
-          ).then((finalRes) => {
-            if (!disconnected && !(finalRes && finalRes.cancelled)) {
-              try { port.postMessage({ type: "DONE", ...finalRes }); } catch (_) {}
-            }
-          });
-        });
+  function createMenus() {
+    chrome.contextMenus.removeAll(() => {
+      for (const [id, titleKey, context] of MENUS) {
+        chrome.contextMenus.create({ id: id, title: tr(titleKey), contexts: [context] }, () => void chrome.runtime.lastError);
       }
     });
   }
 
-  chrome.storage.onChanged.addListener(() => {
+  function refreshMenuTitles() {
+    for (const [id, title] of Object.entries(menuTitles())) {
+      chrome.contextMenus.update(id, { title: title }, () => void chrome.runtime.lastError);
+    }
+  }
+
+  chrome.storage.onChanged.addListener((changes, area) => {
+    // Marking a word as known changes nothing a translation depends on, and happens often: keep every
+    // cache. The stored words are read from storage when a batch needs them, so there is nothing to refresh.
+    if (area === "local" && changes) {
+      const keys = Object.keys(changes);
+      if (keys.length > 0 && keys.every((k) => k === "annotateKnown")) return;
+    }
+    noMergedBatch.clear();
+    volatileAnnotateCache.clear();
     cachedGlossaryRaw = null;
     cachedGlossaryEntries = [];
     volatileTranslateCache.clear();
     volatileStudyCache.clear();
     volatileVisionCache.clear();
+    if (area === "sync" && changes && changes.uiLang) {
+      uiLang = I18N.resolveLang(changes.uiLang.newValue);
+      refreshMenuTitles();
+    }
   });
 
-  chrome.runtime.onInstalled.addListener(() => {
-    chrome.contextMenus.removeAll(() => {
-      chrome.contextMenus.create(
-        {
-          id: MENU_ID,
-          title: "Translate selection with Bili",
-          contexts: ["selection"]
-        },
-        () => void chrome.runtime.lastError
-      );
-      chrome.contextMenus.create(
-        {
-          id: MENU_STUDY_ID,
-          title: "Open Bili Study Card (\u5b66\u4e60\u5361\u7247)",
-          contexts: ["selection"]
-        },
-        () => void chrome.runtime.lastError
-      );
-      chrome.contextMenus.create(
-        {
-          id: MENU_IMAGE_ID,
-          title: "Translate image with Bili (\u8bc6\u56fe\u76f4\u8bd1 + \u8bcd\u5361)",
-          contexts: ["image"]
-        },
-        () => void chrome.runtime.lastError
-      );
-      chrome.contextMenus.create(
-        {
-          id: MENU_IMMERSIVE_ID,
-          title: "Toggle Bilingual Page Translation (\u53cc\u8bed\u5bf9\u7167\u7f51\u9875 \u00b7 Alt+A)",
-          contexts: ["page"]
-        },
-        () => void chrome.runtime.lastError
-      );
+  // The menus outlive a browser restart, but the browser's language may have changed since.
+  if (chrome.runtime.onStartup) {
+    chrome.runtime.onStartup.addListener(() => {
+      getSettings().then(refreshMenuTitles, () => {});
     });
-    chrome.storage.sync.get(DEFAULTS).then((s) => chrome.storage.sync.set(s));
+  }
+
+  chrome.runtime.onInstalled.addListener(() => {
+    // The titles follow the interface language, so the settings are read first.
+    getSettings().then(createMenus, createMenus);
+    fillMissingSyncDefaults().catch(() => {});
+    migrateKeyToLocal().catch((err) => console.warn("[Bili Index Translate] API key migration failed:", err));
   });
 
   async function sendToFrame(tabId, frameId, msg) {
@@ -1608,7 +2946,7 @@ if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.onMessage)
       await chrome.tabs.sendMessage(tabId, msg, { frameId: frameId });
     } catch (_) {
       await chrome.scripting.insertCSS({ target: target, files: ["content.css"] });
-      await chrome.scripting.executeScript({ target: target, files: ["content.js"] });
+      await chrome.scripting.executeScript({ target: target, files: ["i18n.js", "content.js"] });
       await chrome.tabs.sendMessage(tabId, msg, { frameId: frameId });
     }
   }
@@ -1640,7 +2978,10 @@ if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.onMessage)
     }
 
     if (info.menuItemId === MENU_IMAGE_ID && info.srcUrl) {
-      fetchImageAsDataUrl(info.srcUrl)
+      // Reading the settings first puts a download error in the current interface language.
+      getSettings()
+        .catch(() => null)
+        .then(() => fetchImageAsDataUrl(info.srcUrl))
         .then((dataUrl) =>
           sendToFrame(tab.id, frameId, {
             type: "BILI_CONTEXT_IMAGE_DATA",
@@ -1673,6 +3014,8 @@ if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.onMessage)
     chrome.runtime.openOptionsPage();
   });
 
+  ensureDirectRule();
+
   console.log("[Bili Index Translate] service worker started");
 }
 
@@ -1698,11 +3041,39 @@ if (typeof module !== "undefined" && module.exports) {
     parseStudyCardJson,
     extractPartialStudyDeck,
     inferSourceLang,
+    deeplxTargetLang,
+    buildDeeplxRequest,
+    parseDeeplxResponse,
+    parseJsonPath,
+    readJsonPath,
+    parseCustomTemplate,
+    buildCustomRequest,
+    parseCustomResponse,
+    checkApiConfig,
+    menuTitles,
+    migrateKeyToLocal,
+    fillMissingSyncDefaults,
+    getSettings,
+    fetchImageAsDataUrl,
     callChatCompletion,
+    RETRY_POLICY,
     readChatContent,
+    handleStreamPort,
+    STREAM_FLUSH_MS,
+    directHeaderRule,
+    installDirectRule,
     streamTranslation,
     streamVisionTranslation,
     streamImmersiveBatch,
-    streamStudyCard
+    streamAnnotateBatch,
+    ANNOTATE_DEFAULTS,
+    getAnnotateConfig,
+    annotateAvailable,
+    annotateModelFor,
+    setAnnotateWordlists,
+    volatileAnnotateCache,
+    streamStudyCard,
+    translate,
+    generateStudyCard
   };
 }

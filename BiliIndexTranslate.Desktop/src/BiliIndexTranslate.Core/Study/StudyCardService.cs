@@ -2,7 +2,6 @@ using System.Diagnostics;
 using System.Net.Http;
 using System.Net.Sockets;
 using System.Text;
-using System.Text.Json;
 using BiliIndexTranslate.Core.Translation;
 
 namespace BiliIndexTranslate.Core.Study;
@@ -41,6 +40,9 @@ public sealed class StudyCardService
         CancellationToken ct,
         Action<StudyDeckResult>? onPartial = null)
     {
+        if (request.Format != ApiFormat.OpenAi)
+            throw new TranslationException(DeeplxProtocol.Unsupported("Study Card", request.UseRelay ? RequestRoute.Relay : RequestRoute.Direct, request.Format));
+
         if (!EndpointResolver.TryResolve(request.BaseUrl, request.UseRelay, request.RelayPrefix, out var endpoint, out var cfgError))
             throw new TranslationException(new TranslationError(TranslationErrorKind.Configuration, cfgError ?? "Invalid endpoint.", request.UseRelay ? RequestRoute.Relay : RequestRoute.Direct));
 
@@ -82,8 +84,9 @@ public sealed class StudyCardService
                     _timeout,
                     dataJson =>
                     {
-                        var delta = ExtractDeltaContent(dataJson);
-                        if (string.IsNullOrEmpty(delta)) return;
+                        var delta = ChatCompletionParser.ReadStreamDelta(dataJson, out var streamError);
+                        if (streamError is not null) throw ChatCompletionParser.StreamFailure(streamError, route);
+                        if (delta.Length == 0) return;
                         streamedContent.Append(delta);
                         var partial = StudyCardParser.ExtractPartialDeck(streamedContent.ToString(), effectiveReq.Text);
                         if (partial is null) return;
@@ -204,26 +207,6 @@ public sealed class StudyCardService
                 _cacheLru.RemoveLast();
                 _cacheMap.Remove(oldest.Value.Key);
             }
-        }
-    }
-
-    private static string? ExtractDeltaContent(string dataJson)
-    {
-        try
-        {
-            using var doc = JsonDocument.Parse(dataJson);
-            var root = doc.RootElement;
-            if (!root.TryGetProperty("choices", out var choices) || choices.ValueKind != JsonValueKind.Array || choices.GetArrayLength() == 0)
-                return null;
-            var first = choices[0];
-            if (first.TryGetProperty("delta", out var delta) && delta.ValueKind == JsonValueKind.Object
-                && delta.TryGetProperty("content", out var content) && content.ValueKind == JsonValueKind.String)
-                return content.GetString();
-            return null;
-        }
-        catch (JsonException)
-        {
-            return null;
         }
     }
 }
