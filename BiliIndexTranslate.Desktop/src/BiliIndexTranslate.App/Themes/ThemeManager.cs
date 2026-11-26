@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Runtime.InteropServices;
 using System.Windows;
 using BiliIndexTranslate.Core.Settings;
 using Microsoft.Win32;
@@ -35,7 +36,7 @@ internal sealed class ThemeManager : IDisposable
     public void Apply(ThemePreference preference)
     {
         _preference = preference;
-        var variant = ThemeChoice.Resolve(preference, SystemPrefersDark(), SystemParameters.HighContrast);
+        var variant = ThemeChoice.Resolve(preference, SystemPrefersDark(), SystemHighContrast());
         if (_palette is null || variant != _variant)
         {
             var next = new ResourceDictionary
@@ -72,10 +73,39 @@ internal sealed class ThemeManager : IDisposable
     // Accessibility: the high-contrast switch. Color / General / VisualStyle: the Light/Dark choice and high-contrast color changes.
     private void OnUserPreferenceChanged(object sender, UserPreferenceChangedEventArgs e)
     {
+        if (e.Category == UserPreferenceCategory.Accessibility)
+            _app.Dispatcher.BeginInvoke(() => Log?.Invoke($"accessibility setting changed (high contrast {(SystemHighContrast() ? "on" : "off")})"));
         if (e.Category is UserPreferenceCategory.Accessibility or UserPreferenceCategory.General
             or UserPreferenceCategory.Color or UserPreferenceCategory.VisualStyle)
             Reapply();
     }
+
+    /// <summary>
+    /// Windows high contrast, read from the system each time: <see cref="SystemParameters.HighContrast"/> is cached by
+    /// WPF and can still hold the old value when the change notification arrives.
+    /// </summary>
+    public static bool SystemHighContrast()
+    {
+        var hc = new HIGHCONTRAST { cbSize = (uint)Marshal.SizeOf<HIGHCONTRAST>() };
+        return SystemParametersInfo(SPI_GETHIGHCONTRAST, hc.cbSize, ref hc, 0)
+            ? (hc.dwFlags & HCF_HIGHCONTRASTON) != 0
+            : SystemParameters.HighContrast;
+    }
+
+    private const uint SPI_GETHIGHCONTRAST = 0x0042;
+    private const uint HCF_HIGHCONTRASTON = 0x00000001;
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct HIGHCONTRAST
+    {
+        public uint cbSize;
+        public uint dwFlags;
+        public IntPtr lpszDefaultScheme;
+    }
+
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool SystemParametersInfo(uint uiAction, uint uiParam, ref HIGHCONTRAST pvParam, uint fWinIni);
 
     // SystemParameters caches HighContrast; this event fires after WPF has refreshed the cache.
     private void OnSystemParameterChanged(object? sender, PropertyChangedEventArgs e)

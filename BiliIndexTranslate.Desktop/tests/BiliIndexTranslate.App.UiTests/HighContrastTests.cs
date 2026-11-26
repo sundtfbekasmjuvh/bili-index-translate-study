@@ -28,6 +28,10 @@ public class HighContrastTests
             try
             {
                 HighContrastNative.Set(on: true, scheme: "High Contrast Black");
+                // Tell "the machine did not switch" apart from "the app did not follow".
+                var now = HighContrastNative.Get();
+                Assert.True((now.Flags & 1) != 0,
+                    $"high contrast is still off after SPI_SETHIGHCONTRAST succeeded (flags 0x{now.Flags:X}, scheme '{now.Scheme}'); this machine does not switch");
                 WaitForLog(ui, "theme: high contrast");
 
                 // The card still works with the high-contrast palette.
