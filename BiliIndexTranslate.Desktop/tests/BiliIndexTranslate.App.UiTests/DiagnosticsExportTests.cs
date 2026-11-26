@@ -1,7 +1,9 @@
 using System.IO.Compression;
 using System.Runtime.CompilerServices;
 using FlaUI.Core.AutomationElements;
+using FlaUI.Core.Input;
 using FlaUI.Core.Tools;
+using FlaUI.Core.WindowsAPI;
 using Xunit;
 using Xunit.Abstractions;
 
@@ -52,8 +54,15 @@ public class DiagnosticsExportTests
                 var dialogElement = ui.Automation.FromHandle(dialog);
                 var cf = ui.Automation.ConditionFactory;
                 var nameBox = WaitFor(() => dialogElement.FindFirstDescendant(cf.ByAutomationId("1001")), "file name edit (AutomationId 1001)");
-                nameBox.AsTextBox().Text = target;
-                _output.WriteLine("step 4: file name set");
+                _output.WriteLine($"step 4a: file name box class '{nameBox.ClassName}', value '{EditValue(nameBox)}'");
+                // Setting the value through UIA changed nothing the dialog used (it saved under the default name), so the
+                // path is typed like a user would, and read back before Save.
+                nameBox.Focus();
+                Thread.Sleep(200);
+                Keyboard.TypeSimultaneously(VirtualKeyShort.CONTROL, VirtualKeyShort.KEY_A);
+                Keyboard.Type(target);
+                Thread.Sleep(300);
+                _output.WriteLine($"step 4: file name box now '{EditValue(nameBox)}'");
                 var save = WaitFor(() => dialogElement.FindFirstDescendant(cf.ByAutomationId("1")), "Save button (AutomationId 1)");
                 save.AsButton().Invoke();
                 _output.WriteLine("step 5: invoked Save");
@@ -64,36 +73,62 @@ public class DiagnosticsExportTests
                     return e is not null && !string.IsNullOrEmpty(e.Name) ? e : null;
                 }, "ExportStatus text");
                 _output.WriteLine("step 6: status '" + status.Name + "'");
-                Assert.StartsWith("Saved: ", status.Name, StringComparison.Ordinal);
-                Assert.Contains("diag-test.zip", status.Name, StringComparison.Ordinal);
-                Assert.False(File.Exists(target + ".tmp"), "temporary file left behind");
+                Assert.StartsWith(SavedPrefix, status.Name, StringComparison.Ordinal);
 
-                var entries = ReadZip(target);
-                _output.WriteLine("step 7: entries " + string.Join(", ", entries.Keys));
-                Assert.Equal(["diagnostics.log", "report.txt", "settings.json", "system.txt"], entries.Keys.OrderBy(k => k, StringComparer.Ordinal).ToArray());
-
-                foreach (var (name, text) in entries)
+                // The content checks run on whichever file was written, so one CI run answers both questions; whether the
+                // typed path was used is checked last.
+                var savedName = status.Name[SavedPrefix.Length..];
+                var saved = File.Exists(target) ? target : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory), savedName);
+                _output.WriteLine("step 7: saved at " + (saved == target ? "the typed path" : "the dialog's default folder as " + savedName));
+                Assert.False(File.Exists(saved + ".tmp"), "temporary file left behind");
+                try
                 {
-                    Assert.DoesNotContain("SENTINEL", text, StringComparison.Ordinal);
-                    if (Environment.UserName.Length >= 3)
-                        Assert.False(text.Contains(Environment.UserName, StringComparison.OrdinalIgnoreCase), $"{name} contains the user name");
-                    // Also the profile's 8.3 short name: %TEMP% on the runner is C:\Users\RUNNER~1\..., and the test data dir is under it.
-                    var userFolder = System.Text.RegularExpressions.Regex.Match(text, @"[A-Za-z]:[\\/]Users[\\/](?!%USERNAME%|Public|Default)[^\\/\s]+",
-                        System.Text.RegularExpressions.RegexOptions.IgnoreCase);
-                    Assert.False(userFolder.Success, $"{name} contains a user folder: {userFolder.Value}");
+                    CheckBundle(ui, saved);
                 }
-                Assert.Contains("https://diag-host.example", entries["settings.json"], StringComparison.Ordinal);
-
-                var profile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-                if (ui.DataDir.StartsWith(profile, StringComparison.OrdinalIgnoreCase))
-                    Assert.Contains("%USERPROFILE%", entries["system.txt"], StringComparison.Ordinal);
-                _output.WriteLine("step 8: no sentinel, no user name, origin kept");
+                finally
+                {
+                    if (saved != target) try { File.Delete(saved); } catch (Exception) { /* best effort */ }
+                }
+                Assert.True(File.Exists(target), "the bundle was not saved under the typed path");
+                Assert.Equal("diag-test.zip", savedName);
             });
         }
         finally
         {
             try { Directory.Delete(outDir, recursive: true); } catch (Exception) { /* best effort */ }
         }
+    }
+
+    private const string SavedPrefix = "Saved: ";
+
+    private void CheckBundle(UiSession ui, string path)
+    {
+        var entries = ReadZip(path);
+        _output.WriteLine("step 8: entries " + string.Join(", ", entries.Keys));
+        Assert.Equal(["diagnostics.log", "report.txt", "settings.json", "system.txt"], entries.Keys.OrderBy(k => k, StringComparer.Ordinal).ToArray());
+
+        foreach (var (name, text) in entries)
+        {
+            Assert.DoesNotContain("SENTINEL", text, StringComparison.Ordinal);
+            if (Environment.UserName.Length >= 3)
+                Assert.False(text.Contains(Environment.UserName, StringComparison.OrdinalIgnoreCase), $"{name} contains the user name");
+            // Also the profile's 8.3 short name: %TEMP% on the runner is C:\Users\RUNNER~1\..., and the test data dir is under it.
+            var userFolder = System.Text.RegularExpressions.Regex.Match(text, @"[A-Za-z]:[\\/]Users[\\/](?!%USERNAME%|Public|Default)[^\\/\s]+",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            Assert.False(userFolder.Success, $"{name} contains a user folder: {userFolder.Value}");
+        }
+        Assert.Contains("https://diag-host.example", entries["settings.json"], StringComparison.Ordinal);
+
+        var profile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        if (ui.DataDir.StartsWith(profile, StringComparison.OrdinalIgnoreCase))
+            Assert.Contains("%USERPROFILE%", entries["system.txt"], StringComparison.Ordinal);
+        _output.WriteLine("step 9: no sentinel, no user name, no user folder, origin kept");
+    }
+
+    private static string EditValue(AutomationElement e)
+    {
+        try { return e.Patterns.Value.PatternOrDefault?.Value.ValueOrDefault ?? e.Name; }
+        catch (Exception) { return "?"; }
     }
 
     // ---- helpers ------------------------------------------------------------------------------
