@@ -338,7 +338,7 @@ Core-only logic that is covered by unit tests is marked (unit).
 
 | # | Scenario | Expected | Status |
 |---|---|---|---|
-| 1 | Select a sentence in a browser | Card appears above the selection within settle delay + request time; no focus change in the browser | ◐ verified in a WPF text box and, since 2026-11-26, in Edge on the CI runner (triple click → probe → card with the streamed text → Esc; UI test 5). Card position and the browser keeping focus are not checked; Chrome not tested |
+| 1 | Select a sentence in a browser | Card appears above the selection within settle delay + request time; no focus change in the browser | ◐ verified in a WPF text box and, since 2026-11-26, in Edge, Chrome and Firefox on the CI runner: double-click, triple-click, drag and Ctrl+A each produce the card with the selected text (UI tests 5 and 11–15). Card position and the browser keeping focus are not checked |
 | 2 | Click to clear the selection | Card hides immediately on mouse-down; no reopen on mouse-up (probe → no selection) | ⬜ (session: unit) |
 | 3 | Select A, then B while A is loading | A's request cancelled, card shows loading for B, A's late result never rendered | ⬜ (session + coordinator: unit) |
 | 4 | Dismiss while a request is pending | Card stays hidden when the response arrives | ⬜ (unit) |
@@ -362,9 +362,9 @@ Core-only logic that is covered by unit tests is marked (unit).
 | App | Mechanism expected | Status |
 |---|---|---|
 | Self-built WPF text box (test harness) | UIA TextPattern on the read-only editor | ✅ selection read in 2.4–12.7 ms, card and upstream request confirmed |
-| Chrome / Edge (web page) | UIA TextPattern on the document (Chromium exposes it when a screen reader / UIA client is active; first probe may be slow) | ◐ Edge on the `windows-latest` CI runner (UI test 5, 2026-11-26): a triple click on a paragraph is read from the document's TextPattern (`probe msedge: 80 chars, 2 line(s), 15.6 ms`), the card shows the complete text. The test had already queried Edge's UIA tree, so a cold Chromium (no other UIA client) is not covered. Chrome, drag selection and real web pages not tested |
-| Firefox | UIA TextPattern (Firefox's UIA support improved in 2024–2025 builds; older builds may be unsupported) | ⬜ not tested |
-| Notepad (Windows 11) | TextPattern on the editor control | ⬜ not tested |
+| Chrome / Edge (web page) | UIA TextPattern on the document (Chromium exposes it when a screen reader / UIA client is active; first probe may be slow) | ✅ on the `windows-latest` CI runner (2026-11-26, run 45806960089): double-click (word), triple-click (line), drag and Ctrl+A in Edge and Chrome, read from the document's TextPattern. Cold Edge (the test sends no UIA request to Edge, so the app is the only client): card on the first triple click. **Known issue:** the first selection in a freshly started Chrome produced no card in 1 of 4 runs, in two CI runs; the probe found only the window pane (`unsupported: no text pattern near focus (control type 50033, Chrome_WidgetWin_1)`) because the page's accessibility tree was not ready yet. Selecting again works. Real web pages not tested |
+| Firefox | UIA TextPattern (Firefox's UIA support improved in 2024–2025 builds; older builds may be unsupported) | ✅ on the CI runner (2026-11-26, run 45806960089): all four gestures, and the first selection in a freshly started Firefox worked in 4 of 4 runs. In an earlier run, where Firefox windows from earlier tests were still open, the first UIA calls timed out (`GetFocusedElement failed (0x80131505)`). Real web pages not tested |
+| Notepad | TextPattern on the editor control | ✅ classic Notepad (Edit control) on the CI runner: double-click, drag and Shift+End; triple-click does not exist in the Edit control (n/a). The Windows 11 Store Notepad is not on the runner and is not tested |
 | Word | TextPattern on the document body | ⬜ not tested |
 | VS Code / Electron editors | Monaco exposes a limited UIA text surface; may read as unsupported → use Alt+Q fallback | ⬜ not tested |
 | Adobe Acrobat / PDF viewers | Highly variable; Edge PDF viewer behaves like a web page | ⬜ not tested |
