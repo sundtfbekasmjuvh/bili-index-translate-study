@@ -265,6 +265,7 @@ mutex, so a running copy of the app on the same machine does not interfere.
 | 2 | `Card_fills_in_while_streaming` | at least one state with only part of the text, and the caption (`Caption`) shows "streaming" |
 | 3 | `Same_selection_again_is_served_from_the_cache` | after Esc, a click and a new Ctrl+A, the card shows the complete text from its first frame and the mock sees no second request |
 | 4 | `Http_412_shows_an_error_card` | mock answers 412 → error card whose text contains `412` |
+| 5 | `Edge_page_selection_shows_full_card_and_escape_closes_it` (`EdgeSelectionTests`) | Microsoft Edge (own temp profile, no `--force-renderer-accessibility`) opens a local page with one `<p>`; triple click on the paragraph (Ctrl+A as fallback) → card shows the complete text, every request had `stream: true`, Esc hides the card. Skipped, not failed, when `msedge.exe` is not found (`%ProgramFiles(x86)%` / `%ProgramFiles%`, or `BIT_EDGE_EXE`). On failure `TestResults\ui-screenshots\` also gets `<test>.uia-tree.txt` (first levels of the Edge UIA tree) |
 
 The card's translation text is read from the element's UIA `HelpText` (set in `PopupWindow.ShowTranslation`),
 because its `Name` is the fixed label "Translation". Error title/message and the caption are read from their `Name`.
