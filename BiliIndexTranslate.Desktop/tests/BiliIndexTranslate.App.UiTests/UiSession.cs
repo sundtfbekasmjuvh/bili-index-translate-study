@@ -215,6 +215,22 @@ public sealed class UiSession : IDisposable
         Keyboard.Release(VirtualKeyShort.SHIFT);
     }
 
+    /// <summary>Focuses the text box, puts the caret at the start and presses Shift+Left: a selection gesture that selects nothing.</summary>
+    public void PressShiftLeftAtStart()
+    {
+        TargetWindow.SetForeground();
+        var box = SourceBox;
+        box.Focus();
+        box.Click();
+        Thread.Sleep(300);
+        Keyboard.TypeSimultaneously(VirtualKeyShort.CONTROL, VirtualKeyShort.HOME);
+        Thread.Sleep(200);
+        Keyboard.Press(VirtualKeyShort.SHIFT);
+        Keyboard.Type(VirtualKeyShort.LEFT);
+        Thread.Sleep(100);
+        Keyboard.Release(VirtualKeyShort.SHIFT);
+    }
+
     /// <summary>Focuses the text box, puts the caret at the start and selects the first three words (Ctrl+Shift+Right x3): a text that differs from Ctrl+A's.</summary>
     public void SelectFirstWords()
     {
