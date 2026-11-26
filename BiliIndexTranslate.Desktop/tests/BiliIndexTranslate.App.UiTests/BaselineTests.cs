@@ -9,8 +9,8 @@ namespace BiliIndexTranslate.App.UiTests;
 
 /// <summary>
 /// Measurement harness: records baseline numbers (selection-to-card latency, cold start, resource use over repeated
-/// selections) and writes them to TestResults/baseline/*.json. There are no thresholds yet; the assertions only check
-/// that the flow worked. Numbers from shared CI runners are noisy: read them as orders of magnitude.
+/// selections) and writes them to TestResults/baseline/*.json. Latency and cold start have no thresholds; the resource
+/// test has gross-leak limits. Numbers from shared CI runners are noisy: read them as orders of magnitude.
 /// </summary>
 public class BaselineTests
 {
@@ -180,6 +180,14 @@ public class BaselineTests
                 },
                 note = "cycle 0 is taken after one warm-up selection; each cycle: close card, ClearSelection, SelectAll, wait for the full text (cache hit)",
             });
+
+            // Limits, first sample vs last sample. They catch a real leak; they are not a tuning target.
+            // Private bytes is only a gross-leak check (+80 MB): GC timing made one CI run read +45.7 MB that did not reproduce.
+            Assert.True(last.Handles - first.Handles <= 50, $"handles grew by {last.Handles - first.Handles} (limit +50)");
+            Assert.True((long)last.Gdi - first.Gdi <= 5, $"GDI objects grew by {(long)last.Gdi - first.Gdi} (limit +5)");
+            Assert.True((long)last.User - first.User <= 5, $"USER objects grew by {(long)last.User - first.User} (limit +5)");
+            Assert.True(last.PrivateBytes - first.PrivateBytes <= 80L * 1024 * 1024,
+                $"private bytes grew by {(last.PrivateBytes - first.PrivateBytes) / 1048576.0:F1} MB (limit +80 MB)");
         });
     }
 
@@ -205,17 +213,8 @@ public class BaselineTests
         Assert.True(ui.WaitForCardGone(), "card still visible after Esc");
     }
 
-    private static bool LoadingVisible(UiSession ui)
-    {
-        try
-        {
-            var cf = ui.Automation.ConditionFactory;
-            foreach (var window in ui.Automation.GetDesktop().FindAllChildren(cf.ByProcessId(ui.AppProcess.Id)))
-                if (window.FindFirstDescendant(cf.ByAutomationId("LoadingText")) is not null) return true;
-        }
-        catch (Exception) { /* element can vanish while being read */ }
-        return false;
-    }
+    // The app's own windows are found with Win32 and read through Automation.FromHandle (see UiSession.FindInApp).
+    private static bool LoadingVisible(UiSession ui) => ui.FindInApp("LoadingText") is not null;
 
     /// <summary>Milliseconds between the first log line and the line containing "ready" (line format "HH:mm:ss.fff ..."), or null.</summary>
     private static double? AppLogSpanMs(string log)
