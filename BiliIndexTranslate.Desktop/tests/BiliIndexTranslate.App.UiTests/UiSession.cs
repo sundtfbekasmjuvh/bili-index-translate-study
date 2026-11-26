@@ -113,11 +113,28 @@ public sealed class UiSession : IDisposable
     {
         if (_external is not null)
         {
-            _target = _external.Start(DataDir);
-            if (_external.FindWindow is not null) _targetWindow = _external.FindWindow(Automation, _target);
-            else if (_external.FindWindowWin32 is not null) TargetHandle = _external.FindWindowWin32(_target);
-            else throw new InvalidOperationException("ExternalTarget has neither FindWindow nor FindWindowWin32");
-            return;
+            for (var attempt = 1; ; attempt++)
+            {
+                // The second attempt uses a fresh folder, so a profile still locked by the killed process cannot block it.
+                var dir = attempt == 1 ? DataDir : Directory.CreateDirectory(Path.Combine(DataDir, "retry")).FullName;
+                _target = _external.Start(dir);
+                try
+                {
+                    if (_external.FindWindow is not null) _targetWindow = _external.FindWindow(Automation, _target);
+                    else if (_external.FindWindowWin32 is not null) TargetHandle = _external.FindWindowWin32(_target);
+                    else throw new InvalidOperationException("ExternalTarget has neither FindWindow nor FindWindowWin32");
+                    return;
+                }
+                catch (TimeoutException ex) when (attempt == 1)
+                {
+                    // A browser on the CI runner now and then never shows its window (Chrome once waited 40 s for
+                    // nothing): close it and start it once more instead of failing the test before it began.
+                    Console.Error.WriteLine($"target window did not appear ({ex.Message}); starting the target again");
+                    Kill(_target);
+                    _target = null;
+                    SelectionApps.CloseLeftovers();
+                }
+            }
         }
         _target = Process.Start(new ProcessStartInfo(ExeLocator.Target()) { UseShellExecute = false })
                   ?? throw new InvalidOperationException("target window did not start");

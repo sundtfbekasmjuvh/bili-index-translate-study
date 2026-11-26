@@ -73,8 +73,12 @@ public class BaselineTests
             _out.WriteLine($"  miss: first partial text  {F(firstPartial)}" + (firstPartial is null ? " (none seen)" : ""));
             _out.WriteLine($"  miss: final text          {F(final)}");
             _out.WriteLine($"  hit (n={hits.Count}): min {F(min)}  median {F(median)}  max {F(max)}");
-            _out.WriteLine("  Note: the card is triggered by the UIA text-selection-changed event (injected keys are ignored by the keyboard hook),");
+            _out.WriteLine("  Note: Ctrl+A triggers through the keyboard hook (key-up, 280 ms) and the UIA selection event (320 ms), whichever comes last,");
             _out.WriteLine("  and the mock's segment delay (3 segments, 400 ms apart) dominates the final time on a miss.");
+            _out.WriteLine("  App log (probe, card window, first text, translation):");
+            foreach (var line in ui.DiagnosticsLog().Split('\n').Select(l => l.TrimEnd('\r'))
+                         .Where(l => l.Contains(" probe ", StringComparison.Ordinal) || l.Contains(" render ", StringComparison.Ordinal) || l.Contains(" translate ", StringComparison.Ordinal)))
+                _out.WriteLine("    " + line);
 
             WriteJson("latency", new
             {
