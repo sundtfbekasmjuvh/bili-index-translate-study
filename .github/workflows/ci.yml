@@ -105,6 +105,14 @@ jobs:
       - name: Restore
         run: dotnet restore BiliIndexTranslate.sln
 
+      # Known vulnerabilities in direct or transitive NuGet packages fail the build (advisories from nuget.org).
+      - name: Check for vulnerable packages
+        run: |
+          $out = @(dotnet list BiliIndexTranslate.sln package --vulnerable --include-transitive 2>&1)
+          $out | ForEach-Object { Write-Host $_ }
+          if ($LASTEXITCODE -ne 0) { throw "dotnet list package --vulnerable failed with exit code $LASTEXITCODE" }
+          if ($out -match "has the following vulnerable packages") { throw "Vulnerable NuGet packages found (see the list above)" }
+
       - name: Build
         run: dotnet build BiliIndexTranslate.sln -c Release --no-restore -warnaserror
 
