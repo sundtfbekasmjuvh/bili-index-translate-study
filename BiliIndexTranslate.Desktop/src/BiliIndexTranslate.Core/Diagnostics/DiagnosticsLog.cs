@@ -30,7 +30,7 @@ public sealed class DiagnosticsLog
 
     public DiagnosticsLog(int capacity = 300)
     {
-        if (capacity < 1) throw new ArgumentOutOfRangeException(nameof(capacity));
+        ArgumentOutOfRangeException.ThrowIfLessThan(capacity, 1);
         _buffer = new DiagnosticEntry[capacity];
     }
 
@@ -86,7 +86,7 @@ public sealed class DiagnosticsLog
         {
             uint h = 2166136261;
             foreach (var ch in text) { h ^= ch; h *= 16777619; }
-            return h.ToString("x8");
+            return h.ToString("x8", System.Globalization.CultureInfo.InvariantCulture);
         }
     }
 }

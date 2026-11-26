@@ -147,7 +147,7 @@ public class UpdateErrorTextTests
     {
         Assert.Equal("IOException", UpdateErrorText.Describe(new IOException("")));
         var long_ = UpdateErrorText.Scrub(new string('x', 500));
-        Assert.True(long_.Length <= 121, long_.Length.ToString());
+        Assert.True(long_.Length <= 121, long_.Length.ToString(System.Globalization.CultureInfo.InvariantCulture));
         Assert.EndsWith("…", long_);
         Assert.Equal("a b c", UpdateErrorText.Scrub(" a\r\n b\tc "));
         Assert.Equal(string.Empty, UpdateErrorText.Scrub(null));
@@ -162,6 +162,7 @@ public class AutoCheckForUpdatesSettingTests : IDisposable
     public void Dispose()
     {
         try { Directory.Delete(_dir, true); } catch { }
+        GC.SuppressFinalize(this);
     }
 
     [Fact]

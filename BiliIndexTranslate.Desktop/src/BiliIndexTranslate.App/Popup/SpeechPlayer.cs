@@ -59,7 +59,8 @@ internal sealed class SpeechPlayer : IDisposable
                 BindingFlags.InvokeMethod,
                 binder: null,
                 target: _voice,
-                args: new object[] { ssml, SvsFlagsAsync | SvsfPurgeBeforeSpeak | SvsfIsXml });
+                args: new object[] { ssml, SvsFlagsAsync | SvsfPurgeBeforeSpeak | SvsfIsXml },
+                culture: System.Globalization.CultureInfo.CurrentCulture); // same as the former implicit null (current culture)
             return true;
         }
         catch (Exception ex)
@@ -75,7 +76,8 @@ internal sealed class SpeechPlayer : IDisposable
                         BindingFlags.InvokeMethod,
                         binder: null,
                         target: _voice,
-                        args: new object[] { text.Trim(), SvsFlagsAsync | SvsfPurgeBeforeSpeak });
+                        args: new object[] { text.Trim(), SvsFlagsAsync | SvsfPurgeBeforeSpeak },
+                        culture: System.Globalization.CultureInfo.CurrentCulture); // same as the former implicit null (current culture)
                     return true;
                 }
             }
@@ -98,7 +100,8 @@ internal sealed class SpeechPlayer : IDisposable
                 BindingFlags.InvokeMethod,
                 binder: null,
                 target: _voice,
-                args: new object[] { string.Empty, SvsfPurgeBeforeSpeak });
+                args: new object[] { string.Empty, SvsfPurgeBeforeSpeak },
+                culture: System.Globalization.CultureInfo.CurrentCulture); // same as the former implicit null (current culture)
         }
         catch (Exception)
         {

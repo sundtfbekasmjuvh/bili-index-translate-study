@@ -47,9 +47,9 @@ public partial class DiagnosticsWindow : Window
         var all = _timings.All();
         if (all.Count == 0) return Loc.T("Diag_NoSamples");
         var sb = new StringBuilder();
-        sb.AppendLine($"{"category",-9} {"n",5} {"p50",8} {"p95",8} {"max",8} {"last",8}");
+        sb.AppendLine(System.Globalization.CultureInfo.CurrentCulture, $"{"category",-9} {"n",5} {"p50",8} {"p95",8} {"max",8} {"last",8}");
         foreach (var t in all)
-            sb.AppendLine($"{t.Category,-9} {t.Count,5} {t.P50,8:0.0} {t.P95,8:0.0} {t.Max,8:0.0} {t.Last,8:0.0}");
+            sb.AppendLine(System.Globalization.CultureInfo.CurrentCulture, $"{t.Category,-9} {t.Count,5} {t.P50,8:0.0} {t.P95,8:0.0} {t.Max,8:0.0} {t.Last,8:0.0}");
         return sb.ToString().TrimEnd();
     }
 

@@ -1,0 +1,3 @@
+root = true
+
+# Rule tuning for the whole solution. Analysis level and warnings-as-errors live in Directory.Build.props.

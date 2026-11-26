@@ -233,11 +233,11 @@ internal static class NativeMethods
     [DllImport("user32.dll", SetLastError = true)] public static extern bool UnregisterHotKey(IntPtr hWnd, int id);
     [DllImport("user32.dll")] public static extern short GetAsyncKeyState(int vKey);
     [DllImport("user32.dll")] public static extern short GetKeyState(int nVirtKey);
-    [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetClassNameW(IntPtr hWnd, StringBuilder lpClassName, int nMaxCount);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetClassNameW(IntPtr hWnd, char[] lpClassName, int nMaxCount);
     [DllImport("user32.dll")] public static extern IntPtr WindowFromPoint(POINT point);
     [DllImport("kernel32.dll", SetLastError = true)] public static extern IntPtr OpenProcess(uint dwDesiredAccess, bool bInheritHandle, uint dwProcessId);
     [DllImport("kernel32.dll", SetLastError = true)] public static extern bool CloseHandle(IntPtr hObject);
-    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)] public static extern bool QueryFullProcessImageNameW(IntPtr hProcess, uint dwFlags, StringBuilder lpExeName, ref int lpdwSize);
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)] public static extern bool QueryFullProcessImageNameW(IntPtr hProcess, uint dwFlags, char[] lpExeName, ref int lpdwSize);
     [DllImport("kernel32.dll")] public static extern IntPtr LocalFree(IntPtr hMem);
     [DllImport("crypt32.dll", CharSet = CharSet.Unicode, SetLastError = true)] public static extern bool CryptProtectData(ref DATA_BLOB pDataIn, string? szDataDescr, IntPtr pOptionalEntropy, IntPtr pvReserved, IntPtr pPromptStruct, int dwFlags, out DATA_BLOB pDataOut);
     [DllImport("crypt32.dll", CharSet = CharSet.Unicode, SetLastError = true)] public static extern bool CryptUnprotectData(ref DATA_BLOB pDataIn, IntPtr ppszDataDescr, IntPtr pOptionalEntropy, IntPtr pvReserved, IntPtr pPromptStruct, int dwFlags, out DATA_BLOB pDataOut);
@@ -247,14 +247,15 @@ internal static class NativeMethods
     public static int ProcessIdOf(IntPtr hwnd)
     {
         if (hwnd == IntPtr.Zero) return 0;
-        GetWindowThreadProcessId(hwnd, out var pid);
+        _ = GetWindowThreadProcessId(hwnd, out var pid); // returns the thread id, which is not needed here
         return (int)pid;
     }
 
     public static string ClassNameOf(IntPtr hwnd)
     {
-        var sb = new StringBuilder(256);
-        return GetClassNameW(hwnd, sb, sb.Capacity) > 0 ? sb.ToString() : string.Empty;
+        var buffer = new char[256];
+        var length = GetClassNameW(hwnd, buffer, buffer.Length);
+        return length > 0 ? new string(buffer, 0, Math.Min(length, buffer.Length)) : string.Empty;
     }
 
     public static int HiWord(IntPtr value) => unchecked((short)((long)value >> 16));

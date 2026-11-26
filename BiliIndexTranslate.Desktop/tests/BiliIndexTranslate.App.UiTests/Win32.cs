@@ -1,6 +1,5 @@
 using System.Drawing;
 using System.Runtime.InteropServices;
-using System.Text;
 
 namespace BiliIndexTranslate.App.UiTests;
 
@@ -18,8 +17,8 @@ public static class Win32
     [DllImport("user32.dll")] private static extern bool EnumWindows(EnumProc proc, IntPtr lParam);
     [DllImport("user32.dll")] private static extern bool EnumChildWindows(IntPtr parent, EnumProc proc, IntPtr lParam);
     [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint pid);
-    [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern int GetWindowText(IntPtr hwnd, StringBuilder text, int max);
-    [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern int GetClassName(IntPtr hwnd, StringBuilder text, int max);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern int GetWindowText(IntPtr hwnd, char[] text, int max);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern int GetClassName(IntPtr hwnd, char[] text, int max);
     [DllImport("user32.dll")] private static extern bool IsWindowVisible(IntPtr hwnd);
     [DllImport("user32.dll")] private static extern bool GetWindowRect(IntPtr hwnd, out Rect rect);
     [DllImport("user32.dll")] private static extern uint GetDpiForWindow(IntPtr hwnd);
@@ -31,7 +30,7 @@ public static class Win32
         var result = new List<IntPtr>();
         EnumWindows((h, _) =>
         {
-            GetWindowThreadProcessId(h, out var owner);
+            var threadId = GetWindowThreadProcessId(h, out var owner); // the lambda parameter is named _, so the result is kept in a local; thread id unused
             if (owner == (uint)pid && (!visibleOnly || IsWindowVisible(h))) result.Add(h);
             return true;
         }, IntPtr.Zero);
@@ -40,16 +39,16 @@ public static class Win32
 
     public static string Title(IntPtr hwnd)
     {
-        var sb = new StringBuilder(512);
-        GetWindowText(hwnd, sb, sb.Capacity);
-        return sb.ToString();
+        var buffer = new char[512];
+        var length = GetWindowText(hwnd, buffer, buffer.Length);
+        return length > 0 ? new string(buffer, 0, Math.Min(length, buffer.Length)) : string.Empty;
     }
 
     public static string ClassName(IntPtr hwnd)
     {
-        var sb = new StringBuilder(256);
-        GetClassName(hwnd, sb, sb.Capacity);
-        return sb.ToString();
+        var buffer = new char[256];
+        var length = GetClassName(hwnd, buffer, buffer.Length);
+        return length > 0 ? new string(buffer, 0, Math.Min(length, buffer.Length)) : string.Empty;
     }
 
     /// <summary>First visible top-level window (any process) whose title contains the text, or zero.</summary>
@@ -132,7 +131,7 @@ public static class Win32
             if (!IsWindowVisible(h)) return true;
             var title = Title(h);
             if (!prefixes.Any(p => title.StartsWith(p, StringComparison.Ordinal))) return true;
-            GetWindowThreadProcessId(h, out var pid);
+            var threadId = GetWindowThreadProcessId(h, out var pid); // the lambda parameter is named _, so the result is kept in a local; thread id unused
             if (pid != (uint)Environment.ProcessId) pids.Add(pid);
             return true;
         }, IntPtr.Zero);

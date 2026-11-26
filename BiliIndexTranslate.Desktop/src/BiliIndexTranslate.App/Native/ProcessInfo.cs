@@ -1,5 +1,4 @@
 using System.IO;
-using System.Text;
 
 namespace BiliIndexTranslate.App.Native;
 
@@ -38,10 +37,10 @@ internal static class ProcessInfo
         {
             try
             {
-                var sb = new StringBuilder(1024);
-                var size = sb.Capacity;
-                if (NativeMethods.QueryFullProcessImageNameW(handle, 0, sb, ref size))
-                    return Path.GetFileNameWithoutExtension(sb.ToString(0, size));
+                var buffer = new char[1024];
+                var size = buffer.Length;
+                if (NativeMethods.QueryFullProcessImageNameW(handle, 0, buffer, ref size))
+                    return Path.GetFileNameWithoutExtension(new string(buffer, 0, size));
             }
             finally { NativeMethods.CloseHandle(handle); }
         }

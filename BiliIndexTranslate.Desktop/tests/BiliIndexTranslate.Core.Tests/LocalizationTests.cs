@@ -96,7 +96,7 @@ public class UiTextTests
         var dir = AppSourceDirectory();
         Assert.True(Directory.Exists(dir), "app sources not found at " + dir);
         var files = Directory.EnumerateFiles(dir, "*.*", SearchOption.AllDirectories)
-            .Where(f => (f.EndsWith(".xaml") || f.EndsWith(".cs")) && !f.Contains(Path.DirectorySeparatorChar + "obj" + Path.DirectorySeparatorChar) && !f.Contains(Path.DirectorySeparatorChar + "bin" + Path.DirectorySeparatorChar))
+            .Where(f => (f.EndsWith(".xaml", StringComparison.Ordinal) || f.EndsWith(".cs", StringComparison.Ordinal)) && !f.Contains(Path.DirectorySeparatorChar + "obj" + Path.DirectorySeparatorChar) && !f.Contains(Path.DirectorySeparatorChar + "bin" + Path.DirectorySeparatorChar))
             .ToList();
         Assert.NotEmpty(files);
 
@@ -107,7 +107,7 @@ public class UiTextTests
         foreach (var file in files)
         {
             var text = File.ReadAllText(file);
-            foreach (Match m in (file.EndsWith(".xaml") ? inXaml : inCode).Matches(text)) used.Add(m.Groups[1].Value);
+            foreach (Match m in (file.EndsWith(".xaml", StringComparison.Ordinal) ? inXaml : inCode).Matches(text)) used.Add(m.Groups[1].Value);
         }
 
         Assert.True(used.Count > 100, "expected the app to use well over 100 keys, found " + used.Count);
@@ -124,6 +124,7 @@ public class UiLanguageSettingTests : IDisposable
     public void Dispose()
     {
         try { Directory.Delete(_dir, true); } catch { }
+        GC.SuppressFinalize(this);
     }
 
     [Fact]

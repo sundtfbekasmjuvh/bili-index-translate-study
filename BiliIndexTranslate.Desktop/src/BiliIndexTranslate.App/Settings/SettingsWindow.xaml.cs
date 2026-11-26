@@ -15,6 +15,8 @@ namespace BiliIndexTranslate.App.Settings;
 /// <summary>What the Settings window needs for its update section: whether this build can update, its version, and the manual check.</summary>
 public sealed record SettingsUpdateInfo(bool Supported, string VersionText, Func<Task<UpdateCheckOutcome>> CheckNow);
 
+[System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1001:Types that own disposable fields should be disposable",
+    Justification = "WPF Window is not IDisposable; _testCts is only cancelled on close (existing lifetime, kept unchanged) and its 20 s timer expires on its own.")]
 public partial class SettingsWindow : Window
 {
     private readonly SettingsUpdateInfo _updates;

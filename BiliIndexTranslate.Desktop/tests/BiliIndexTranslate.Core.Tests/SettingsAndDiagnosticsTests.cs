@@ -11,7 +11,7 @@ internal sealed class ReversibleProtector : ISecretProtector
     public string Scheme => "test";
     public string Protect(string plain) => "enc:" + Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(plain));
     public string? Unprotect(string protectedValue)
-        => protectedValue.StartsWith("enc:") ? System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(protectedValue[4..])) : null;
+        => protectedValue.StartsWith("enc:", StringComparison.Ordinal) ? System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(protectedValue[4..])) : null;
 }
 
 public class SettingsStoreTests : IDisposable
@@ -22,6 +22,7 @@ public class SettingsStoreTests : IDisposable
     public void Dispose()
     {
         try { Directory.Delete(_dir, true); } catch { }
+        GC.SuppressFinalize(this);
     }
 
     [Fact]

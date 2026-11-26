@@ -21,6 +21,8 @@ namespace BiliIndexTranslate.App.Popup;
 /// surgical SSE progressive rendering, 0.7x slow shadowing TTS, clickable collocation speech,
 /// context-highlighted examples, compact/detailed view toggle, and one-click study note copy.
 /// </summary>
+[System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1001:Types that own disposable fields should be disposable",
+    Justification = "WPF Window is not IDisposable; _speech is disposed exactly once in OnClosed.")]
 public partial class StudyCardWindow : Window, IPopupSurface
 {
     public const double ShadowMarginLogical = 14;

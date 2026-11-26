@@ -21,7 +21,7 @@ public static partial class UiText
         // Only {n} is a placeholder, so text such as {apiKey} can appear literally.
         return Placeholder().Replace(template, m =>
         {
-            var i = int.Parse(m.Groups[1].Value);
+            var i = int.Parse(m.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture);
             return i < args.Length ? Convert.ToString(args[i], System.Globalization.CultureInfo.InvariantCulture) ?? string.Empty : m.Value;
         });
     }
