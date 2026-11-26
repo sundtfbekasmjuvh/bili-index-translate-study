@@ -21,7 +21,7 @@
             CornerRadius="8"
             MinWidth="88">
       <Border.Effect>
-        <DropShadowEffect x:Name="Shadow" BlurRadius="16" ShadowDepth="2" Direction="270" Opacity="0.16" Color="Black" />
+        <DropShadowEffect x:Name="Shadow" BlurRadius="16" ShadowDepth="2" Direction="270" Opacity="{DynamicResource Popup.ShadowOpacity}" Color="{DynamicResource Popup.ShadowColor}" />
       </Border.Effect>
 
       <Grid x:Name="CardGrid" Margin="14,10,14,8">
@@ -44,7 +44,8 @@
             <TextBlock Text="&#xE7BA;" FontFamily="{StaticResource Icon.FontFamily}" FontSize="12" Foreground="{DynamicResource Popup.Error}" VerticalAlignment="Center" Margin="0,1,6,0" />
             <TextBlock x:Name="ErrorTitle" Text="{loc:Tr Popup_Failed}" Foreground="{DynamicResource Popup.Error}" FontSize="12.5" FontWeight="SemiBold" VerticalAlignment="Center" />
           </StackPanel>
-          <TextBlock x:Name="ErrorMessage" Foreground="{DynamicResource Popup.Text}" FontSize="12.5" TextWrapping="Wrap" Margin="0,4,0,0" MaxWidth="360" />
+          <TextBlock x:Name="ErrorMessage" Foreground="{DynamicResource Popup.Text}" FontSize="12.5" TextWrapping="Wrap" Margin="0,4,0,0" MaxWidth="360"
+                     AutomationProperties.LiveSetting="Assertive" />
           <TextBlock x:Name="ErrorHint" Foreground="{DynamicResource Popup.TextSecondary}" FontSize="11.5" TextWrapping="Wrap" Margin="0,3,0,0" MaxWidth="360" />
           <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
             <Button x:Name="RetryButton" Style="{StaticResource TextActionButton}" Content="{loc:Tr Common_Retry}" Click="OnRetryClick" />
@@ -58,7 +59,7 @@
                      Foreground="{DynamicResource Popup.Text}"
                      TextWrapping="Wrap"
                      LineStackingStrategy="BlockLineHeight"
-                     AutomationProperties.Name="{loc:Tr Popup_TranslationAria}"
+                     AutomationProperties.HelpText="{loc:Tr Popup_TranslationAria}"
                      AutomationProperties.LiveSetting="Polite" />
         </ScrollViewer>
 

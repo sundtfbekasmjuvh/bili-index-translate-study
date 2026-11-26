@@ -16,7 +16,7 @@
   <SolidColorBrush x:Key="Popup.ScrollThumb" Color="#5A534C" />
   <SolidColorBrush x:Key="Popup.PinnedBorder" Color="#6B4F42" />
   <Color x:Key="Popup.ShadowColor">#000000</Color>
-  <sys:Double xmlns:sys="clr-namespace:System;assembly=System.Runtime" x:Key="Popup.ShadowOpacity">0.45</sys:Double>
+  <sys:Double xmlns:sys="clr-namespace:System;assembly=System.Runtime" x:Key="Popup.ShadowOpacity">0.16</sys:Double>
 
   <SolidColorBrush x:Key="Ui.Background" Color="#232120" />
   <SolidColorBrush x:Key="Ui.Panel" Color="#2B2825" />

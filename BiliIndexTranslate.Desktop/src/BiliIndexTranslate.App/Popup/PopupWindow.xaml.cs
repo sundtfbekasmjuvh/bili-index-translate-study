@@ -1,5 +1,7 @@
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Automation;
+using System.Windows.Automation.Peers;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Interop;
@@ -111,6 +113,7 @@ public partial class PopupWindow : Window, IPopupSurface
         Caption.Text = caption ?? string.Empty;
         CopyButton.IsEnabled = false;
         PinButton.IsEnabled = false;
+        AutomationProperties.SetName(TranslationText, string.Empty);
         StartLoadingPulse();
         ApplyTypography();
     }
@@ -124,9 +127,8 @@ public partial class PopupWindow : Window, IPopupSurface
         CurrentTranslation = partial ? null : translation;
         _layout = ReadingLayoutClassifier.Classify(hasSource ? snapshot.Text : translation, translation);
         TranslationText.Text = translation;
-        // The element's UIA Name is the fixed label "Translation", so the text itself is not readable by
-        // UI Automation clients (the UI tests); expose it as help text.
-        System.Windows.Automation.AutomationProperties.SetHelpText(TranslationText, translation);
+        // The element's UIA Name is the translation itself (what a screen reader reads); the label "Translation" is its HelpText (XAML).
+        AutomationProperties.SetName(TranslationText, translation);
         OriginalText.Text = hasSource ? snapshot.Text.Trim() : string.Empty;
         LoadingPanel.Visibility = Visibility.Collapsed;
         ErrorPanel.Visibility = Visibility.Collapsed;
@@ -141,6 +143,19 @@ public partial class PopupWindow : Window, IPopupSurface
             ? Visibility.Visible
             : Visibility.Collapsed;
         ApplyTypography();
+        // Screen readers hear only the finished translation, never each streamed partial.
+        if (!partial) RaiseLiveRegionChanged(TranslationText);
+    }
+
+    /// <summary>
+    /// Tells UI Automation clients (screen readers) that a live-region element changed. The card never takes focus, so
+    /// without this event the LiveSetting alone makes nothing announce. Only when a client listens, to avoid creating peers for nothing.
+    /// </summary>
+    private static void RaiseLiveRegionChanged(UIElement element)
+    {
+        if (!AutomationPeer.ListenerExists(AutomationEvents.LiveRegionChanged)) return;
+        var peer = UIElementAutomationPeer.FromElement(element) ?? UIElementAutomationPeer.CreatePeerForElement(element);
+        peer?.RaiseAutomationEvent(AutomationEvents.LiveRegionChanged);
     }
 
     public void ShowError(SelectionSnapshot snapshot, TranslationError error, string? caption)
@@ -172,6 +187,7 @@ public partial class PopupWindow : Window, IPopupSurface
         CopyButton.IsEnabled = false;
         PinButton.IsEnabled = false;
         ApplyTypography();
+        RaiseLiveRegionChanged(ErrorMessage);
     }
 
     public void SetShowOriginal(bool show)

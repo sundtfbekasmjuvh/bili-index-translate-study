@@ -86,6 +86,12 @@ with the caption "local OCR".
 it to the clipboard; the tray shows "Copied N characters" once, or the reason when no text was found.
 It works with any API format and sends no request at all.
 
+## Accessibility
+
+When Windows high contrast is on, the card and the app's windows use the system's high-contrast colors and
+follow the setting while the app runs. Screen readers announce the final translation (and error messages)
+when it appears; text still streaming in is not announced.
+
 ## Settings (tray → Settings…)
 
 * **Reading** – automatic translation, target language (简体中文 / 繁體中文 / English / 日本語 / 한국어),
