@@ -151,10 +151,17 @@ format and Local for DeepLX/Custom; Local → always Local; Cloud → Cloud for 
 `VisionMode` is stored as a name in `settings.json`; `VisionModeJsonConverter` turns a missing, unknown or oddly typed
 value into Auto instead of rejecting the whole file.
 
-`AppHost.BeginVisionCapture` branches on it. Cloud is the old `RunVisionRequestAsync` path. Unsupported shows an error
-card without a request. Local runs `RunLocalVisionAsync` under the same state as the cloud path: `_visionCts` cancels
-it, and `_visionSeq` / `_visionActive` make every `Post` callback drop a result that arrives after the card was closed
-or replaced (`DismissVisionPopup` and the retry key are unchanged). Steps: `WindowsOcr.RecognizeAsync` (PNG data URL →
+This code lives in `App/Vision/VisionController` (moved out of `AppHost` without a change in behaviour). `AppHost`
+creates one in `Start` and calls `IsActive`, `StartSnip`, `StartOcrCopy`, `Begin(capture)`, `RetryLast`, `Dismiss`,
+`Deactivate` (pin), `Reset` (a text card is about to show) and `Dispose`. It gets its dependencies through the
+constructor: the popup, the log, a `Func<AppSettings>`, the vision service, the translator, and the host's `Post`,
+`PostBackground`, session `Dispatch` and tray-notice delegates, so the threading is the host's own. The pure
+`ServiceLabels.ModelLabel` / `HostOf` are in Core.
+
+`VisionController.Begin` branches on it. Cloud is the old `RunVisionRequestAsync` path. Unsupported shows an error
+card without a request. Local runs `RunLocalVisionAsync` under the same state as the cloud path (all held by `VisionController`):
+`_visionCts` cancels it, and `_visionSeq` / `_visionActive` make every `Post` callback drop a result that arrives after
+the card was closed or replaced (`VisionController.Dismiss` and the retry key are unchanged). Steps: `WindowsOcr.RecognizeAsync` (PNG data URL →
 `BitmapDecoder` over an `InMemoryRandomAccessStream` → `SoftwareBitmap`, scaled down in proportion when an edge exceeds
 `OcrEngine.MaxImageDimension` → `OcrEngine.TryCreateFromUserProfileLanguages().RecognizeAsync`) → `OcrText.Join` →
 `OpenAiCompatibleTranslator.TranslateAsync` with `onPartial` through a `LatestValueRelay<string>` (the same text
@@ -167,7 +174,7 @@ for Chinese and Japanese the engine separates words with spaces. A failed engine
 undecodable image or an exception becomes an `EmptyResult` error card (the hint to add an OCR language pack is part of
 the message); exceptions are reported by type name only.
 
-"Recognize screen text and copy" (`StartScreenOcrCopy`) uses the same capture and `WindowsOcr`, has its own
+"Recognize screen text and copy" (`VisionController.StartOcrCopy`) uses the same capture and `WindowsOcr`, has its own
 cancellation token (`_ocrCopyCts`, no popup, no `_visionSeq`), writes the text with `ClipboardFallback.TryWriteText` and
 reports through one tray notice. It never touches the translation transport.
 

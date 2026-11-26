@@ -15,6 +15,7 @@ using BiliIndexTranslate.App.Tracking;
 using BiliIndexTranslate.App.Tray;
 using BiliIndexTranslate.App.Uia;
 using BiliIndexTranslate.App.Updates;
+using BiliIndexTranslate.App.Vision;
 using BiliIndexTranslate.Core.Diagnostics;
 using BiliIndexTranslate.Core.Geometry;
 using BiliIndexTranslate.Core.Selection;
@@ -88,11 +89,7 @@ internal sealed class AppHost : IDisposable
     private string? _lastProcessName;
     private string? _hotkeyError;
     private string? _snipHotkeyError;
-    private CancellationTokenSource? _visionCts;
-    private CancellationTokenSource? _ocrCopyCts;
-    private long _visionSeq;
-    private bool _visionActive;
-    private ScreenSnipCapture? _lastVisionCapture;
+    private VisionController _vision = null!;
 
     private SettingsWindow? _settingsWindow;
     private DiagnosticsWindow? _diagnosticsWindow;
@@ -162,19 +159,30 @@ internal sealed class AppHost : IDisposable
                 return _studyService.GenerateAsync(req, ct, onPartial);
             });
         _popup.Configure(_settings.TextScale, _settings.ShowOriginalByDefault);
+        _vision = new VisionController(
+            _popup,
+            _log,
+            () => _settings,
+            _visionService,
+            _translator,
+            BuildRequest,
+            Post,
+            PostBackground,
+            Dispatch,
+            (title, message, warning) => _tray.ShowNotice(title, message, warning: warning));
         _popup.PinRequested += () =>
         {
-            if (_visionActive) { _visionActive = false; CancelVisionRequest(); _popup.Detach(); return; }
+            if (_vision.IsActive) { _vision.Deactivate(); _popup.Detach(); return; }
             Dispatch(new SessionEvent.UserPinned());
         };
         _popup.CloseRequested += () =>
         {
-            if (_visionActive) { DismissVisionPopup(); return; }
+            if (_vision.IsActive) { _vision.Dismiss(); return; }
             Dispatch(new SessionEvent.UserClosed());
         };
         _popup.RetryRequested += () =>
         {
-            if (_visionActive && _lastVisionCapture is { } cap) { BeginVisionCapture(cap); return; }
+            if (_vision.RetryLast()) return;
             Dispatch(new SessionEvent.UserRetry());
         };
         _popup.SettingsRequested += OpenSettings;
@@ -209,8 +217,8 @@ internal sealed class AppHost : IDisposable
         _tray.IsAppExcluded = name => _settings.IsProcessExcluded(name);
         _tray.AutoTranslateToggled += enabled => { if (_settings.AutoTranslate != enabled) { _settings.AutoTranslate = enabled; ApplySettings(_settings, notifySession: true); } };
         _tray.ExcludeAppToggled += (name, excluded) => { _settings.SetProcessExcluded(name, excluded); ApplySettings(_settings, notifySession: excluded); _log.Info("settings", $"{name}: {(excluded ? "excluded" : "included")}"); };
-        _tray.SnipRegionRequested += StartScreenSnipAndTranslate;
-        _tray.OcrCopyRequested += StartScreenOcrCopy;
+        _tray.SnipRegionRequested += _vision.StartSnip;
+        _tray.OcrCopyRequested += _vision.StartOcrCopy;
         _tray.TranslateClipboardRequested += TranslateClipboard;
         _tray.SettingsRequested += OpenSettings;
         _tray.DiagnosticsRequested += OpenDiagnostics;
@@ -305,9 +313,7 @@ internal sealed class AppHost : IDisposable
                     _timings.Record(TimingCategory.Detect, Stopwatch.GetElapsedTime(_triggerTimestamp).TotalMilliseconds);
                     _triggerTimestamp = 0;
                 }
-                _visionActive = false;
-                _lastVisionCapture = null;
-                CancelVisionRequest();
+                _vision.Reset();
                 _popup.ShowLoading(s.Snapshot, Caption(s.Snapshot, null, false));
                 break;
 
@@ -624,7 +630,7 @@ internal sealed class AppHost : IDisposable
                 if (!_popup.HitTest(e.Point))
                 {
                     if (_popup.IsStudyVisible) _popup.HideStudy();
-                    if (_visionActive) { DismissVisionPopup(); break; }
+                    if (_vision.IsActive) { _vision.Dismiss(); break; }
                     if (_popup.IsVisible) Dispatch(new SessionEvent.OutsideClick());
                 }
                 break;
@@ -644,7 +650,7 @@ internal sealed class AppHost : IDisposable
 
             case InputSignal.Escape:
                 if (_popup.IsStudyVisible) _popup.HideStudy();
-                if (_visionActive) { DismissVisionPopup(); break; }
+                if (_vision.IsActive) { _vision.Dismiss(); break; }
                 Dispatch(new SessionEvent.EscapePressed());
                 break;
 
@@ -658,7 +664,7 @@ internal sealed class AppHost : IDisposable
 
             case InputSignal.SnipHotkey:
                 if (!_settings.SnipHotkeyEnabled) return;
-                StartScreenSnipAndTranslate();
+                _vision.StartSnip();
                 break;
         }
     }
@@ -695,376 +701,11 @@ internal sealed class AppHost : IDisposable
         {
             NativeMethods.GetCursorPos(out var pt);
             var anchorBox = new PxRect(pt.X - 24, pt.Y - 12, pt.X + 24, pt.Y + 12);
-            BeginVisionCapture(new ScreenSnipCapture(imgDataUrl, anchorBox));
+            _vision.Begin(new ScreenSnipCapture(imgDataUrl, anchorBox));
             return;
         }
 
         _tray.ShowNotice("Bili Index Translate", Loc.T("App_ClipboardEmpty"));
-    }
-
-    // ---- Zero-OCR Vision Screen Snip --------------------------------------------------------------
-
-    private void StartScreenSnipAndTranslate()
-    {
-        if (ScreenSnipOverlay.IsActive) return;
-
-        if (_popup.IsVisible) Dispatch(new SessionEvent.UserClosed());
-        DismissVisionPopup();
-
-        var capture = ScreenSnipOverlay.CaptureInteractive(message => _log.Info("snip", message));
-        if (capture is not { } cap || string.IsNullOrWhiteSpace(cap.DataUrl))
-            return;
-
-        BeginVisionCapture(cap);
-    }
-
-    private void BeginVisionCapture(ScreenSnipCapture capture)
-    {
-        CancelVisionRequest();
-        if (_popup.IsVisible && !_visionActive)
-            Dispatch(new SessionEvent.UserClosed());
-
-        _visionActive = true;
-        _lastVisionCapture = capture;
-
-        var anchor = new AnchorRect(capture.ScreenRect, capture.ScreenRect, 1, Math.Max(20, capture.ScreenRect.Height));
-        var snapshot = new SelectionSnapshot(
-            string.Empty,
-            anchor,
-            0,
-            Environment.ProcessId,
-            "ScreenSnip",
-            EditableKind.NotEditable,
-            SelectionOrigin.ScreenSnip,
-            0);
-
-        var route = VisionRouting.Decide(_settings.VisionMode, _settings.ApiFormat);
-        if (route == VisionRoute.Unsupported)
-        {
-            // Cloud-only mode with a DeepLX or custom endpoint: nothing is sent; say what to change.
-            _visionSeq++;
-            var unsupported = DeeplxProtocol.Unsupported("Image translation", _settings.UseRelay ? RequestRoute.Relay : RequestRoute.Direct, _settings.ApiFormat);
-            _log.Warn("vision", $"unsupported: mode={_settings.VisionMode} format={_settings.ApiFormat}");
-            _popup.ShowError(snapshot, unsupported with { Message = unsupported.Message + " " + Loc.T("Vision_CloudUnsupportedHint") }, null);
-            return;
-        }
-
-        if (route == VisionRoute.Local)
-        {
-            var localSeq = ++_visionSeq;
-            var localCts = new CancellationTokenSource();
-            _visionCts = localCts;
-            _popup.ShowLoading(snapshot, Loc.T("Vision_LoadingLocal"));
-            _ = RunLocalVisionAsync(localSeq, snapshot, capture.DataUrl, _settings.Clone(), localCts);
-            return;
-        }
-
-        var target = _settings.ResolvedTargetLanguage;
-        var visionModel = VisionPromptBuilder.ResolveVisionModel(_settings.VisionModel);
-        _popup.ShowLoading(snapshot, Loc.T("Vision_Loading", visionModel));
-
-        var req = new ImageTranslationRequest(
-            capture.DataUrl,
-            target.Code,
-            target.PromptName,
-            visionModel,
-            _settings.BaseUrl,
-            _settings.UseRelay,
-            _settings.RelayPrefix,
-            _settings.ApiKey,
-            _settings.GlossaryText,
-            _settings.ApiFormat);
-
-        var seq = ++_visionSeq;
-        var cts = new CancellationTokenSource();
-        _visionCts = cts;
-        _ = RunVisionRequestAsync(seq, snapshot, req, cts);
-    }
-
-    private async Task RunVisionRequestAsync(
-        long seq,
-        SelectionSnapshot baseSnapshot,
-        ImageTranslationRequest req,
-        CancellationTokenSource cts)
-    {
-        ImageTranslationResult? ok = null;
-        TranslationError? error = null;
-
-        // Deltas arrive faster than the popup can be laid out and placed. The popup is given the newest
-        // one after the pending rendering and input have been handled, and the ones in between are skipped.
-        var live = new LatestValueRelay<ImageTranslationDelta>(
-            deliver =>
-            {
-                if (!_disposed) _dispatcher.BeginInvoke(DispatcherPriority.Background, deliver);
-            },
-            delta =>
-            {
-                if (seq != _visionSeq || !_visionActive) return;
-                var liveSnap = string.IsNullOrWhiteSpace(delta.ExtractedSourceText)
-                    ? baseSnapshot
-                    : baseSnapshot with { Text = delta.ExtractedSourceText };
-                _popup.ShowVisionTranslation(liveSnap, delta.Translation, Loc.T("Vision_Streaming", delta.Model));
-            });
-
-        try
-        {
-            ok = await _visionService.TranslateImageAsync(
-                req,
-                cts.Token,
-                delta =>
-                {
-                    if (!cts.IsCancellationRequested) live.Offer(delta);
-                }).ConfigureAwait(false);
-        }
-        catch (TranslationException ex)
-        {
-            error = ex.Error;
-        }
-        catch (OperationCanceledException)
-        {
-            return;
-        }
-        catch (Exception ex)
-        {
-            error = new TranslationError(TranslationErrorKind.Network, Loc.T("App_UnexpectedVisionError", ex.GetType().Name), RequestRoute.Direct);
-        }
-
-        if (cts.IsCancellationRequested) return;
-
-        Post(() =>
-        {
-            // The result below is final; a delta that is still waiting must not be drawn over it.
-            live.Clear();
-            if (seq != _visionSeq || !_visionActive) return;
-
-            if (ok is not null)
-            {
-                _log.Info("vision", $"ok via {ok.Route} {ok.ElapsedMs:0} ms ({ok.Model}), srcChars={ok.ExtractedSourceText.Length}");
-                var finalSnap = baseSnapshot with { Text = ok.ExtractedSourceText };
-                var glossaryPart = ok.GlossaryHitCount > 0 ? " · " + Loc.T("Caption_Glossary", ok.GlossaryHitCount) : string.Empty;
-                var speedPart = ok.IsCached ? " · " + Loc.T("Caption_Instant") : $" · {ok.Route.ToString().ToLowerInvariant()}";
-                _popup.ShowVisionTranslation(finalSnap, ok.Translation, $"{ok.Model} · {Loc.T("Vision_Tag")}{glossaryPart}{speedPart}");
-            }
-            else if (error is not null && error.Kind != TranslationErrorKind.Cancelled)
-            {
-                _log.Warn("vision", $"fail {error}");
-                _popup.ShowError(baseSnapshot, error, error.Route == RequestRoute.Relay ? "relay" : null);
-            }
-        });
-    }
-
-    // ---- Local OCR: read the image on this PC, then translate the recognized text -------------------
-
-    /// <summary>
-    /// Same lifecycle as <see cref="RunVisionRequestAsync"/>: the token in <see cref="_visionCts"/> cancels it, and
-    /// <see cref="_visionSeq"/> / <see cref="_visionActive"/> discard whatever finishes after the card was closed or replaced.
-    /// The screenshot never leaves the process; only the recognized text goes to the translation service.
-    /// </summary>
-    private async Task RunLocalVisionAsync(
-        long seq,
-        SelectionSnapshot baseSnapshot,
-        string dataUrl,
-        AppSettings s,
-        CancellationTokenSource cts)
-    {
-        OcrOutcome ocr;
-        try
-        {
-            ocr = await Task.Run(() => WindowsOcr.RecognizeAsync(dataUrl, cts.Token), cts.Token).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException)
-        {
-            return;
-        }
-        catch (Exception ex)
-        {
-            ocr = new OcrOutcome(string.Empty, OcrFailure.Error, ex.GetType().Name);
-        }
-
-        if (cts.IsCancellationRequested) return;
-
-        if (!ocr.IsSuccess)
-        {
-            Post(() =>
-            {
-                if (seq != _visionSeq || !_visionActive) return;
-                _log.Warn("vision", $"local OCR failed: {ocr.Failure} {ocr.Detail}");
-                _popup.ShowError(baseSnapshot, OcrError(ocr), null);
-            });
-            return;
-        }
-
-        var srcSnap = baseSnapshot with { Text = ocr.Text };
-        var modelLabel = ModelLabel(s);
-        var captionStreaming = Loc.T("Vision_LocalStreaming", modelLabel);
-
-        Post(() =>
-        {
-            if (seq != _visionSeq || !_visionActive) return;
-            _log.Info("vision", $"local OCR ok, chars={ocr.Text.Length}");
-            _popup.ShowLoading(srcSnap, Loc.T("Vision_LocalTranslating", modelLabel));
-        });
-
-        var live = new LatestValueRelay<string>(
-            deliver =>
-            {
-                if (!_disposed) _dispatcher.BeginInvoke(DispatcherPriority.Background, deliver);
-            },
-            partial =>
-            {
-                if (seq != _visionSeq || !_visionActive) return;
-                _popup.ShowVisionTranslation(srcSnap, partial, captionStreaming);
-            });
-
-        TranslationResult? ok = null;
-        TranslationError? error = null;
-        try
-        {
-            ok = await _translator.TranslateAsync(
-                BuildRequest(ocr.Text, s),
-                cts.Token,
-                partial =>
-                {
-                    if (!cts.IsCancellationRequested) live.Offer(partial);
-                }).ConfigureAwait(false);
-        }
-        catch (TranslationException ex)
-        {
-            error = ex.Error;
-        }
-        catch (OperationCanceledException)
-        {
-            return;
-        }
-        catch (Exception ex)
-        {
-            error = new TranslationError(TranslationErrorKind.Network, Loc.T("App_UnexpectedVisionError", ex.GetType().Name), RequestRoute.Direct);
-        }
-
-        if (cts.IsCancellationRequested) return;
-
-        Post(() =>
-        {
-            live.Clear();
-            if (seq != _visionSeq || !_visionActive) return;
-
-            if (ok is not null)
-            {
-                _log.Info("vision", $"local ok via {ok.Route} {ok.ElapsedMs:0} ms ({ok.Model}), srcChars={ocr.Text.Length}");
-                var glossaryPart = ok.GlossaryHitCount > 0 ? " · " + Loc.T("Caption_Glossary", ok.GlossaryHitCount) : string.Empty;
-                _popup.ShowVisionTranslation(srcSnap, ok.Translation, $"{ok.Model} · {Loc.T("Vision_LocalTag")}{glossaryPart} · {ok.Route.ToString().ToLowerInvariant()}");
-            }
-            else if (error is not null && error.Kind != TranslationErrorKind.Cancelled)
-            {
-                _log.Warn("vision", $"local fail {error}");
-                _popup.ShowError(srcSnap, error, error.Route == RequestRoute.Relay ? "relay" : null);
-            }
-        });
-    }
-
-    private static string ModelLabel(AppSettings s) => s.ApiFormat switch
-    {
-        ApiFormat.Deeplx => DeeplxProtocol.ModelLabel,
-        ApiFormat.Custom => s.CustomTemplate.Label,
-        _ => s.Model,
-    };
-
-    private static string OcrFailureMessage(OcrOutcome ocr) => ocr.Failure switch
-    {
-        OcrFailure.EngineUnavailable => Loc.T("Ocr_EngineUnavailable"),
-        OcrFailure.NoText => Loc.T("Ocr_NoText") + " " + Loc.T("Ocr_NoTextHint"),
-        OcrFailure.InvalidImage => Loc.T("Ocr_ImageFailed", ocr.Detail ?? "?"),
-        _ => Loc.T("Ocr_Failed", ocr.Detail ?? "?"),
-    };
-
-    private static TranslationError OcrError(OcrOutcome ocr)
-        => new(TranslationErrorKind.EmptyResult, OcrFailureMessage(ocr), RequestRoute.Direct);
-
-    // ---- Recognize screen text and copy it (local only, no network) ---------------------------------
-
-    private void StartScreenOcrCopy()
-    {
-        if (ScreenSnipOverlay.IsActive) return;
-
-        if (_popup.IsVisible) Dispatch(new SessionEvent.UserClosed());
-        DismissVisionPopup();
-
-        var capture = ScreenSnipOverlay.CaptureInteractive(message => _log.Info("snip", message));
-        if (capture is not { } cap || string.IsNullOrWhiteSpace(cap.DataUrl))
-            return;
-
-        CancelOcrCopy();
-        var cts = new CancellationTokenSource();
-        _ocrCopyCts = cts;
-        _ = RunOcrCopyAsync(cap.DataUrl, cts);
-    }
-
-    private async Task RunOcrCopyAsync(string dataUrl, CancellationTokenSource cts)
-    {
-        OcrOutcome ocr;
-        try
-        {
-            ocr = await Task.Run(() => WindowsOcr.RecognizeAsync(dataUrl, cts.Token), cts.Token).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException)
-        {
-            return;
-        }
-        catch (Exception ex)
-        {
-            ocr = new OcrOutcome(string.Empty, OcrFailure.Error, ex.GetType().Name);
-        }
-
-        if (cts.IsCancellationRequested) return;
-
-        Post(() =>
-        {
-            if (!ReferenceEquals(_ocrCopyCts, cts)) return;
-            var title = Loc.T("Ocr_CopyTitle");
-            if (!ocr.IsSuccess)
-            {
-                _log.Warn("ocr", $"copy: recognition failed: {ocr.Failure} {ocr.Detail}");
-                _tray.ShowNotice(title, OcrFailureMessage(ocr), warning: true);
-                return;
-            }
-
-            var count = ocr.Text.EnumerateRunes().Count();
-            if (ClipboardFallback.TryWriteText(ocr.Text))
-            {
-                _log.Info("ocr", $"copy: ok, chars={count}");
-                _tray.ShowNotice(title, Loc.T("Ocr_Copied", count));
-            }
-            else
-            {
-                _log.Warn("ocr", "copy: clipboard busy");
-                _tray.ShowNotice(title, Loc.T("Ocr_CopyFailed"), warning: true);
-            }
-        });
-    }
-
-    private void CancelOcrCopy()
-    {
-        if (_ocrCopyCts is null) return;
-        try { _ocrCopyCts.Cancel(); } catch (Exception) { }
-        _ocrCopyCts.Dispose();
-        _ocrCopyCts = null;
-    }
-
-    private void DismissVisionPopup()
-    {
-        CancelVisionRequest();
-        _visionSeq++;
-        _visionActive = false;
-        _lastVisionCapture = null;
-        _popup.Hide();
-    }
-
-    private void CancelVisionRequest()
-    {
-        if (_visionCts is null) return;
-        try { _visionCts.Cancel(); } catch (Exception) { }
-        _visionCts.Dispose();
-        _visionCts = null;
     }
 
     private string? CurrentAppName()
@@ -1103,22 +744,11 @@ internal sealed class AppHost : IDisposable
         {
             _studyService.ClearVolatileCache();
             _visionService.ClearVolatileCache();
-            _log.Info("settings", $"service: format={_settings.ApiFormat} target={_settings.TargetLanguage} model={_settings.Model} vision={_settings.VisionModel} relay={_settings.UseRelay} host={HostOf(_settings)}");
+            _log.Info("settings", $"service: format={_settings.ApiFormat} target={_settings.TargetLanguage} model={_settings.Model} vision={_settings.VisionModel} relay={_settings.UseRelay} host={ServiceLabels.HostOf(_settings)}");
         }
         if (notifySession) Dispatch(new SessionEvent.SettingsChanged());
         return saveError;
     }
-
-    /// <summary>What answers the requests: the model, or the name of a format that has no model.</summary>
-    private static string ServiceLabel(AppSettings s) => s.ApiFormat switch
-    {
-        ApiFormat.Deeplx => DeeplxProtocol.ModelLabel,
-        ApiFormat.Custom => s.CustomTemplate.Label,
-        _ => s.Model,
-    };
-
-    private static string HostOf(AppSettings s)
-        => EndpointResolver.TryResolve(s.ApiFormat, s.BaseUrl, s.UseRelay, s.RelayPrefix, s.ApiKey, out var ep, out _) ? ep!.DisplayHost : "(invalid)";
 
     private void ApplyHotkey()
     {
@@ -1262,7 +892,7 @@ internal sealed class AppHost : IDisposable
         sb.Append(System.Globalization.CultureInfo.InvariantCulture, $"v{typeof(AppHost).Assembly.GetName().Version} · {Environment.OSVersion.Version} · .NET {Environment.Version} · ");
         sb.Append(System.Globalization.CultureInfo.InvariantCulture, $"session {_session.State} · hooks {(_hooks.HooksInstalled ? "ok" : "MISSING")} · uia {(_observer.IsAlive ? "ok" : "stopped")} · ");
         sb.Append(System.Globalization.CultureInfo.InvariantCulture, $"cache {_cache.Count} entries, {_cache.Hits} hits / {_cache.Misses} misses · in-flight {_coordinator.ActiveCount} · ");
-        sb.Append(System.Globalization.CultureInfo.InvariantCulture, $"target {_settings.TargetLanguage} · {ServiceLabel(_settings)} · {HostOf(_settings)} · relay {(_settings.UseRelay ? "on" : "off")} · auto {(_settings.AutoTranslate ? "on" : "off")} · delay {_settings.StabilizationDelayMs} ms");
+        sb.Append(System.Globalization.CultureInfo.InvariantCulture, $"target {_settings.TargetLanguage} · {ServiceLabels.ModelLabel(_settings)} · {ServiceLabels.HostOf(_settings)} · relay {(_settings.UseRelay ? "on" : "off")} · auto {(_settings.AutoTranslate ? "on" : "off")} · delay {_settings.StabilizationDelayMs} ms");
         try
         {
             var monitors = new List<string>();
@@ -1320,8 +950,7 @@ internal sealed class AppHost : IDisposable
         _saveTimer.Stop();
         TrySave();
 
-        CancelVisionRequest();
-        CancelOcrCopy();
+        SafeDispose(_vision);
         _studyService.ClearVolatileCache();
         _visionService.ClearVolatileCache();
         _activateWait?.Unregister(null);

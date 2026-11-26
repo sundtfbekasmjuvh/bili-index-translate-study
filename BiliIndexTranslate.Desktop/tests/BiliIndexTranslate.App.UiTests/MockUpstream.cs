@@ -11,12 +11,24 @@ public sealed record RecordedRequest(string Method, string Path, string Body, bo
 /// <summary>
 /// In-process stand-in for the translation service. POST /v1/chat/completions answers with an SSE stream
 /// (three deltas, 400 ms apart, then [DONE]) when the request has "stream": true, otherwise with plain JSON.
+/// A chat request that carries an image (an <c>image_url</c> content part, as the vision service sends it) is answered
+/// in the vision dual-output format instead: <c>〖译文〗</c>translation, then <c>〖原文〗</c>recognized text, in three deltas.
 /// Listens on "localhost", which Windows allows without administrator rights (127.0.0.1 may not).
 /// </summary>
 public sealed class MockUpstream : IDisposable
 {
     public static readonly string[] Segments = ["第一段，", "第二段，", "第三段。"];
     public static string FullText => string.Concat(Segments);
+
+    /// <summary>The recognized source line of the vision answer (what the parser returns as the original text).</summary>
+    public const string VisionSource = "Snipped sample text.";
+
+    /// <summary>The translation of the vision answer (what the card shows).</summary>
+    public const string VisionTranslation = "截图识别译文：你好，世界。";
+
+    /// <summary>The vision answer in three stream deltas; joined it is the dual output <c>VisionPromptBuilder.ParseDualOutput</c> splits.</summary>
+    public static readonly string[] VisionSegments = ["〖译文〗" + VisionTranslation, "\n〖原文〗", VisionSource];
+    public static string VisionFullText => string.Concat(VisionSegments);
 
     private readonly HttpListener _listener = new();
     private readonly ConcurrentQueue<RecordedRequest> _requests = new();
@@ -85,6 +97,7 @@ public sealed class MockUpstream : IDisposable
 
             bool? stream = null;
             string? model = null;
+            var hasImage = false;
             try
             {
                 using var doc = JsonDocument.Parse(body);
@@ -92,6 +105,7 @@ public sealed class MockUpstream : IDisposable
                     stream = s.GetBoolean();
                 if (doc.RootElement.TryGetProperty("model", out var m) && m.ValueKind == JsonValueKind.String)
                     model = m.GetString();
+                hasImage = ContainsImagePart(doc.RootElement);
             }
             catch (JsonException) { }
 
@@ -112,6 +126,7 @@ public sealed class MockUpstream : IDisposable
                 return;
             }
 
+            var segments = hasImage ? VisionSegments : Segments;
             if (stream == true)
             {
                 resp.StatusCode = 200;
@@ -119,10 +134,10 @@ public sealed class MockUpstream : IDisposable
                 resp.SendChunked = true;
                 resp.Headers["Cache-Control"] = "no-cache";
                 var output = resp.OutputStream;
-                for (var i = 0; i < Segments.Length; i++)
+                for (var i = 0; i < segments.Length; i++)
                 {
                     if (i > 0) await Task.Delay(SegmentDelay, _cts.Token).ConfigureAwait(false);
-                    var json = JsonSerializer.Serialize(new { choices = new[] { new { delta = new { content = Segments[i] } } } });
+                    var json = JsonSerializer.Serialize(new { choices = new[] { new { delta = new { content = segments[i] } } } });
                     var bytes = Encoding.UTF8.GetBytes($"data: {json}\n\n");
                     await output.WriteAsync(bytes, _cts.Token).ConfigureAwait(false);
                     await output.FlushAsync(_cts.Token).ConfigureAwait(false);
@@ -134,13 +149,43 @@ public sealed class MockUpstream : IDisposable
                 return;
             }
 
-            var plain = JsonSerializer.Serialize(new { choices = new[] { new { message = new { role = "assistant", content = FullText } } } });
+            var plain = JsonSerializer.Serialize(new { choices = new[] { new { message = new { role = "assistant", content = string.Concat(segments) } } } });
             await WriteAsync(resp, 200, "application/json", plain).ConfigureAwait(false);
         }
         catch (Exception)
         {
             try { ctx.Response.Abort(); } catch (Exception) { }
         }
+    }
+
+    /// <summary>True when a message of the request has a content part of type <c>image_url</c> (the shape of <c>VisionPromptBuilder.BuildRequestJson</c>).</summary>
+    public static bool ContainsImagePart(JsonElement root)
+    {
+        if (!root.TryGetProperty("messages", out var messages) || messages.ValueKind != JsonValueKind.Array) return false;
+        foreach (var message in messages.EnumerateArray())
+        {
+            if (message.ValueKind != JsonValueKind.Object
+                || !message.TryGetProperty("content", out var content)
+                || content.ValueKind != JsonValueKind.Array) continue;
+            foreach (var part in content.EnumerateArray())
+                if (part.ValueKind == JsonValueKind.Object
+                    && part.TryGetProperty("type", out var type)
+                    && type.ValueKind == JsonValueKind.String
+                    && type.GetString() == "image_url")
+                    return true;
+        }
+        return false;
+    }
+
+    /// <summary>True when the recorded chat request body has an <c>image_url</c> content part.</summary>
+    public static bool HasImagePart(RecordedRequest request)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(request.Body);
+            return ContainsImagePart(doc.RootElement);
+        }
+        catch (JsonException) { return false; }
     }
 
     private static async Task WriteAsync(HttpListenerResponse resp, int status, string contentType, string text)
