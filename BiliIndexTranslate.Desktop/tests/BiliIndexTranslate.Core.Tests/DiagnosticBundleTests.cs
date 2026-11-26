@@ -103,7 +103,7 @@ public class PrivacyScrubberTests
 
 public class SettingsRedactorTests
 {
-    private static JsonElement Redact(AppSettings s) => JsonDocument.Parse(SettingsRedactor.ToJson(s)).RootElement;
+    private static JsonElement Redact(AppSettings s) => JsonElement.Parse(SettingsRedactor.ToJson(s));
 
     [Fact]
     public void Every_settable_property_is_exported_somehow_or_excluded_on_purpose()
