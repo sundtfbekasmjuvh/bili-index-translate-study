@@ -21,7 +21,7 @@ public class HighContrastTests
     [Fact]
     public void App_follows_windows_high_contrast_and_still_shows_the_card()
     {
-        using var ui = new UiSession(Name());
+        using var ui = new UiSession(Name(), snipHotkeyEnabled: true);
         ui.Guard(() =>
         {
             var before = HighContrastNative.Get();
@@ -39,8 +39,19 @@ public class HighContrastTests
                 var selected = Retry.WhileException(ui.SelectAll, TimeSpan.FromSeconds(10), TimeSpan.FromMilliseconds(500));
                 Assert.True(selected.Success, "could not click the target text box after switching high contrast: " + selected.LastException?.Message);
                 ui.WaitForCardText(Full);
+
+                // Screenshots for review (no pixel assertions): Copy button hovered, then the card at rest.
+                ui.SaveCardHoverAndNormalPng("hc-card-hover.png", "hc-card-normal.png");
                 ui.PressEscape();
                 Assert.True(ui.WaitForCardGone(), "card still visible after Esc");
+
+                // Screen snip overlay with the high-contrast palette: shown (logged), screenshot, closed by Esc.
+                ui.PressSnipHotkey();
+                WaitForLog(ui, "snip overlay shown (high contrast)");
+                Thread.Sleep(500); // let the overlay paint
+                UiSession.SaveScreenPng("hc-snip.png");
+                ui.PressEscape();
+                WaitForLog(ui, "snip overlay closed");
             }
             finally
             {
@@ -55,6 +66,22 @@ public class HighContrastTests
                 return hc >= 0 && (log.IndexOf("theme: light", hc, StringComparison.Ordinal) >= 0 || log.IndexOf("theme: dark", hc, StringComparison.Ordinal) >= 0);
             }, ThemeTimeout, TimeSpan.FromMilliseconds(200));
             Assert.True(restored.Success, "no 'theme: light' / 'theme: dark' line after high contrast was switched off; log:\n" + ui.DiagnosticsLog());
+        });
+    }
+
+    /// <summary>Normal (Light or Dark) theme for comparison with the high-contrast shots: the card with the Copy button hovered.</summary>
+    [Fact]
+    public void Card_hover_screenshot_in_the_normal_theme()
+    {
+        using var ui = new UiSession(Name());
+        ui.Guard(() =>
+        {
+            var selected = Retry.WhileException(ui.SelectAll, TimeSpan.FromSeconds(10), TimeSpan.FromMilliseconds(500));
+            Assert.True(selected.Success, "could not click the target text box: " + selected.LastException?.Message);
+            ui.WaitForCardText(Full);
+            ui.SaveCardHoverAndNormalPng("light-card-hover.png", "light-card-normal.png");
+            ui.PressEscape();
+            Assert.True(ui.WaitForCardGone(), "card still visible after Esc");
         });
     }
 

@@ -711,7 +711,7 @@ internal sealed class AppHost : IDisposable
         if (_popup.IsVisible) Dispatch(new SessionEvent.UserClosed());
         DismissVisionPopup();
 
-        var capture = ScreenSnipOverlay.CaptureInteractive();
+        var capture = ScreenSnipOverlay.CaptureInteractive(message => _log.Info("snip", message));
         if (capture is not { } cap || string.IsNullOrWhiteSpace(cap.DataUrl))
             return;
 
@@ -989,7 +989,7 @@ internal sealed class AppHost : IDisposable
         if (_popup.IsVisible) Dispatch(new SessionEvent.UserClosed());
         DismissVisionPopup();
 
-        var capture = ScreenSnipOverlay.CaptureInteractive();
+        var capture = ScreenSnipOverlay.CaptureInteractive(message => _log.Info("snip", message));
         if (capture is not { } cap || string.IsNullOrWhiteSpace(cap.DataUrl))
             return;
 

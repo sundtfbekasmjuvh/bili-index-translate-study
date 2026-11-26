@@ -49,13 +49,16 @@ public sealed class UiSession : IDisposable
     private readonly ExternalTarget? _external;
     private readonly bool _hotkeyEnabled;
     private readonly bool _uiaSelectionEvents;
+    private readonly bool _snipHotkeyEnabled;
 
     /// <param name="external">When given, this program is the selection target instead of the WPF test target window.</param>
     /// <param name="hotkeyEnabled">Registers the explicit hotkey (default Alt+Q) in the app; off for all other tests.</param>
     /// <param name="uiaSelectionEvents">The app's UseUiaSelectionEvents setting (its default is on).</param>
+    /// <param name="snipHotkeyEnabled">The app's SnipHotkeyEnabled setting (screen snip, default Alt+Shift+S); off for all other tests.</param>
     public UiSession(string testName, int? failWithStatus = null, ExternalTarget? external = null,
-        bool hotkeyEnabled = false, bool uiaSelectionEvents = true)
+        bool hotkeyEnabled = false, bool uiaSelectionEvents = true, bool snipHotkeyEnabled = false)
     {
+        _snipHotkeyEnabled = snipHotkeyEnabled;
         _testName = testName;
         _external = external;
         _hotkeyEnabled = hotkeyEnabled;
@@ -95,7 +98,7 @@ public sealed class UiSession : IDisposable
             UiLanguage = "en",
             HotkeyEnabled = _hotkeyEnabled,
             UseUiaSelectionEvents = _uiaSelectionEvents,
-            SnipHotkeyEnabled = false,
+            SnipHotkeyEnabled = _snipHotkeyEnabled,
             DiagnosticsFileLogging = true,
             ApiKey = string.Empty,
         };
@@ -246,6 +249,50 @@ public sealed class UiSession : IDisposable
     }
 
     public void PressEscape() => Keyboard.Press(VirtualKeyShort.ESCAPE);
+
+    /// <summary>Presses the default screen snip hotkey, Alt+Shift+S.</summary>
+    public void PressSnipHotkey() => Keyboard.TypeSimultaneously(VirtualKeyShort.ALT, VirtualKeyShort.SHIFT, VirtualKeyShort.KEY_S);
+
+    // ---- screenshots for review (not asserted) -----------------------------------------------
+
+    private static string BaselineDir()
+    {
+        var root = ExeLocator.DesktopRoot() ?? AppContext.BaseDirectory;
+        var dir = Path.Combine(root, "TestResults", "baseline");
+        Directory.CreateDirectory(dir);
+        return dir;
+    }
+
+    /// <summary>Saves the whole screen as TestResults/baseline/&lt;file&gt;.</summary>
+    public static void SaveScreenPng(string file) => Capture.Screen().ToFile(Path.Combine(BaselineDir(), file));
+
+    /// <summary>Saves the rectangle of the app's card window as TestResults/baseline/&lt;file&gt;.</summary>
+    public void SaveCardPng(string file)
+    {
+        var hwnd = FindCardWindow(includeHidden: false);
+        if (hwnd == IntPtr.Zero) throw new InvalidOperationException("card window not found for the screenshot " + file);
+        var r = Automation.FromHandle(hwnd).BoundingRectangle;
+        Capture.Rectangle(r).ToFile(Path.Combine(BaselineDir(), file));
+    }
+
+    /// <summary>
+    /// With the card showing text: moves the mouse over the Copy button, waits for the hover state, saves
+    /// <paramref name="hoverFile"/>, moves the mouse off the card and saves <paramref name="normalFile"/>.
+    /// </summary>
+    public void SaveCardHoverAndNormalPng(string hoverFile, string normalFile)
+    {
+        var copy = FindInApp("CopyButton") ?? throw new InvalidOperationException("CopyButton not found in the card");
+        var rect = copy.BoundingRectangle;
+        Mouse.MoveTo(new System.Drawing.Point(rect.Left + rect.Width / 2, rect.Top + rect.Height / 2));
+        Thread.Sleep(300);
+        SaveCardPng(hoverFile);
+
+        var hwnd = FindCardWindow(includeHidden: false);
+        var card = hwnd == IntPtr.Zero ? rect : Automation.FromHandle(hwnd).BoundingRectangle;
+        Mouse.MoveTo(new System.Drawing.Point(Math.Max(5, card.Left - 80), Math.Max(5, card.Top - 80)));
+        Thread.Sleep(300);
+        SaveCardPng(normalFile);
+    }
 
     // ---- reading the card --------------------------------------------------------------------
 

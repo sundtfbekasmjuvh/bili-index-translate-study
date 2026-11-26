@@ -36,7 +36,7 @@
             <ControlTemplate.Triggers>
               <Trigger Property="IsMouseOver" Value="True">
                 <Setter TargetName="Bd" Property="Background" Value="{DynamicResource Popup.Hover}" />
-                <Setter Property="Foreground" Value="{DynamicResource Popup.Text}" />
+                <Setter Property="Foreground" Value="{DynamicResource Popup.HoverText}" />
               </Trigger>
               <Trigger Property="IsPressed" Value="True">
                 <Setter TargetName="Bd" Property="Background" Value="{DynamicResource Popup.Pressed}" />
