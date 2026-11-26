@@ -237,6 +237,26 @@ public class ReadingSessionTests
     }
 
     [Fact]
+    public void PointerAnchoredCard_IgnoresMissingGeometry_ButStillClosesOnEscape()
+    {
+        // Clipboard capture (or a selection without bounds) is anchored at the pointer: the periodic geometry
+        // refresh can only report "unavailable", which must not hide the card while the translation streams in.
+        var s = new ReadingSession(new SessionOptions(GeometryGraceMs: 400));
+        var probe = Single<SessionEffect.RequestProbe>(s.Handle(new SessionEvent.TriggerReceived(TriggerKind.Hotkey))).ProbeId;
+        var snap = Snap("from the clipboard") with { Origin = SelectionOrigin.Clipboard, AnchoredAtPointer = true };
+        var selected = s.Handle(new SessionEvent.ProbeCompleted(probe, new ProbeOutcome.Selected(snap)));
+        var selId = Single<SessionEffect.StartTranslation>(selected).SelectionId;
+
+        Assert.Empty(s.Handle(new SessionEvent.GeometryRefreshed(selId, new GeometryUpdate.Unavailable("nothing tracked"))));
+        Assert.Empty(s.Handle(new SessionEvent.GeometryRefreshed(selId, new GeometryUpdate.NoVisibleRects())));
+        Assert.Empty(s.Handle(new SessionEvent.GeometryGraceElapsed(selId)));
+        Assert.Equal(SessionState.Loading, s.State);
+
+        var hide = s.Handle(new SessionEvent.EscapePressed());
+        Assert.Equal(DismissReason.Escape, Single<SessionEffect.HidePopup>(hide).Reason);
+    }
+
+    [Fact]
     public void GeometryUpdates_ForOldSelection_AreIgnored()
     {
         var s = new ReadingSession();

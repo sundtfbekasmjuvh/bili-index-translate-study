@@ -58,6 +58,10 @@ Rules that make it race-free:
 * Selecting B while A is loading cancels A's request and starts B; A's late result cannot render.
 * Dismissal (outside click, Esc, close, foreground change, source lost, geometry lost) cancels the
   in-flight request; a late result cannot reopen the card.
+* Geometry lost applies only to selections with their own bounds: missing rects start a 400 ms grace
+  and then hide the card. A card anchored at the pointer (`SelectionSnapshot.AnchoredAtPointer`:
+  clipboard capture, or a selection reported without bounds) has nothing to follow, so missing
+  geometry is ignored and it stays until one of the other dismissals.
 * Cache hits are resolved synchronously inside `StartTranslation`, so `Loading → ShowingTranslation`
   happens within one dispatcher turn (no loading flash).
 * The same selection probed again while visible only refreshes the anchor.

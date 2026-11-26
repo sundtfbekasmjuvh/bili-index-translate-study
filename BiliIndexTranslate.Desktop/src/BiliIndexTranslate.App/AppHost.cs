@@ -467,7 +467,7 @@ internal sealed class AppHost : IDisposable
             // Text but no on-screen bounds: anchor to the pointer only right after a mouse release, never guess otherwise.
             if (Environment.TickCount64 - _lastPointerTick <= 1500)
             {
-                snapshot = snapshot with { Anchor = AnchorRect.AroundPoint(_lastPointer) };
+                snapshot = snapshot with { Anchor = AnchorRect.AroundPoint(_lastPointer), AnchoredAtPointer = true };
                 _anchorFromPointer = true;
                 _log.Info("probe", $"{snapshot.ProcessName}: selection has no bounds; anchoring near the pointer");
             }
@@ -490,7 +490,10 @@ internal sealed class AppHost : IDisposable
         NativeMethods.GetCursorPos(out var pt);
         _lastPointer = new PxPoint(pt.X, pt.Y);
         _anchorFromPointer = true;
-        var snapshot = new SelectionSnapshot(text, AnchorRect.AroundPoint(_lastPointer), foreground.ToInt64(), pid, ProcessInfo.NameOf(pid), EditableKind.NotEditable, origin, 0);
+        var snapshot = new SelectionSnapshot(text, AnchorRect.AroundPoint(_lastPointer), foreground.ToInt64(), pid, ProcessInfo.NameOf(pid), EditableKind.NotEditable, origin, 0)
+        {
+            AnchoredAtPointer = true,
+        };
         var reason = SelectionPolicy.ReasonToSkip(snapshot, _settings, explicitRequest);
         return reason is null ? new ProbeOutcome.Selected(snapshot) : new ProbeOutcome.Skipped(reason);
     }
