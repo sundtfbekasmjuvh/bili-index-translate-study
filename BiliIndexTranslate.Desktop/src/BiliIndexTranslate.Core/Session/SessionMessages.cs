@@ -78,7 +78,8 @@ public abstract record SessionEffect
 }
 
 /// <summary>Tunables the session reads; replaced wholesale when settings change.</summary>
-public sealed record SessionOptions(bool AutoTranslate = true, int BaseDelayMs = 250, int GeometryGraceMs = 400)
+/// <param name="ProbeRetryDelayMs">Delay of the single extra automatic probe after an unsupported or failed one; 0 turns it off.</param>
+public sealed record SessionOptions(bool AutoTranslate = true, int BaseDelayMs = 250, int GeometryGraceMs = 400, int ProbeRetryDelayMs = 400)
 {
     public int DelayFor(TriggerKind kind) => kind switch
     {

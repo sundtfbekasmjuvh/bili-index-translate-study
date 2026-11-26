@@ -68,6 +68,10 @@ Rules that make it race-free:
 * Triggers coalesce: a new trigger restarts the single stabilization timer
   (mouse-up = delay, key-up = +30 ms, UIA event = +70 ms, hotkey = immediate). UIA selection events
   while the left button is held are ignored (mouse-up probes anyway).
+* An automatic probe that comes back `Unsupported` or `Failed` while no card is shown is repeated
+  once after `ProbeRetryDelayMs` (400 ms): a freshly started browser can answer before its page is in
+  the accessibility tree. `NoSelection` is never retried, explicit requests use the clipboard
+  fallback instead, and every new trigger gets its own single retry.
 * `Shutdown` cancels everything and makes the session inert.
 
 ## Popup behaviour
