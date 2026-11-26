@@ -4,7 +4,6 @@ using FlaUI.Core.AutomationElements;
 using FlaUI.Core.Definitions;
 using FlaUI.Core.Input;
 using FlaUI.Core.Tools;
-using FlaUI.Core.WindowsAPI;
 using FlaUI.UIA3;
 using Xunit;
 
@@ -134,23 +133,15 @@ public static class EdgeTarget
         }
         var point = rect.Center();
         Mouse.MoveTo(point);
+        // Mouse.Click is not usable here: on a second click at the same spot it waits out the double-click time on
+        // purpose, so three calls are three single clicks and select nothing. Raw down/up pairs are a real triple click.
         for (var i = 0; i < 3; i++)
         {
-            Mouse.Click(FlaUI.Core.Input.MouseButton.Left);
-            Thread.Sleep(60);
+            Mouse.Down(FlaUI.Core.Input.MouseButton.Left);
+            Mouse.Up(FlaUI.Core.Input.MouseButton.Left);
+            Thread.Sleep(50);
         }
         return $"triple click at ({point.X},{point.Y}) on {from}";
-    }
-
-    /// <summary>Fallback: collapse any selection with a click, then Ctrl+A in the document.</summary>
-    public static string SelectByCtrlA(Window window)
-    {
-        Foreground(window);
-        var rect = window.BoundingRectangle;
-        Mouse.Click(new System.Drawing.Point((int)(rect.Left + rect.Width / 2), (int)(rect.Top + rect.Height * 0.8)));
-        Thread.Sleep(500);
-        Keyboard.TypeSimultaneously(VirtualKeyShort.CONTROL, VirtualKeyShort.KEY_A);
-        return "Ctrl+A after a click in the document";
     }
 
     // ---- evidence ----------------------------------------------------------------------------

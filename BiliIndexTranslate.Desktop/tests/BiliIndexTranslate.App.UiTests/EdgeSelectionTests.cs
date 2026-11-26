@@ -4,8 +4,9 @@ using Xunit.Abstractions;
 namespace BiliIndexTranslate.App.UiTests;
 
 /// <summary>
-/// The most common real-world case: selecting text on a web page in Microsoft Edge. Edge is started without
-/// --force-renderer-accessibility, so this also checks that the app gets Chromium to expose its text selection.
+/// The most common real-world case: selecting text on a web page in Microsoft Edge with the mouse. Edge is started
+/// without --force-renderer-accessibility. The test itself searches Edge's UIA tree for the paragraph, which also
+/// turns on Chromium's accessibility, so this does not show that the app manages that on its own.
 /// Skipped (not failed) when Edge is not installed.
 /// </summary>
 public class EdgeSelectionTests
@@ -23,41 +24,24 @@ public class EdgeSelectionTests
             var full = MockUpstream.FullText;
             var window = ui.TargetWindow;
 
-            // Primary: triple click on the paragraph. Chromium's accessibility tree starts out empty and the first
-            // selection may arrive before the app's UIA queries have woken it up, hence the generous timeout.
+            // Triple click on the paragraph, as a reader would. Chromium builds its accessibility tree lazily, hence
+            // the generous timeout. No keyboard fallback: the test is about the mouse path.
             var how = EdgeTarget.SelectByTripleClick(window);
             _output.WriteLine("selection: " + how);
             try
             {
                 ui.WaitForCardText(full, TimeSpan.FromSeconds(20));
             }
-            catch (TimeoutException ex)
+            catch (TimeoutException)
             {
                 var nl = Environment.NewLine;
-                _output.WriteLine("triple click gave no card (" + ex.Message + "); error card: " + (ui.ErrorText() ?? "none")
-                                  + "; chat requests so far: " + ui.Mock.ChatRequests.Count);
-                _output.WriteLine("app log after the triple click:" + nl + ui.DiagnosticsLog());
-
-                // A second triple click before anything else queries Edge: tells a one-time accessibility warm-up
-                // apart from a triple click that never produces a card.
-                how = EdgeTarget.SelectByTripleClick(window);
-                _output.WriteLine("selection: second " + how);
-                try
-                {
-                    ui.WaitForCardText(full, TimeSpan.FromSeconds(10));
-                    _output.WriteLine("second triple click gave the card; UIA seen from the test:" + nl + EdgeTarget.DescribeFocus(ui.Automation));
-                }
-                catch (TimeoutException)
-                {
-                    _output.WriteLine("second triple click gave no card either; UIA seen from the test:" + nl + EdgeTarget.DescribeFocus(ui.Automation));
-                    _output.WriteLine("falling back to Ctrl+A");
-                    how = EdgeTarget.SelectByCtrlA(window);
-                    _output.WriteLine("selection: " + how);
-                    ui.WaitForCardText(full);
-                    _output.WriteLine("Ctrl+A gave the card; UIA seen from the test:" + nl + EdgeTarget.DescribeFocus(ui.Automation));
-                }
-                _output.WriteLine("app log at the end:" + nl + ui.DiagnosticsLog());
+                _output.WriteLine("no card after the triple click; error card: " + (ui.ErrorText() ?? "none")
+                                  + "; chat requests: " + ui.Mock.ChatRequests.Count);
+                _output.WriteLine("UIA seen from the test:" + nl + EdgeTarget.DescribeFocus(ui.Automation));
+                _output.WriteLine("app log:" + nl + ui.DiagnosticsLog());
+                throw;
             }
+            _output.WriteLine("app log:" + Environment.NewLine + ui.DiagnosticsLog());
 
             Assert.NotEmpty(ui.Mock.ChatRequests);
             Assert.All(ui.Mock.ChatRequests, r => Assert.True(r.Stream, "the card should ask for a streamed answer"));
