@@ -97,7 +97,7 @@ internal sealed class PopupPresenter : IDisposable
         get
         {
             if (_studyWindow is not null) return _studyWindow;
-            var sw = new StudyCardWindow();
+            var sw = new StudyCardWindow { Log = _log };
             sw.EnsureHandle();
             sw.ApplyTextScale(_textScale);
             sw.CloseRequested += HideStudy;

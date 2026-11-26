@@ -289,7 +289,7 @@ public partial class PopupWindow : Window, IPopupSurface
         try
         {
             Clipboard.SetDataObject(text, true);
-            FlashCaption("Copied");
+            FlashCaption(Loc.T("Popup_Copied"));
         }
         catch (Exception)
         {

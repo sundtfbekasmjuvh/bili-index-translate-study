@@ -229,6 +229,9 @@ public sealed class ReadingSession
                 break;
             case GeometryUpdate.NoVisibleRects:
             case GeometryUpdate.Unavailable:
+                // A card anchored at the pointer has no selection bounds to follow: missing geometry is its normal
+                // state, so it stays until Esc, an outside click, a foreground change or the source window going away.
+                if (_current is { AnchoredAtPointer: true }) break;
                 if (!_graceActive)
                 {
                     _graceActive = true;

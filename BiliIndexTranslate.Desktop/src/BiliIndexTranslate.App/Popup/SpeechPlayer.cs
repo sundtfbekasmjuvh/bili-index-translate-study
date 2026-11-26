@@ -1,6 +1,7 @@
 using System.Reflection;
 using System.Runtime.Versioning;
 using System.Security;
+using BiliIndexTranslate.Core.Diagnostics;
 
 namespace BiliIndexTranslate.App.Popup;
 
@@ -21,6 +22,9 @@ internal sealed class SpeechPlayer : IDisposable
     private bool _unavailable;
     private bool _disposed;
 
+    /// <summary>Diagnostics sink; failures log exception type and HResult only, never the spoken text.</summary>
+    public DiagnosticsLog? Log { get; set; }
+
     public bool TrySpeak(string? text, string? bcp47Language, bool slow = false)
     {
         if (_disposed || _unavailable || string.IsNullOrWhiteSpace(text)) return false;
@@ -33,12 +37,14 @@ internal sealed class SpeechPlayer : IDisposable
                 if (_voiceType is null)
                 {
                     _unavailable = true;
+                    Log?.Warn("speech", "SAPI.SpVoice is not registered; speech disabled");
                     return false;
                 }
                 _voice = Activator.CreateInstance(_voiceType);
                 if (_voice is null)
                 {
                     _unavailable = true;
+                    Log?.Warn("speech", "SAPI.SpVoice could not be created; speech disabled");
                     return false;
                 }
             }
@@ -56,8 +62,9 @@ internal sealed class SpeechPlayer : IDisposable
                 args: new object[] { ssml, SvsFlagsAsync | SvsfPurgeBeforeSpeak | SvsfIsXml });
             return true;
         }
-        catch (Exception)
+        catch (Exception ex)
         {
+            Log?.Warn("speech", $"SSML speak failed ({ex.GetType().Name}, HResult 0x{ex.HResult:X8}); trying plain text");
             // Fallback: try plain text without SSML in case a custom SAPI engine rejects xml:lang.
             try
             {
@@ -72,9 +79,10 @@ internal sealed class SpeechPlayer : IDisposable
                     return true;
                 }
             }
-            catch (Exception)
+            catch (Exception ex2)
             {
                 // Audio device or SAPI service unavailable.
+                Log?.Warn("speech", $"Plain-text speak failed ({ex2.GetType().Name}, HResult 0x{ex2.HResult:X8})");
             }
             return false;
         }

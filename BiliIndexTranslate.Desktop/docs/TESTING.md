@@ -253,6 +253,10 @@ Measured by UI tests 6–8 below on the `windows-latest` runner (Windows NT 10.0
 run 45792315547 (commit `6d04571`). The app runs from the Release build output (framework-dependent), not from the
 single-file or installed build. Shared runners are noisy: read these as orders of magnitude and compare trends.
 
+Note (numbers below unchanged): these were measured before the keyboard hook accepted keys injected by other
+programs. Since then Ctrl+A in the WPF tests also triggers through the keyboard hook (KeyUp, 280 ms) next to the
+UIA event (320 ms), so later latency runs are not directly comparable to this first baseline.
+
 | Measure | Result |
 |---|---|
 | Ctrl+A → card with the text, cache hit (n = 10) | min 376 / median 414 / max 439 ms. 320 ms of that is the settle delay for a UIA selection event (250 ms + 70 ms); a mouse release waits 250 ms |
@@ -274,7 +278,8 @@ What each test does: it starts an in-process mock service (`HttpListener` on `ht
 the target window `tests/BiliIndexTranslate.UiTestTarget` (a read-only multi-line `TextBox`, AutomationId
 `SourceText`) and the app with `--data-dir <temp dir>`. The temp dir holds a `settings.json` written with
 `SettingsStore` (mock `BaseUrl`, OpenAI format, model `Index-Translate-9B`, auto-translate on, onboarding done,
-English UI, both hotkeys off, diagnostics log on). `--data-dir` also gives that instance its own single-instance
+English UI, both hotkeys off unless a test turns the explicit one on, UIA selection events on unless a test turns
+them off, diagnostics log on). `--data-dir` also gives that instance its own single-instance
 mutex, so a running copy of the app on the same machine does not interfere.
 
 | # | Test | Checks |
@@ -287,6 +292,8 @@ mutex, so a running copy of the app on the same machine does not interfere.
 | 6 | `Latency_from_selection_to_card` (`BaselineTests`) | measurement: one session; first selection (cache miss) times first card state, first partial text and final text from the moment Ctrl+A is sent, polled about every 10 ms; then 10 cache-hit cycles (min / median / max). The trigger is the UIA text-selection-changed event, and the mock's segment delay dominates the final time on a miss. Asserts only that every card reached the full text and the mock got a chat request |
 | 7 | `Cold_start_time` (`BaselineTests`) | measurement: three sequential sessions; time from `Process.Start` of the app to the `ready` log line (polled every 200 ms, so up to 200 ms high), plus the app's own log time from first line to `ready` |
 | 8 | `Resource_use_over_repeated_selections` (`BaselineTests`) | measurement: one warm-up selection, then 100 cycles of clear selection, Ctrl+A, wait for the card text; handle count, GDI and USER objects, private bytes and working set are sampled before the loop and every 10 cycles, with first-to-last deltas. Asserts only that every card reached the full text and the mock got a chat request |
+| 9 | `Shift_end_selection_triggers_the_card_without_uia_events` (`InputAndClipboardTests`) | session with `UseUiaSelectionEvents = false`: Ctrl+Home, Shift+End (keys injected by FlaUI, no app marker), Shift released → the card reaches the full text and the one chat request body contains the start of the target's text. Only the keyboard hook can trigger here; it fails when injected keys are ignored |
+| 10 | `Hotkey_uses_clipboard_fallback_and_restores_the_previous_clipboard_text` (`InputAndClipboardTests`) | explicit hotkey on; the test puts a known text on the clipboard, clicks the target's `NoTextPatternBox` (custom control without a text pattern, copies its own fixed text on Ctrl+C), presses Alt+Q → card with the full text, the chat request body contains the control's text, and within 5 s the clipboard text is the known text again |
 
 Tests 6 to 8 only record numbers, they are not thresholds yet. Each writes `TestResults/baseline/<test>.json`
 (metrics plus OS version and processor count). In CI the `Baseline summary` step puts the tables, together with

@@ -115,6 +115,7 @@ internal sealed class AppHost : IDisposable
         _visionService = new VisionTranslationService(_transport, TimeSpan.FromSeconds(35));
         _coordinator = new TranslationCoordinator(_translator, _cache, Post, _timings, _log, maxConcurrency: 2, postPartial: PostBackground);
         _theme = new ThemeManager(app);
+        _monitors.Log = _log;
     }
 
     private void Post(Action action)
@@ -466,7 +467,7 @@ internal sealed class AppHost : IDisposable
             // Text but no on-screen bounds: anchor to the pointer only right after a mouse release, never guess otherwise.
             if (Environment.TickCount64 - _lastPointerTick <= 1500)
             {
-                snapshot = snapshot with { Anchor = AnchorRect.AroundPoint(_lastPointer) };
+                snapshot = snapshot with { Anchor = AnchorRect.AroundPoint(_lastPointer), AnchoredAtPointer = true };
                 _anchorFromPointer = true;
                 _log.Info("probe", $"{snapshot.ProcessName}: selection has no bounds; anchoring near the pointer");
             }
@@ -489,7 +490,10 @@ internal sealed class AppHost : IDisposable
         NativeMethods.GetCursorPos(out var pt);
         _lastPointer = new PxPoint(pt.X, pt.Y);
         _anchorFromPointer = true;
-        var snapshot = new SelectionSnapshot(text, AnchorRect.AroundPoint(_lastPointer), foreground.ToInt64(), pid, ProcessInfo.NameOf(pid), EditableKind.NotEditable, origin, 0);
+        var snapshot = new SelectionSnapshot(text, AnchorRect.AroundPoint(_lastPointer), foreground.ToInt64(), pid, ProcessInfo.NameOf(pid), EditableKind.NotEditable, origin, 0)
+        {
+            AnchoredAtPointer = true,
+        };
         var reason = SelectionPolicy.ReasonToSkip(snapshot, _settings, explicitRequest);
         return reason is null ? new ProbeOutcome.Selected(snapshot) : new ProbeOutcome.Skipped(reason);
     }
@@ -1243,7 +1247,7 @@ internal sealed class AppHost : IDisposable
             var monitors = new List<string>();
             NativeMethods.EnumDisplayMonitors(IntPtr.Zero, IntPtr.Zero, (IntPtr h, IntPtr _, ref RECT _, IntPtr _) =>
             {
-                var m = Win32MonitorLocator.FromHandle(h);
+                var m = Win32MonitorLocator.FromHandle(h, _log);
                 monitors.Add($"{m.Name.TrimStart('\\', '.')} {m.Bounds.Width}x{m.Bounds.Height}@{m.Scale * 100:0}%");
                 return true;
             }, IntPtr.Zero);

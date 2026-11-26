@@ -32,6 +32,12 @@ public sealed record SelectionSnapshot(
 {
     public bool HasGeometry => Anchor is not null;
 
+    /// <summary>
+    /// The anchor is a box around the pointer, not the selection's own bounds (clipboard capture, or a selection
+    /// reported without bounds). There is no geometry to follow, so the session keeps the card until it is dismissed.
+    /// </summary>
+    public bool AnchoredAtPointer { get; init; }
+
     public string SourceKey => $"{ProcessId}:{SourceWindow}";
 
     public bool SameSelectionAs(SelectionSnapshot? other)

@@ -44,6 +44,9 @@ public partial class StudyCardWindow : Window, IPopupSurface
     private PxPoint _dragOrigin;
     private string? _captionBeforeFlash;
 
+    /// <summary>Diagnostics sink for speech failures.</summary>
+    internal BiliIndexTranslate.Core.Diagnostics.DiagnosticsLog? Log { set => _speech.Log = value; }
+
     public StudyCardWindow()
     {
         InitializeComponent();

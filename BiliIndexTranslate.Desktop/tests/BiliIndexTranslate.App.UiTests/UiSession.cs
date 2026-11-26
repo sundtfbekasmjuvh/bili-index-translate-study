@@ -40,12 +40,19 @@ public sealed class UiSession : IDisposable
     public TimeSpan StartupTime { get; private set; }
 
     private readonly ExternalTarget? _external;
+    private readonly bool _hotkeyEnabled;
+    private readonly bool _uiaSelectionEvents;
 
     /// <param name="external">When given, this program is the selection target instead of the WPF test target window.</param>
-    public UiSession(string testName, int? failWithStatus = null, ExternalTarget? external = null)
+    /// <param name="hotkeyEnabled">Registers the explicit hotkey (default Alt+Q) in the app; off for all other tests.</param>
+    /// <param name="uiaSelectionEvents">The app's UseUiaSelectionEvents setting (its default is on).</param>
+    public UiSession(string testName, int? failWithStatus = null, ExternalTarget? external = null,
+        bool hotkeyEnabled = false, bool uiaSelectionEvents = true)
     {
         _testName = testName;
         _external = external;
+        _hotkeyEnabled = hotkeyEnabled;
+        _uiaSelectionEvents = uiaSelectionEvents;
         Mock.FailWithStatus = failWithStatus;
         DataDir = Path.Combine(Path.GetTempPath(), "bit-ui-" + Guid.NewGuid().ToString("N")[..10]);
         Directory.CreateDirectory(DataDir);
@@ -77,7 +84,8 @@ public sealed class UiSession : IDisposable
             AutoTranslate = true,
             OnboardingCompleted = true,
             UiLanguage = "en",
-            HotkeyEnabled = false,
+            HotkeyEnabled = _hotkeyEnabled,
+            UseUiaSelectionEvents = _uiaSelectionEvents,
             SnipHotkeyEnabled = false,
             DiagnosticsFileLogging = true,
             ApiKey = string.Empty,
@@ -155,6 +163,35 @@ public sealed class UiSession : IDisposable
         Thread.Sleep(300);
         Keyboard.TypeSimultaneously(VirtualKeyShort.CONTROL, VirtualKeyShort.KEY_A);
     }
+
+    /// <summary>Focuses the text box, puts the caret at the start and extends the selection to the end of the line with Shift+End.</summary>
+    public void SelectWithShiftEnd()
+    {
+        TargetWindow.SetForeground();
+        var box = SourceBox;
+        box.Focus();
+        box.Click(); // makes sure the window really is in the foreground
+        Thread.Sleep(300);
+        Keyboard.TypeSimultaneously(VirtualKeyShort.CONTROL, VirtualKeyShort.HOME);
+        Thread.Sleep(200);
+        Keyboard.Press(VirtualKeyShort.SHIFT);
+        Keyboard.Type(VirtualKeyShort.END);
+        Thread.Sleep(100);
+        Keyboard.Release(VirtualKeyShort.SHIFT);
+    }
+
+    /// <summary>Clicks the custom control that has no text pattern (focuses it).</summary>
+    public void ClickNoTextPatternBox()
+    {
+        TargetWindow.SetForeground();
+        var box = TargetWindow.FindFirstDescendant(Automation.ConditionFactory.ByAutomationId("NoTextPatternBox"))
+                  ?? throw new InvalidOperationException("NoTextPatternBox not found in the target window");
+        box.Click();
+        Thread.Sleep(400);
+    }
+
+    /// <summary>Presses the default explicit hotkey, Alt+Q.</summary>
+    public void PressHotkey() => Keyboard.TypeSimultaneously(VirtualKeyShort.ALT, VirtualKeyShort.KEY_Q);
 
     /// <summary>Clicking inside the text box collapses the selection.</summary>
     public void ClearSelection()

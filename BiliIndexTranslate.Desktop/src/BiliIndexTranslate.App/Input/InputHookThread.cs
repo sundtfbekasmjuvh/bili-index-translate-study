@@ -229,15 +229,12 @@ internal sealed class InputHookThread : IDisposable
         var msg = wParam.ToInt32();
         var data = Marshal.PtrToStructure<KBDLLHOOKSTRUCT>(lParam);
         var vk = data.vkCode;
-        var injected = (data.flags & NativeMethods.LLKHF_INJECTED) != 0;
+        var ownInjected = (data.flags & NativeMethods.LLKHF_INJECTED) != 0 && data.dwExtraInfo == OwnInput.Marker;
 
-        // Injected keys are ignored so that the Ctrl+C this app sends itself (fallback shortcut) cannot
-        // look like a selection gesture. Esc is the exception: the app never sends it, and an Esc from an
-        // on-screen keyboard, a remote desktop session or UI automation should close the card as well.
-        if (injected && vk == NativeMethods.VK_ESCAPE && (msg is NativeMethods.WM_KEYDOWN or NativeMethods.WM_SYSKEYDOWN))
-            Emit(new InputEvent(InputSignal.Escape, default, false));
-
-        if (!injected)
+        // Only keys this app injects itself (the fallback Ctrl+C, tagged with OwnInput.Marker) are skipped,
+        // so they cannot look like a selection gesture. Real keys and keys injected by others (on-screen
+        // keyboard, remote desktop, UI automation) get the normal handling.
+        if (!ownInjected)
         {
             if (msg is NativeMethods.WM_KEYDOWN or NativeMethods.WM_SYSKEYDOWN)
             {
