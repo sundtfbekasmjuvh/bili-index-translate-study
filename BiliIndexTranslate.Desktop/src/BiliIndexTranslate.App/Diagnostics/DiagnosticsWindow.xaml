@@ -9,11 +9,15 @@
   <DockPanel Margin="14">
     <DockPanel DockPanel.Dock="Top" Margin="0,0,0,8">
       <StackPanel Orientation="Horizontal" DockPanel.Dock="Right">
+        <Button x:Name="ExportDiagnosticsButton" Style="{StaticResource SecondaryButton}" Content="{loc:Tr Diag_Export}" Click="OnExport" Margin="0,0,6,0" />
         <Button Style="{StaticResource SecondaryButton}" Content="{loc:Tr Diag_CopyReport}" Click="OnCopyReport" Margin="0,0,6,0" />
         <Button Style="{StaticResource SecondaryButton}" Content="{loc:Tr Diag_ClearLog}" Click="OnClear" />
       </StackPanel>
       <TextBlock x:Name="Summary" VerticalAlignment="Center" Foreground="{DynamicResource Ui.TextSecondary}" FontSize="12" TextWrapping="Wrap" />
     </DockPanel>
+
+    <TextBlock x:Name="ExportStatus" DockPanel.Dock="Top" Visibility="Collapsed" Margin="0,0,0,8" FontSize="12" TextWrapping="Wrap"
+               Foreground="{DynamicResource Ui.TextSecondary}" />
 
     <Grid>
       <Grid.RowDefinitions>

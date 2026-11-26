@@ -12,7 +12,19 @@ public class StartupOptionsTests
     {
         var o = StartupOptions.Parse([]);
         Assert.False(o.Welcome);
+        Assert.False(o.Diagnostics);
         Assert.Null(o.DataDirectory);
+    }
+
+    [Fact]
+    public void Diagnostics_flag_is_case_insensitive_and_independent_of_the_others()
+    {
+        var dir = Abs("bit-d");
+        var o = StartupOptions.Parse(["--Diagnostics", "--data-dir", dir]);
+        Assert.True(o.Diagnostics);
+        Assert.False(o.Welcome);
+        Assert.Equal(Path.GetFullPath(dir), o.DataDirectory);
+        Assert.False(StartupOptions.Parse(["--welcome"]).Diagnostics);
     }
 
     [Fact]

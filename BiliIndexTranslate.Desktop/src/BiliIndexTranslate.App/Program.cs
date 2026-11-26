@@ -75,7 +75,7 @@ public static class Program
         AppDomain.CurrentDomain.UnhandledException += (_, e) => WriteCrash(e.ExceptionObject as Exception);
         TaskScheduler.UnobservedTaskException += (_, e) => { WriteCrash(e.Exception); e.SetObserved(); };
 
-        host = new AppHost(app, DataDirectory, options.Welcome);
+        host = new AppHost(app, DataDirectory, options.Welcome, options.Diagnostics);
         app.Dispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle, host.Start);
         var code = app.Run();
         host.Dispose();

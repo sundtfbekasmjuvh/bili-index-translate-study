@@ -51,16 +51,26 @@ public sealed class UiSession : IDisposable
     private readonly bool _uiaSelectionEvents;
     private readonly bool _snipHotkeyEnabled;
     private readonly bool _onboardingCompleted;
+    private readonly Action<AppSettings>? _customizeSettings;
+    private readonly string? _plainApiKey;
+    private readonly IReadOnlyList<string> _appArgs;
 
     /// <param name="external">When given, this program is the selection target instead of the WPF test target window.</param>
     /// <param name="hotkeyEnabled">Registers the explicit hotkey (default Alt+Q) in the app; off for all other tests.</param>
     /// <param name="uiaSelectionEvents">The app's UseUiaSelectionEvents setting (its default is on).</param>
     /// <param name="snipHotkeyEnabled">The app's SnipHotkeyEnabled setting (screen snip, default Alt+Shift+S); off for all other tests.</param>
     /// <param name="onboardingCompleted">The app's OnboardingCompleted setting; false makes the app open its Welcome window at start (default true: no Welcome window).</param>
+    /// <param name="customizeSettings">Changes the settings before settings.json is written.</param>
+    /// <param name="plainApiKey">Writes this API key into settings.json as the plain-text v1 field, which the app reads (and then protects) on start.</param>
+    /// <param name="appArgs">Extra command-line arguments for the app, after --data-dir.</param>
     public UiSession(string testName, int? failWithStatus = null, ExternalTarget? external = null,
         bool hotkeyEnabled = false, bool uiaSelectionEvents = true, bool snipHotkeyEnabled = false,
-        bool onboardingCompleted = true)
+        bool onboardingCompleted = true, Action<AppSettings>? customizeSettings = null, string? plainApiKey = null,
+        IReadOnlyList<string>? appArgs = null)
     {
+        _customizeSettings = customizeSettings;
+        _plainApiKey = plainApiKey;
+        _appArgs = appArgs ?? [];
         _onboardingCompleted = onboardingCompleted;
         _snipHotkeyEnabled = snipHotkeyEnabled;
         _testName = testName;
@@ -106,6 +116,7 @@ public sealed class UiSession : IDisposable
             DiagnosticsFileLogging = true,
             ApiKey = string.Empty,
         };
+        _customizeSettings?.Invoke(settings);
         new SettingsStore(path, new PlainTextSecretProtector()).Save(settings);
 
         // SettingsStore.Save normalizes first, which turns the empty key into the default one and stores it with
@@ -113,6 +124,13 @@ public sealed class UiSession : IDisposable
         // value needs no scheme and makes the app fall back to its default key (see SettingsStore.Load).
         var node = JsonNode.Parse(File.ReadAllText(path))!.AsObject();
         node["apiKeyProtected"] = string.Empty;
+        if (_plainApiKey is not null)
+        {
+            // The v1 layout: a plain "apiKey" field and no protected one. SettingsStore.Load reads it and the app saves it protected.
+            node.Remove("apiKeyProtected");
+            node.Remove("apiKeyScheme");
+            node["apiKey"] = _plainApiKey;
+        }
         File.WriteAllText(path, node.ToJsonString());
     }
 
@@ -156,6 +174,7 @@ public sealed class UiSession : IDisposable
         var psi = new ProcessStartInfo(exe) { UseShellExecute = false, WorkingDirectory = Path.GetDirectoryName(exe)! };
         psi.ArgumentList.Add("--data-dir");
         psi.ArgumentList.Add(DataDir);
+        foreach (var arg in _appArgs) psi.ArgumentList.Add(arg);
         var startWatch = Stopwatch.StartNew();
         _app = Process.Start(psi) ?? throw new InvalidOperationException("app did not start");
 

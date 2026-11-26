@@ -261,6 +261,10 @@ public static partial class UiText
         ["Welcome_Start"] = "Start reading",
 
         ["Diag_Title"] = "Bili Index Translate — Diagnostics",
+        ["Diag_Export"] = "Export diagnostics…",
+        ["Diag_ExportTitle"] = "Export diagnostics",
+        ["Diag_ExportSaved"] = "Saved: {0}",
+        ["Diag_ExportFailed"] = "Could not save: {0}",
         ["Diag_CopyReport"] = "Copy report",
         ["Diag_ClearLog"] = "Clear log",
         ["Diag_Timings"] = "Timings (ms, last 128 samples)",
@@ -504,6 +508,10 @@ public static partial class UiText
         ["Welcome_Start"] = "开始阅读",
 
         ["Diag_Title"] = "Bili Index Translate — 诊断",
+        ["Diag_Export"] = "导出诊断包…",
+        ["Diag_ExportTitle"] = "导出诊断包",
+        ["Diag_ExportSaved"] = "已保存：{0}",
+        ["Diag_ExportFailed"] = "保存失败：{0}",
         ["Diag_CopyReport"] = "复制报告",
         ["Diag_ClearLog"] = "清空日志",
         ["Diag_Timings"] = "耗时（毫秒，最近 128 个样本）",
