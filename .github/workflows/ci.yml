@@ -109,11 +109,91 @@ jobs:
         run: dotnet build BiliIndexTranslate.sln -c Release --no-restore -warnaserror
 
       - name: Test
-        run: dotnet test tests/BiliIndexTranslate.Core.Tests/BiliIndexTranslate.Core.Tests.csproj -c Release --no-build --logger "console;verbosity=normal"
+        run: dotnet test tests/BiliIndexTranslate.Core.Tests/BiliIndexTranslate.Core.Tests.csproj -c Release --no-build --logger "console;verbosity=normal" --collect:"XPlat Code Coverage" --results-directory TestResults/coverage
 
       - name: UI tests
-        timeout-minutes: 8
+        timeout-minutes: 12
         run: dotnet test tests/BiliIndexTranslate.App.UiTests/BiliIndexTranslate.App.UiTests.csproj -c Release --no-build --logger "trx;LogFileName=ui-tests.trx" --logger "console;verbosity=detailed" --results-directory TestResults
+
+      # Baseline numbers (recorded only, no thresholds): job summary + artifact. Never fails the job.
+      - name: Baseline summary
+        if: always()
+        shell: pwsh
+        run: |
+          $md = New-Object System.Collections.Generic.List[string]
+          $md.Add("## Baseline numbers (recorded only, no thresholds)")
+          $dir = "TestResults/baseline"
+          function Read-Json($name) {
+            $f = Join-Path $dir "$name.json"
+            if (-not (Test-Path -LiteralPath $f)) { Write-Warning "$f is missing"; $md.Add(""); $md.Add("_$name.json is missing (test did not finish)_"); return $null }
+            try { return Get-Content -LiteralPath $f -Raw | ConvertFrom-Json } catch { Write-Warning "$f is unreadable: $_"; $md.Add(""); $md.Add("_$name.json is unreadable_"); return $null }
+          }
+          function Ms($v) { if ($null -eq $v) { "n/a" } else { "{0:N0}" -f $v } }
+
+          $lat = Read-Json "latency"
+          if ($lat) {
+            $m = $lat.metrics
+            $md.Add(""); $md.Add("### Latency: Ctrl+A to card (ms)")
+            $md.Add("| Metric | ms |"); $md.Add("|---|---|")
+            $md.Add("| miss: first card visible | $(Ms $m.missFirstCardVisibleMs) |")
+            $md.Add("| miss: first partial text | $(Ms $m.missFirstPartialTextMs) |")
+            $md.Add("| miss: final text | $(Ms $m.missFinalTextMs) |")
+            $md.Add("| hit min / median / max (n=$($m.hitCount)) | $(Ms $m.hitMinMs) / $(Ms $m.hitMedianMs) / $(Ms $m.hitMaxMs) |")
+            $md.Add(""); $md.Add("_Trigger is the UIA selection event; the mock's segment delay dominates the final time on a miss._")
+          }
+
+          $cold = Read-Json "cold-start"
+          if ($cold) {
+            $md.Add(""); $md.Add("### Cold start (ms)")
+            $md.Add("| Run | Process.Start to ready (poll 200 ms) | App log first line to ready |"); $md.Add("|---|---|---|")
+            foreach ($r in @($cold.metrics.runs)) { $md.Add("| $($r.run) | $(Ms $r.startupMs) | $(Ms $r.appLogFirstLineToReadyMs) |") }
+            $md.Add("| min / median / max | $(Ms $cold.metrics.startupMinMs) / $(Ms $cold.metrics.startupMedianMs) / $(Ms $cold.metrics.startupMaxMs) | |")
+          }
+
+          $res = Read-Json "resources"
+          if ($res) {
+            $md.Add(""); $md.Add("### Resources over $($res.metrics.cycles) selections")
+            $md.Add("| Cycle | Handles | GDI | USER | Private MB | Working set MB |"); $md.Add("|---|---|---|---|---|---|")
+            foreach ($s in @($res.metrics.samples)) {
+              $md.Add(("| {0} | {1} | {2} | {3} | {4:N1} | {5:N1} |" -f $s.Cycle, $s.Handles, $s.Gdi, $s.User, ($s.PrivateBytes / 1MB), ($s.WorkingSet / 1MB)))
+            }
+            $d = $res.metrics.delta
+            $md.Add(("| **delta** | {0} | {1} | {2} | {3:N1} | {4:N1} |" -f $d.handles, $d.gdiObjects, $d.userObjects, ($d.privateBytes / 1MB), ($d.workingSetBytes / 1MB)))
+          }
+
+          $env1 = if ($lat) { $lat.environment } elseif ($cold) { $cold.environment } elseif ($res) { $res.environment } else { $null }
+          if ($env1) { $md.Add(""); $md.Add("_Runner: $($env1.os), $($env1.processorCount) logical processors_") }
+
+          $md.Add(""); $md.Add("### Core unit-test coverage (cobertura)")
+          $cov = @(Get-ChildItem -Path "TestResults/coverage" -Recurse -Filter "coverage.cobertura.xml" -ErrorAction SilentlyContinue)
+          if ($cov.Count -eq 0) {
+            Write-Warning "no coverage.cobertura.xml under TestResults/coverage"
+            $md.Add("_no cobertura file found_")
+          } else {
+            $md.Add("| File | Line rate | Branch rate |"); $md.Add("|---|---|---|")
+            foreach ($c in $cov) {
+              try {
+                $x = [xml](Get-Content -LiteralPath $c.FullName -Raw)
+                $md.Add(("| {0} | {1:P1} | {2:P1} |" -f $c.Directory.Name, [double]::Parse($x.coverage.'line-rate', [Globalization.CultureInfo]::InvariantCulture), [double]::Parse($x.coverage.'branch-rate', [Globalization.CultureInfo]::InvariantCulture)))
+              } catch { Write-Warning "$($c.FullName) is unreadable: $_"; $md.Add("| $($c.Directory.Name) | unreadable | |") }
+            }
+          }
+
+          $text = $md -join "`n"
+          Write-Host $text
+          if ($env:GITHUB_STEP_SUMMARY) { Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value $text -Encoding utf8 }
+          exit 0
+
+      - name: Upload baseline numbers
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: baseline
+          path: |
+            BiliIndexTranslate.Desktop/TestResults/baseline/
+            BiliIndexTranslate.Desktop/TestResults/coverage/**/coverage.cobertura.xml
+          if-no-files-found: warn
+          retention-days: 30
 
       - name: Upload UI test evidence
         if: failure()

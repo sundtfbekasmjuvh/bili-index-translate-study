@@ -33,6 +33,12 @@ public sealed class UiSession : IDisposable
     public UIA3Automation Automation { get; } = new();
     public Window TargetWindow { get; private set; } = null!;
 
+    /// <summary>The app process under test (read-only use: counters, handles).</summary>
+    public Process AppProcess => _app ?? throw new InvalidOperationException("app not started");
+
+    /// <summary>Time from Process.Start of the app to the moment the 'ready' log line was seen (polled every 200 ms, so +0..200 ms).</summary>
+    public TimeSpan StartupTime { get; private set; }
+
     private readonly ExternalTarget? _external;
 
     /// <param name="external">When given, this program is the selection target instead of the WPF test target window.</param>
@@ -107,6 +113,7 @@ public sealed class UiSession : IDisposable
         var psi = new ProcessStartInfo(exe) { UseShellExecute = false, WorkingDirectory = Path.GetDirectoryName(exe)! };
         psi.ArgumentList.Add("--data-dir");
         psi.ArgumentList.Add(DataDir);
+        var startWatch = Stopwatch.StartNew();
         _app = Process.Start(psi) ?? throw new InvalidOperationException("app did not start");
 
         var ready = Retry.WhileFalse(() =>
@@ -115,6 +122,7 @@ public sealed class UiSession : IDisposable
             return LogText().Contains("ready", StringComparison.Ordinal);
         }, TimeSpan.FromSeconds(30), TimeSpan.FromMilliseconds(200));
         if (!ready.Success) throw new TimeoutException("app did not log 'ready' within 30 s");
+        StartupTime = startWatch.Elapsed;
     }
 
     /// <summary>The app's diagnostics.log so far (empty when it cannot be read).</summary>
