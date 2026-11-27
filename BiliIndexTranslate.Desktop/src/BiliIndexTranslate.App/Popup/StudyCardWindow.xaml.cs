@@ -21,13 +21,11 @@ namespace BiliIndexTranslate.App.Popup;
 /// surgical SSE progressive rendering, 0.7x slow shadowing TTS, clickable collocation speech,
 /// context-highlighted examples, compact/detailed view toggle, and one-click study note copy.
 /// </summary>
-[System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1001:Types that own disposable fields should be disposable",
-    Justification = "WPF Window is not IDisposable; _speech is disposed exactly once in OnClosed.")]
 public partial class StudyCardWindow : Window, IPopupSurface
 {
     public const double ShadowMarginLogical = 14;
 
-    private readonly SpeechPlayer _speech = new();
+    private readonly SpeechPlayer _speech;
     private readonly HashSet<int> _revealedIndices = new();
     private readonly bool _animations = SystemParameters.ClientAreaAnimation && RenderCapability.Tier > 0;
 
@@ -46,11 +44,10 @@ public partial class StudyCardWindow : Window, IPopupSurface
     private PxPoint _dragOrigin;
     private string? _captionBeforeFlash;
 
-    /// <summary>Diagnostics sink for speech failures.</summary>
-    internal BiliIndexTranslate.Core.Diagnostics.DiagnosticsLog? Log { set => _speech.Log = value; }
-
-    public StudyCardWindow()
+    /// <param name="speech">Shared with the selection card, so starting one voice purges the other. Owned (and disposed) by the app host.</param>
+    internal StudyCardWindow(SpeechPlayer speech)
     {
+        _speech = speech;
         InitializeComponent();
         HeaderBar.MouseLeftButtonDown += OnHeaderMouseDown;
         HeaderBar.MouseMove += OnHeaderMouseMove;
@@ -798,7 +795,7 @@ public partial class StudyCardWindow : Window, IPopupSurface
 
     protected override void OnClosed(EventArgs e)
     {
-        _speech.Dispose();
+        _speech.Stop();
         base.OnClosed(e);
     }
 }

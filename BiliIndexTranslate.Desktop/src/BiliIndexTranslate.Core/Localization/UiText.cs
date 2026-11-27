@@ -201,6 +201,8 @@ public static partial class UiText
         ["Popup_PinnedCaption"] = "pinned · drag to move",
         ["Popup_ClipboardBusy"] = "Clipboard busy",
         ["Popup_Copied"] = "Copied",
+        ["Popup_Speak"] = "Read the original aloud (Shift+click: slow)",
+        ["Popup_SpeechUnavailable"] = "Speech is not available",
 
         ["Error_Timeout"] = "No response",
         ["Error_Network"] = "Connection problem",
@@ -448,6 +450,8 @@ public static partial class UiText
         ["Popup_PinnedCaption"] = "已固定 · 可拖动",
         ["Popup_ClipboardBusy"] = "剪贴板正忙",
         ["Popup_Copied"] = "已复制",
+        ["Popup_Speak"] = "朗读原文（Shift+点击慢速）",
+        ["Popup_SpeechUnavailable"] = "无法朗读",
 
         ["Error_Timeout"] = "响应超时",
         ["Error_Network"] = "连接异常",

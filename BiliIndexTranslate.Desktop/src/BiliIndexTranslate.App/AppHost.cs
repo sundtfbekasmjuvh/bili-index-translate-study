@@ -60,6 +60,7 @@ internal sealed class AppHost : IDisposable
     private readonly Win32MonitorLocator _monitors = new();
     private readonly ThemeManager _theme;
     private PopupPresenter _popup = null!;
+    private readonly SpeechPlayer _speech = new();
     private UiaObserver _observer = null!;
     private InputHookThread _hooks = null!;
     private SourceWindowTracker _tracker = null!;
@@ -98,6 +99,7 @@ internal sealed class AppHost : IDisposable
         _coordinator = new TranslationCoordinator(_translator, _cache, Post, _timings, _log, maxConcurrency: 2, postPartial: PostBackground);
         _theme = new ThemeManager(app) { Log = message => _log.Info("app", "theme: " + message) };
         _monitors.Log = _log;
+        _speech.Log = _log;
         _saver = new SettingsSaver(_store, () => _settings, _log, () => _tray);
         _windows = new AppWindows(
             _log,
@@ -148,6 +150,8 @@ internal sealed class AppHost : IDisposable
             _monitors,
             _log,
             _timings,
+            _speech,
+            () => _settings.SourceLanguage,
             (text, modelOverride, onPartial, ct) =>
             {
                 var req = BuildRequest(text, _settings);
@@ -664,6 +668,7 @@ internal sealed class AppHost : IDisposable
         SafeDispose(_observer);
         SafeDispose(_coordinator);
         SafeDispose(_popup);
+        SafeDispose(_speech);
         _windows.CloseAll();
         SafeDispose(_tray);
         SafeDispose(_updates);
