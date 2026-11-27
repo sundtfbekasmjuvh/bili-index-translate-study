@@ -1,4 +1,6 @@
 using System.Runtime.CompilerServices;
+using FlaUI.Core.AutomationElements;
+using FlaUI.Core.Tools;
 using Xunit;
 
 namespace BiliIndexTranslate.App.UiTests;
@@ -79,6 +81,28 @@ public class SelectionCardTests
             var error = ui.WaitForError();
             Assert.Contains("412", error);
             Assert.NotEmpty(ui.Mock.ChatRequests);
+            Assert.Null(ui.FindInApp("SpeakButton")); // collapsed on the error card, so not in the UIA tree
+        });
+    }
+
+    [Fact]
+    public void Speak_button_appears_on_the_final_card_and_logs_one_request()
+    {
+        using var ui = new UiSession(Name());
+        ui.Guard(() =>
+        {
+            ui.SelectAll();
+            ui.WaitForCardText(Full);
+
+            var button = Retry.WhileNull(() => ui.FindInApp("SpeakButton"), TimeSpan.FromSeconds(5), TimeSpan.FromMilliseconds(100)).Result;
+            Assert.NotNull(button);
+            button.AsButton().Invoke();
+
+            // Audio may be missing on the runner; the log line is written before the voice is asked, so it must not depend on it.
+            var found = Retry.WhileFalse(() => ui.DiagnosticsLog().Contains("speak original (lang ", StringComparison.Ordinal),
+                TimeSpan.FromSeconds(5), TimeSpan.FromMilliseconds(200)).Success;
+            Assert.True(found, "no 'speak original' log line within 5 s");
+            Assert.Contains("speak original (lang en-US", ui.DiagnosticsLog(), StringComparison.Ordinal);
         });
     }
 

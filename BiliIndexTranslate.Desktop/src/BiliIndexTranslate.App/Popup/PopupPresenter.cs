@@ -5,6 +5,7 @@ using BiliIndexTranslate.App.Native;
 using BiliIndexTranslate.Core.Diagnostics;
 using BiliIndexTranslate.Core.Geometry;
 using BiliIndexTranslate.Core.Selection;
+using BiliIndexTranslate.Core.Speech;
 using BiliIndexTranslate.Core.Study;
 using BiliIndexTranslate.Core.Translation;
 using BiliIndexTranslate.App.Localization;
@@ -24,6 +25,8 @@ internal sealed class PopupPresenter : IDisposable
     private readonly IMonitorLocator _monitors;
     private readonly DiagnosticsLog _log;
     private readonly TimingStats _timings;
+    private readonly SpeechPlayer _speech;
+    private readonly Func<string> _sourceLanguage;
     private readonly Func<string, string?, Action<StudyDeckResult>, CancellationToken, Task<StudyDeckResult>>? _studyProvider;
     private readonly Dispatcher _dispatcher;
     private readonly List<PopupWindow> _pinned = new();
@@ -48,11 +51,15 @@ internal sealed class PopupPresenter : IDisposable
         IMonitorLocator monitors,
         DiagnosticsLog log,
         TimingStats timings,
+        SpeechPlayer speech,
+        Func<string> sourceLanguage,
         Func<string, string?, Action<StudyDeckResult>, CancellationToken, Task<StudyDeckResult>>? studyProvider = null)
     {
         _monitors = monitors;
         _log = log;
         _timings = timings;
+        _speech = speech;
+        _sourceLanguage = sourceLanguage;
         _studyProvider = studyProvider;
         _dispatcher = Application.Current?.Dispatcher ?? Dispatcher.CurrentDispatcher;
     }
@@ -116,7 +123,7 @@ internal sealed class PopupPresenter : IDisposable
         get
         {
             if (_studyWindow is not null) return _studyWindow;
-            var sw = new StudyCardWindow { Log = _log };
+            var sw = new StudyCardWindow(_speech);
             sw.EnsureHandle();
             sw.ApplyTextScale(_textScale);
             sw.CloseRequested += HideStudy;
@@ -140,6 +147,7 @@ internal sealed class PopupPresenter : IDisposable
         w.RetryRequested += () => RetryRequested?.Invoke();
         w.SettingsRequested += () => SettingsRequested?.Invoke();
         w.StudyRequested += () => ToggleStudy(w);
+        w.SpeakRequested += slow => SpeakOriginal(w, slow);
         w.OriginalToggled += show => { _showOriginal = show; ShowOriginalChanged?.Invoke(show); Replace(); };
         w.SizeChanged += (_, _) =>
         {
@@ -162,6 +170,7 @@ internal sealed class PopupPresenter : IDisposable
         var created = _window is null;
         var sw = Stopwatch.StartNew();
         var w = Window;
+        _speech.Stop();
         if (_studyVisible && ReferenceEquals(_studyOwner, w)) HideStudy();
         w.ShowLoading(snapshot, caption);
         Present(snapshot.Anchor, firstShow: !_visible);
@@ -203,6 +212,7 @@ internal sealed class PopupPresenter : IDisposable
     {
         if (snapshot.Anchor is null) return;
         var w = Window;
+        _speech.Stop();
         if (_studyVisible && ReferenceEquals(_studyOwner, w)) HideStudy();
         w.ShowError(snapshot, error, caption);
         Present(snapshot.Anchor, firstShow: !_visible);
@@ -219,6 +229,7 @@ internal sealed class PopupPresenter : IDisposable
     public void Hide()
     {
         if (_window is null) return;
+        _speech.Stop();
         if (_studyVisible && ReferenceEquals(_studyOwner, _window)) HideStudy();
         _visible = false;
         _anchor = null;
@@ -244,6 +255,17 @@ internal sealed class PopupPresenter : IDisposable
         while (_pinned.Count > MaxPinned) ClosePinned(_pinned[0]);
         PublishRects();
         _log.Info("popup", $"pinned ({_pinned.Count} open)");
+    }
+
+    /// <summary>Reads the card's original text aloud. Never automatic; logs language, speed and length, never the text.</summary>
+    private void SpeakOriginal(PopupWindow owner, bool slow)
+    {
+        var source = owner.CurrentSource?.Trim();
+        if (string.IsNullOrEmpty(source)) return;
+        var lang = SpeechLanguage.Guess(source, _sourceLanguage());
+        _log.Info("speech", $"speak original (lang {lang}{(slow ? ", slow" : string.Empty)}, {source.Length} chars)");
+        if (!_speech.TrySpeak(source, lang, slow))
+            owner.FlashMessage(Loc.T("Popup_SpeechUnavailable"));
     }
 
     // ---- Companion Study Card lifecycle ----------------------------------------------------------
@@ -493,6 +515,7 @@ internal sealed class PopupPresenter : IDisposable
     private void ClosePinned(PopupWindow w)
     {
         if (_studyVisible && ReferenceEquals(_studyOwner, w)) HideStudy();
+        _speech.Stop();
         _pinned.Remove(w);
         try { w.Close(); } catch (Exception) { /* already closed */ }
         PublishRects();

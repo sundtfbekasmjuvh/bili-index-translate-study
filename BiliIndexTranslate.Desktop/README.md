@@ -42,6 +42,8 @@ downloaded update is waiting, Restart and update).
 A second instance does not start twice; it opens the Settings window of the running one.
 `BiliIndexTranslate.exe --diagnostics` opens the Diagnostics window right after start.
 
+**Read aloud.** The speaker button on the card reads the original text (never the translation); Shift+click reads it slowly. The voice language comes from the Source language setting, or is guessed from the text when that is "auto" (short texts and single words may be guessed wrong). It uses the voices installed in Windows, and nothing is ever spoken automatically.
+
 **Diagnostics bundle.** The Diagnostics window has an **Export diagnostics…** button that saves a ZIP for bug
 reports: `report.txt` (what "Copy report" gives), `diagnostics.log` (last 2 MB, only if file logging is on and
 the file exists), `crash.log` (last 512 KB, only if it exists), `system.txt` (app version, installed or portable,

@@ -53,6 +53,8 @@ public partial class PopupWindow : Window, IPopupSurface
     public event Action? RetryRequested;
     public event Action? SettingsRequested;
     public event Action? StudyRequested;
+    /// <summary>Raised by the speaker button; the argument is true for Shift+click (slow).</summary>
+    public event Action<bool>? SpeakRequested;
     public event Action<bool>? OriginalToggled;
     /// <summary>Raised after a pinned card has been dragged to a new place.</summary>
     public event Action? Moved;
@@ -109,6 +111,7 @@ public partial class PopupWindow : Window, IPopupSurface
         OriginalPanel.Visibility = Visibility.Collapsed;
         Footer.Visibility = Visibility.Collapsed;
         StudyButton.Visibility = Visibility.Collapsed;
+        SpeakButton.Visibility = Visibility.Collapsed;
         SetStudyOpen(false);
         Caption.Text = caption ?? string.Empty;
         CopyButton.IsEnabled = false;
@@ -136,6 +139,7 @@ public partial class PopupWindow : Window, IPopupSurface
         if (!partial) BodyScroll.ScrollToTop();
         Footer.Visibility = Visibility.Visible;
         StudyButton.Visibility = hasSource && !partial ? Visibility.Visible : Visibility.Collapsed;
+        SpeakButton.Visibility = StudyButton.Visibility;
         Caption.Text = caption ?? string.Empty;
         CopyButton.IsEnabled = !partial;
         PinButton.IsEnabled = !partial && !IsPinned;
@@ -182,6 +186,7 @@ public partial class PopupWindow : Window, IPopupSurface
         ErrorPanel.Visibility = Visibility.Visible;
         Footer.Visibility = Visibility.Visible;
         StudyButton.Visibility = Visibility.Collapsed;
+        SpeakButton.Visibility = Visibility.Collapsed;
         SetStudyOpen(false);
         Caption.Text = caption ?? string.Empty;
         CopyButton.IsEnabled = false;
@@ -315,6 +320,9 @@ public partial class PopupWindow : Window, IPopupSurface
 
     private string? _captionBeforeFlash;
 
+    /// <summary>Briefly replaces the caption with a short message.</summary>
+    public void FlashMessage(string text) => FlashCaption(text);
+
     private void FlashCaption(string text)
     {
         _captionBeforeFlash ??= Caption.Text;
@@ -338,6 +346,9 @@ public partial class PopupWindow : Window, IPopupSurface
     private void OnCloseClick(object sender, RoutedEventArgs e) => CloseRequested?.Invoke();
     private void OnRetryClick(object sender, RoutedEventArgs e) => RetryRequested?.Invoke();
     private void OnSettingsClick(object sender, RoutedEventArgs e) => SettingsRequested?.Invoke();
+    private void OnSpeakClick(object sender, RoutedEventArgs e)
+        => SpeakRequested?.Invoke((Keyboard.Modifiers & ModifierKeys.Shift) != 0);
+
     private void OnStudyClick(object sender, RoutedEventArgs e) => StudyRequested?.Invoke();
 
     private void OnOriginalClick(object sender, RoutedEventArgs e)
