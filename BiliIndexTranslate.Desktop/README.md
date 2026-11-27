@@ -184,7 +184,7 @@ select entries and **Delete selected** (or press Delete), **Clear all…** (asks
 **Export to Anki.** **Export to Anki…** saves the whole book as a text file
 (`BiliIndexTranslate-anki-<date>.txt`; UTF-8, tab-separated, HTML on, with Anki file headers). In Anki 2.1.54 or newer choose
 **File → Import** and pick the file. The deck **Bili Index Translate** is created when it does not exist, and notes get
-tags (`bili-index-translate`, `word` or `sentence`, `lang-<source language>`). Sentences become Front = original,
+tags (`bili-index-translate`, `word` or `sentence`, and `lang-<code>` with the primary language code such as `lang-ja`, `lang-es`; a sentence saved while Source language is "auto" gets it only when the text clearly shows its language). Sentences become Front = original,
 Back = translation; words become Front = term, Back = reading, part of speech, meaning, nuance, example, memory aid and
 collocations. Every note carries a stable GUID, so importing a newer export again updates the same notes instead of adding duplicates.
 

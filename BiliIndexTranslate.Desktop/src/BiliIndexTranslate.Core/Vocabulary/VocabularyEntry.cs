@@ -75,14 +75,19 @@ public sealed record VocabularyEntry
                || Meaning.Contains(q, StringComparison.OrdinalIgnoreCase);
     }
 
-    /// <param name="sourceLanguageSetting">The app's source language setting; "auto" or blank means not known, and is stored as empty.</param>
+    /// <param name="sourceLanguageSetting">
+    /// The app's source language setting. An explicit value is stored as it is; with "auto" or blank the language the
+    /// text clearly shows is stored (<see cref="Speech.SpeechLanguage.TryDetect"/>), or empty when it shows none.
+    /// </param>
     public static VocabularyEntry ForSentence(string text, string translation, string? sourceLanguageSetting, string targetLanguage, DateTimeOffset? addedAt = null)
         => new()
         {
             Kind = VocabularyKind.Sentence,
             Text = text.Trim(),
             Translation = translation.Trim(),
-            SourceLanguage = IsExplicitLanguage(sourceLanguageSetting) ? sourceLanguageSetting!.Trim() : string.Empty,
+            SourceLanguage = IsExplicitLanguage(sourceLanguageSetting)
+                ? sourceLanguageSetting!.Trim()
+                : Speech.SpeechLanguage.TryDetect(text) ?? string.Empty,
             TargetLanguage = targetLanguage,
             AddedAt = (addedAt ?? DateTimeOffset.UtcNow).ToUniversalTime(),
         };

@@ -46,7 +46,7 @@ public class VocabularyTests
             Assert.Equal("sentence", (string?)entry["kind"]);
             Assert.Equal(targetText.Trim(), (string?)entry["text"]);
             Assert.Equal(MockUpstream.FullText, (string?)entry["translation"]);
-            Assert.Equal("", (string?)entry["sourceLanguage"]); // the setting is "auto"
+            Assert.Equal("en-US", (string?)entry["sourceLanguage"]); // the setting is "auto": detected from the English text
             Assert.False(string.IsNullOrEmpty((string?)entry["targetLanguage"]));
             Assert.False(string.IsNullOrEmpty((string?)entry["id"]));
             UiWait.WaitUntil(() => ui.FindInApp("SaveWordButton")?.Name == RemoveName, "the star showing the remove state");

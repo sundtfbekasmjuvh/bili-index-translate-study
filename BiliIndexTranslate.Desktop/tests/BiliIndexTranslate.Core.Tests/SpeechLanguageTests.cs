@@ -64,4 +64,23 @@ public class SpeechLanguageTests
         Assert.Equal("en-US", SpeechLanguage.Guess("😀", "auto"));
         Assert.Equal("en-US", SpeechLanguage.Guess("\uD83D", "auto")); // lone surrogate
     }
+
+    [Theory]
+    [InlineData("今日は良い天気ですね", "ja-JP")]
+    [InlineData("안녕하세요", "ko-KR")]
+    [InlineData("The cat is on the table and the dog is not.", "en-US")]
+    [InlineData("¿Dónde está la estación?", "es-ES")]
+    [InlineData("Hello", null)]
+    [InlineData("12345 !!!", null)]
+    [InlineData("", null)]
+    [InlineData(null, null)]
+    public void TryDetect_returns_null_instead_of_falling_back(string? text, string? expected)
+        => Assert.Equal(expected, SpeechLanguage.TryDetect(text));
+
+    [Fact]
+    public void Guess_still_falls_back_to_en_US_when_the_text_shows_nothing()
+    {
+        Assert.Equal("en-US", SpeechLanguage.Guess("Hello", "auto"));
+        Assert.Equal("en-US", SpeechLanguage.Guess("", null));
+    }
 }
