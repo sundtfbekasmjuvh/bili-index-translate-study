@@ -100,6 +100,8 @@
                       ToolTip="{loc:Tr Study_SpeedTip}" Click="OnSpeedClick" />
               <Button x:Name="QuizButton" Style="{StaticResource StudyPillButton}" Content="{loc:Tr Study_Quiz}"
                       ToolTip="{loc:Tr Study_QuizTip}" Visibility="Collapsed" Click="OnQuizClick" />
+              <Button x:Name="SaveCardButton" Style="{StaticResource IconButton}" Width="24" Height="22" Content="&#xE734;"
+                      ToolTip="{loc:Tr Vocab_Add}" Visibility="{Binding Visibility, ElementName=CopyCardButton}" Click="OnSaveCardClick" AutomationProperties.Name="{loc:Tr Vocab_Add}" />
               <Button x:Name="CopyCardButton" Style="{StaticResource IconButton}" Width="24" Height="22" Content="&#xE8C8;"
                       ToolTip="{loc:Tr Study_CopyTip}" Visibility="Collapsed" Click="OnCopyCardClick" AutomationProperties.Name="{loc:Tr Study_CopyAria}" />
               <Button x:Name="CloseButton" Style="{StaticResource IconButton}" Width="24" Height="22" Content="&#xE711;"

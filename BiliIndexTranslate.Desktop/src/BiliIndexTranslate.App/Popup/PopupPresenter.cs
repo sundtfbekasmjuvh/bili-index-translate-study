@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Windows;
 using System.Windows.Threading;
 using BiliIndexTranslate.App.Native;
+using BiliIndexTranslate.App.Vocabulary;
 using BiliIndexTranslate.Core.Diagnostics;
 using BiliIndexTranslate.Core.Geometry;
 using BiliIndexTranslate.Core.Selection;
@@ -30,6 +31,7 @@ internal sealed class PopupPresenter : IDisposable
     private readonly Func<string, string?, Action<StudyDeckResult>, CancellationToken, Task<StudyDeckResult>>? _studyProvider;
     private readonly Dispatcher _dispatcher;
     private readonly List<PopupWindow> _pinned = new();
+    private readonly VocabularyCardActions? _vocabulary;
 
     private PopupWindow? _window;
     private AnchorRect? _anchor;
@@ -53,7 +55,8 @@ internal sealed class PopupPresenter : IDisposable
         TimingStats timings,
         SpeechPlayer speech,
         Func<string> sourceLanguage,
-        Func<string, string?, Action<StudyDeckResult>, CancellationToken, Task<StudyDeckResult>>? studyProvider = null)
+        Func<string, string?, Action<StudyDeckResult>, CancellationToken, Task<StudyDeckResult>>? studyProvider = null,
+        VocabularyCardActions? vocabulary = null)
     {
         _monitors = monitors;
         _log = log;
@@ -61,7 +64,18 @@ internal sealed class PopupPresenter : IDisposable
         _speech = speech;
         _sourceLanguage = sourceLanguage;
         _studyProvider = studyProvider;
+        _vocabulary = vocabulary;
         _dispatcher = Application.Current?.Dispatcher ?? Dispatcher.CurrentDispatcher;
+        if (_vocabulary is not null) _vocabulary.Changed += OnVocabularyChanged;
+    }
+
+    /// <summary>The book changed (a star on a card, or the Vocabulary window): every star shows the new state.</summary>
+    private void OnVocabularyChanged()
+    {
+        if (!_dispatcher.CheckAccess()) { _dispatcher.BeginInvoke(OnVocabularyChanged); return; }
+        _window?.RefreshVocabularyStar();
+        foreach (var p in _pinned) p.RefreshVocabularyStar();
+        _studyWindow?.RefreshVocabularyStar();
     }
 
     public event Action? PinRequested;
@@ -123,7 +137,7 @@ internal sealed class PopupPresenter : IDisposable
         get
         {
             if (_studyWindow is not null) return _studyWindow;
-            var sw = new StudyCardWindow(_speech);
+            var sw = new StudyCardWindow(_speech) { VocabularyActions = _vocabulary };
             sw.EnsureHandle();
             sw.ApplyTextScale(_textScale);
             sw.CloseRequested += HideStudy;
@@ -138,7 +152,7 @@ internal sealed class PopupPresenter : IDisposable
 
     private PopupWindow CreateWindow()
     {
-        var w = new PopupWindow();
+        var w = new PopupWindow { VocabularyActions = _vocabulary };
         w.EnsureHandle();
         w.ApplyTextScale(_textScale);
         w.SetShowOriginal(_showOriginal);
@@ -598,6 +612,7 @@ internal sealed class PopupPresenter : IDisposable
 
     public void Dispose()
     {
+        if (_vocabulary is not null) _vocabulary.Changed -= OnVocabularyChanged;
         HideStudy();
         if (_studyWindow is not null)
         {

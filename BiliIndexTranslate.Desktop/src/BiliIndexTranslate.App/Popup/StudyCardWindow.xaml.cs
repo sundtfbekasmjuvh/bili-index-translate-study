@@ -9,6 +9,7 @@ using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
 using BiliIndexTranslate.App.Native;
+using BiliIndexTranslate.App.Vocabulary;
 using BiliIndexTranslate.Core.Geometry;
 using BiliIndexTranslate.Core.Study;
 using BiliIndexTranslate.Core.Translation;
@@ -63,6 +64,9 @@ public partial class StudyCardWindow : Window, IPopupSurface
     public string? CurrentSource { get; private set; }
     public bool HasBeenDragged { get; private set; }
     public bool PreferFlagshipModel { get; private set; }
+
+    /// <summary>What the star talks to; set by the presenter.</summary>
+    internal VocabularyCardActions? VocabularyActions { get; set; }
 
     public void EnsureHandle()
     {
@@ -317,7 +321,8 @@ public partial class StudyCardWindow : Window, IPopupSurface
 
         _cardIndex = Math.Clamp(_cardIndex, 0, _deck.Cards.Count - 1);
         var card = _deck.Cards[_cardIndex];
-        var nextKey = $"{_cardIndex}:{card.Term}:{card.Example?.Source}:{_textScale:F2}";
+        RefreshVocabularyStar();
+        var nextKey =$"{_cardIndex}:{card.Term}:{card.Example?.Source}:{_textScale:F2}";
 
         // Surgical update: if active card hasn't changed while subsequent SSE cards stream in,
         // update ONLY the navigation chips and footer caption — zero layout thrash!
@@ -661,6 +666,33 @@ public partial class StudyCardWindow : Window, IPopupSurface
         {
             FlashCaption(Loc.T("Popup_ClipboardBusy"));
         }
+    }
+
+    /// <summary>The star: adds the word card being shown to the vocabulary book, or removes it.</summary>
+    private void OnSaveCardClick(object sender, RoutedEventArgs e)
+    {
+        if (VocabularyActions is null || _deck is null || _deck.Cards.Count == 0) return;
+        var card = _deck.Cards[Math.Clamp(_cardIndex, 0, _deck.Cards.Count - 1)];
+        if (string.IsNullOrWhiteSpace(card.Term)) return;
+        FlashCaption(VocabularyActions.Message(VocabularyActions.ToggleWord(card, _deck)));
+        RefreshVocabularyStar();
+    }
+
+    /// <summary>
+    /// Filled star when the card being shown is in the vocabulary book. Called whenever a card is shown (the deck pages between
+    /// cards) and when the book changes. While the deck is still streaming the star is off: the last card may not be complete.
+    /// </summary>
+    public void RefreshVocabularyStar()
+    {
+        var card = _deck is { Cards.Count: > 0 } ? _deck.Cards[Math.Clamp(_cardIndex, 0, _deck.Cards.Count - 1)] : null;
+        var saved = card is not null && VocabularyActions?.IsWordSaved(card) == true;
+        SaveCardButton.IsEnabled = card is not null && _deck is { IsStreaming: false };
+        SaveCardButton.Content = saved ? "" : "";
+        var textKey = saved ? "Vocab_Remove" : "Vocab_Add";
+        Loc.Bind(SaveCardButton, FrameworkElement.ToolTipProperty, textKey);
+        Loc.Bind(SaveCardButton, System.Windows.Automation.AutomationProperties.NameProperty, textKey);
+        if (saved) SaveCardButton.Foreground = (Brush)FindResource("Popup.Accent");
+        else SaveCardButton.ClearValue(ForegroundProperty);
     }
 
     private void OnPrevCardClick(object sender, RoutedEventArgs e) => StepCard(-1);

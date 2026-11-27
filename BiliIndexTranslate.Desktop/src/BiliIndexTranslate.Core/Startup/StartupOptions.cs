@@ -6,18 +6,20 @@ namespace BiliIndexTranslate.Core.Startup;
 /// <summary>
 /// Command-line options of the app. <c>--data-dir &lt;path&gt;</c> moves settings, logs and crash.log to
 /// another directory (used by the UI tests so they never touch the real settings) and gives that
-/// instance its own single-instance names. <c>--diagnostics</c> opens the Diagnostics window after start.
+/// instance its own single-instance names. <c>--diagnostics</c> opens the Diagnostics window after start, <c>--vocabulary</c> the Vocabulary window.
 /// </summary>
-public sealed record StartupOptions(bool Welcome, string? DataDirectory, bool Diagnostics = false)
+public sealed record StartupOptions(bool Welcome, string? DataDirectory, bool Diagnostics = false, bool Vocabulary = false)
 {
     public const string DataDirArg = "--data-dir";
     public const string WelcomeArg = "--welcome";
     public const string DiagnosticsArg = "--diagnostics";
+    public const string VocabularyArg = "--vocabulary";
 
     public static StartupOptions Parse(IReadOnlyList<string> args)
     {
         var welcome = false;
         var diagnostics = false;
+        var vocabulary = false;
         string? dataDir = null;
         for (var i = 0; i < args.Count; i++)
         {
@@ -30,6 +32,10 @@ public sealed record StartupOptions(bool Welcome, string? DataDirectory, bool Di
             {
                 diagnostics = true;
             }
+            else if (string.Equals(a, VocabularyArg, StringComparison.OrdinalIgnoreCase))
+            {
+                vocabulary = true;
+            }
             else if (string.Equals(a, DataDirArg, StringComparison.OrdinalIgnoreCase))
             {
                 if (i + 1 < args.Count && !string.IsNullOrWhiteSpace(args[i + 1]))
@@ -41,7 +47,7 @@ public sealed record StartupOptions(bool Welcome, string? DataDirectory, bool Di
                 if (v.Length > 0) dataDir = v;
             }
         }
-        return new StartupOptions(welcome, dataDir is null ? null : Path.GetFullPath(dataDir), diagnostics);
+        return new StartupOptions(welcome, dataDir is null ? null : Path.GetFullPath(dataDir), diagnostics, vocabulary);
     }
 
     /// <summary>

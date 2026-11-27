@@ -28,6 +28,22 @@ public class StartupOptionsTests
     }
 
     [Fact]
+    public void Vocabulary_flag_is_case_insensitive_and_independent_of_the_others()
+    {
+        var dir = Abs("bit-v");
+        var o = StartupOptions.Parse(["--Vocabulary", "--data-dir", dir]);
+        Assert.True(o.Vocabulary);
+        Assert.False(o.Welcome);
+        Assert.False(o.Diagnostics);
+        Assert.Equal(Path.GetFullPath(dir), o.DataDirectory);
+        Assert.False(StartupOptions.Parse(["--diagnostics", "--welcome"]).Vocabulary);
+        Assert.False(StartupOptions.Parse([]).Vocabulary);
+        var both = StartupOptions.Parse(["--diagnostics", "--vocabulary"]);
+        Assert.True(both.Diagnostics);
+        Assert.True(both.Vocabulary);
+    }
+
+    [Fact]
     public void Welcome_flag_is_case_insensitive()
         => Assert.True(StartupOptions.Parse(["--WELCOME"]).Welcome);
 

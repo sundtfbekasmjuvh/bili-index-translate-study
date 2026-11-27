@@ -5,6 +5,8 @@ using BiliIndexTranslate.App.Native;
 using BiliIndexTranslate.App.Onboarding;
 using BiliIndexTranslate.App.Settings;
 using BiliIndexTranslate.App.Updates;
+using BiliIndexTranslate.App.Vocabulary;
+using BiliIndexTranslate.Core.Vocabulary;
 using BiliIndexTranslate.Core.Diagnostics;
 using BiliIndexTranslate.Core.Session;
 using BiliIndexTranslate.Core.Settings;
@@ -41,9 +43,11 @@ internal sealed class AppWindows
     private readonly Func<UpdateService> _updates;
     private readonly Func<AppStatus> _status;
     private readonly Action _save;
+    private readonly VocabularyStore _vocabulary;
 
     private SettingsWindow? _settingsWindow;
     private DiagnosticsWindow? _diagnosticsWindow;
+    private VocabularyWindow? _vocabularyWindow;
     private WelcomeWindow? _welcomeWindow;
     private string? _hotkeyError;
     private string? _snipHotkeyError;
@@ -56,6 +60,7 @@ internal sealed class AppWindows
     /// <param name="updates">The update service (created after this object, so it is read when Settings opens).</param>
     /// <param name="status">Live state of the app, read when the Welcome window opens and when the diagnostics header is built.</param>
     /// <param name="save">Writes the settings file now (used when the Welcome window finishes).</param>
+    /// <param name="vocabulary">The vocabulary book shown by the Vocabulary window.</param>
     public AppWindows(
         DiagnosticsLog log,
         TimingStats timings,
@@ -67,8 +72,10 @@ internal sealed class AppWindows
         Func<AppSettings, string?> applySettings,
         Func<UpdateService> updates,
         Func<AppStatus> status,
-        Action save)
+        Action save,
+        VocabularyStore vocabulary)
     {
+        _vocabulary = vocabulary;
         _log = log;
         _timings = timings;
         _registry = registry;
@@ -131,6 +138,19 @@ internal sealed class AppWindows
         _diagnosticsWindow.Show();
     }
 
+    public void OpenVocabulary()
+    {
+        if (_vocabularyWindow is { IsLoaded: true })
+        {
+            _vocabularyWindow.Activate();
+            return;
+        }
+        _vocabularyWindow = new VocabularyWindow(_vocabulary, _log);
+        _vocabularyWindow.Closed += (_, _) => _vocabularyWindow = null;
+        _vocabularyWindow.Show();
+        _vocabularyWindow.Activate();
+    }
+
     public void OpenWelcome(bool force)
     {
         if (_welcomeWindow is { IsLoaded: true })
@@ -151,10 +171,10 @@ internal sealed class AppWindows
         if (force) _welcomeWindow.Activate();
     }
 
-    /// <summary>Closes whichever of the three windows is open (app shutdown).</summary>
+    /// <summary>Closes whichever of the windows is open (app shutdown).</summary>
     public void CloseAll()
     {
-        try { _settingsWindow?.Close(); _diagnosticsWindow?.Close(); _welcomeWindow?.Close(); } catch (Exception) { }
+        try { _settingsWindow?.Close(); _diagnosticsWindow?.Close(); _vocabularyWindow?.Close(); _welcomeWindow?.Close(); } catch (Exception) { }
     }
 
     private string DiagnosticsHeader()

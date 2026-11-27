@@ -15,7 +15,7 @@
 | 目录 | 说明 | 状态 |
 |---|---|---|
 | [`bili-index-translate/`](bili-index-translate/) | **Chrome / Edge / Brave / Arc 浏览器扩展（Manifest V3）**：MV3 原生直连 + `Alt+S` 零 OCR 识图框选/右键图片直译 + `Alt+A` 视口流式双语对照 + `instTrans` 动态术语表 + 划词与伴随语言学习卡片 | 可直接加载未打包扩展或下载 Release ZIP |
-| [`BiliIndexTranslate.Desktop/`](BiliIndexTranslate.Desktop/) | **Windows 桌面全局划词与屏幕识图端（C# / .NET 10, WPF + UI Automation）**：跨应用非抢焦点浮窗翻译 + `Alt+Shift+S` 跨屏冻结框选识图直译/剪贴板截图直译 + `instTrans` 术语表 + 伴随学习卡片 | `0 warnings` 编译通过，`431/431` xUnit 核心单测通过（见 [`BiliIndexTranslate.Desktop/README.md`](BiliIndexTranslate.Desktop/README.md)） |
+| [`BiliIndexTranslate.Desktop/`](BiliIndexTranslate.Desktop/) | **Windows 桌面全局划词与屏幕识图端（C# / .NET 10, WPF + UI Automation）**：跨应用非抢焦点浮窗翻译 + `Alt+Shift+S` 跨屏冻结框选识图直译/剪贴板截图直译 + `instTrans` 术语表 + 伴随学习卡片 | `0 warnings` 编译通过，`524/524` xUnit 核心单测通过（见 [`BiliIndexTranslate.Desktop/README.md`](BiliIndexTranslate.Desktop/README.md)） |
 | [`bili-study-sandbox/`](bili-study-sandbox/) | **零依赖本地浏览器预览沙盒（Node.js 标准库）**：无需重载扩展即可在本地 `http://localhost:3001` 实时体验划词、学习卡片、`Alt+S` 画布框选识图、术语表与 `Alt+A` 双语对照 | 运行 `node bili-study-sandbox/server.js` 即可启动，默认只监听 `127.0.0.1` |
 
 ---
@@ -40,7 +40,7 @@
 
 ### 3. 官方 `instTrans` 动态命中术语表 & 伴随语言学习卡片（双端通用）
 - **强化学习原生槽位对齐**：支持每行一条 `Source => Target` 指定译名，或单写一行 `Flash-Attention` 表示**免译原样锁定**；文本划词按需零冗余注入，多模态识图同步注入 `【术语对照】`。
-- **双速语音跟读 + 自测遮罩 + 严格零留痕**：词头与例句支持 `1x` / `0.7x` 慢速跟读，支持 `M` 键一键切换 `9B` ↔ `35B-A3B` 旗舰精析，纯内存 LRU 秒开（`⚡瞬时`），零历史落盘。
+- **双速语音跟读 + 自测遮罩 + 默认零留痕**：词头与例句支持 `1x` / `0.7x` 慢速跟读，支持 `M` 键一键切换 `9B` ↔ `35B-A3B` 旗舰精析，纯内存 LRU 秒开（`⚡瞬时`），零历史落盘：学习卡片不会自动保存任何内容，只有你点星标把句子或词加入生词本时，才会写入本机文件（Windows 桌面端的 `vocabulary.json`，只存在本地、不上传，可导出到 Anki；见桌面端 README）。
 - **无障碍**：面板正文用 `aria-live` 播报、完成时才读一遍，打开时不抢焦点、关闭时还焦点，按钮有可见的键盘焦点轮廓，并遵循系统“减少动态效果”设置。
 
 ---
