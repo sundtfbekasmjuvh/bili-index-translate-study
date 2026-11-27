@@ -278,8 +278,15 @@ internal sealed class PopupPresenter : IDisposable
         if (string.IsNullOrEmpty(source)) return;
         var lang = SpeechLanguage.Guess(source, _sourceLanguage());
         _log.Info("speech", $"speak original (lang {lang}{(slow ? ", slow" : string.Empty)}, {source.Length} chars)");
-        if (!_speech.TrySpeak(source, lang, slow))
-            owner.FlashMessage(Loc.T("Popup_SpeechUnavailable"));
+        switch (_speech.TrySpeak(source, lang, slow))
+        {
+            case SpeakResult.NoVoice:
+                owner.FlashMessage(SpeechMessages.NoVoice(lang));
+                break;
+            case SpeakResult.Failed:
+                owner.FlashMessage(Loc.T("Popup_SpeechUnavailable"));
+                break;
+        }
     }
 
     // ---- Companion Study Card lifecycle ----------------------------------------------------------

@@ -445,8 +445,9 @@ public partial class StudyCardWindow : Window, IPopupSurface
                 };
                 btn.Click += (_, _) =>
                 {
-                    if (!_speech.TrySpeak(phrase, _deck?.SourceLanguage))
-                        FlashCaption(Loc.T("Study_NoVoice"));
+                    var result = _speech.TrySpeak(phrase, _deck?.SourceLanguage);
+                    if (result != SpeakResult.Started)
+                        FlashCaption(SpeechMessages.For(result, _deck?.SourceLanguage));
                 };
                 CollocationPanel.Children.Add(btn);
             }
@@ -715,8 +716,9 @@ public partial class StudyCardWindow : Window, IPopupSurface
     {
         if (_deck is null || _deck.Cards.Count == 0) return;
         var card = _deck.Cards[Math.Clamp(_cardIndex, 0, _deck.Cards.Count - 1)];
-        if (!_speech.TrySpeak(card.Term, _deck.SourceLanguage, slow))
-            FlashCaption(Loc.T("Study_NoVoice"));
+        var result = _speech.TrySpeak(card.Term, _deck.SourceLanguage, slow);
+        if (result != SpeakResult.Started)
+            FlashCaption(SpeechMessages.For(result, _deck.SourceLanguage));
         else if (slow)
             FlashCaption(Loc.T("Study_SlowReading"));
     }
@@ -729,8 +731,9 @@ public partial class StudyCardWindow : Window, IPopupSurface
         if (_deck is null || _deck.Cards.Count == 0) return;
         var card = _deck.Cards[Math.Clamp(_cardIndex, 0, _deck.Cards.Count - 1)];
         if (card.Example is not { } ex) return;
-        if (!_speech.TrySpeak(ex.Source, _deck.SourceLanguage, slow))
-            FlashCaption(Loc.T("Study_NoVoice"));
+        var result = _speech.TrySpeak(ex.Source, _deck.SourceLanguage, slow);
+        if (result != SpeakResult.Started)
+            FlashCaption(SpeechMessages.For(result, _deck.SourceLanguage));
         else if (slow)
             FlashCaption(Loc.T("Study_SlowExample"));
     }

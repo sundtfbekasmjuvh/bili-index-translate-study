@@ -42,7 +42,7 @@ downloaded update is waiting, Restart and update).
 A second instance does not start twice; it opens the Settings window of the running one.
 `BiliIndexTranslate.exe --diagnostics` opens the Diagnostics window right after start, and `--vocabulary` opens the Vocabulary window.
 
-**Read aloud.** The speaker button on the card reads the original text (never the translation); Shift+click reads it slowly. The voice language comes from the Source language setting, or is guessed from the text when that is "auto" (short texts and single words may be guessed wrong). It uses the voices installed in Windows, and nothing is ever spoken automatically.
+**Read aloud.** The speaker button on the card reads the original text (never the translation); Shift+click reads it slowly. The voice language comes from the Source language setting, or is guessed from the text when that is "auto" (short texts and single words may be guessed wrong). It uses the voices installed in Windows, from both speech engines (the newer one that language packs add, then the classic one), and always one that matches the language. If no voice for that language is installed, the card says so and where to add one (Windows Settings → Time & language → Speech); nothing is ever spoken with a voice of another language, and nothing is spoken automatically.
 
 **Diagnostics bundle.** The Diagnostics window has an **Export diagnostics…** button that saves a ZIP for bug
 reports: `report.txt` (what "Copy report" gives), `diagnostics.log` (last 2 MB, only if file logging is on and

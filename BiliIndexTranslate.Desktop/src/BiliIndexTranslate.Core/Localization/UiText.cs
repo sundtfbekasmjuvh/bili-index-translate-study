@@ -204,6 +204,7 @@ public static partial class UiText
         ["Popup_Copied"] = "Copied",
         ["Popup_Speak"] = "Read the original aloud (Shift+click: slow)",
         ["Popup_SpeechUnavailable"] = "Speech is not available",
+        ["Speech_NoVoiceForLanguage"] = "No {0} voice is installed (Windows Settings \u2192 Time & language \u2192 Speech)",
 
         ["Error_Timeout"] = "No response",
         ["Error_Network"] = "Connection problem",
@@ -482,6 +483,7 @@ public static partial class UiText
         ["Popup_Copied"] = "已复制",
         ["Popup_Speak"] = "朗读原文（Shift+点击慢速）",
         ["Popup_SpeechUnavailable"] = "无法朗读",
+        ["Speech_NoVoiceForLanguage"] = "没有安装{0}语音（Windows 设置 \u2192 时间和语言 \u2192 语音）",
 
         ["Error_Timeout"] = "响应超时",
         ["Error_Network"] = "连接异常",

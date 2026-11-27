@@ -2,6 +2,7 @@ using System.Runtime.CompilerServices;
 using FlaUI.Core.AutomationElements;
 using FlaUI.Core.Tools;
 using Xunit;
+using Xunit.Abstractions;
 
 namespace BiliIndexTranslate.App.UiTests;
 
@@ -12,6 +13,10 @@ namespace BiliIndexTranslate.App.UiTests;
 public class SelectionCardTests
 {
     private static readonly string Full = MockUpstream.FullText;
+
+    private readonly ITestOutputHelper _output;
+
+    public SelectionCardTests(ITestOutputHelper output) => _output = output;
 
     [Fact]
     public void Select_shows_streamed_card_and_escape_closes_it()
@@ -103,6 +108,16 @@ public class SelectionCardTests
                 TimeSpan.FromSeconds(5), TimeSpan.FromMilliseconds(200)).Success;
             Assert.True(found, "no 'speak original' log line within 5 s");
             Assert.Contains("speak original (lang en-US", ui.DiagnosticsLog(), StringComparison.Ordinal);
+
+            // The voice lookup is synchronous, so one of these lines follows at once. Which one depends on the
+            // runner's installed voices, so it is recorded, not asserted ("no voice for en-US" is a pass too).
+            string[] outcomes = { "winrt voice", "sapi voice", "no voice for" };
+            var voiceFound = Retry.WhileFalse(() => outcomes.Any(o => ui.DiagnosticsLog().Contains(o, StringComparison.Ordinal)),
+                TimeSpan.FromSeconds(5), TimeSpan.FromMilliseconds(200)).Success;
+            var logText = ui.DiagnosticsLog();
+            var chosen = outcomes.FirstOrDefault(o => logText.Contains(o, StringComparison.Ordinal));
+            _output.WriteLine($"speech outcome: {chosen ?? "(none)"}");
+            Assert.True(voiceFound, "no 'winrt voice', 'sapi voice' or 'no voice for' diagnostics line within 5 s");
         });
     }
 
