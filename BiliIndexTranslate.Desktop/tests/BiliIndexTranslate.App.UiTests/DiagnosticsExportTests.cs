@@ -1,9 +1,6 @@
 using System.IO.Compression;
 using System.Runtime.CompilerServices;
 using FlaUI.Core.AutomationElements;
-using FlaUI.Core.Input;
-using FlaUI.Core.Tools;
-using FlaUI.Core.WindowsAPI;
 using Xunit;
 using Xunit.Abstractions;
 
@@ -16,8 +13,6 @@ namespace BiliIndexTranslate.App.UiTests;
 /// </summary>
 public class DiagnosticsExportTests
 {
-    private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(15);
-
     private readonly ITestOutputHelper _output;
 
     public DiagnosticsExportTests(ITestOutputHelper output) => _output = output;
@@ -48,24 +43,8 @@ public class DiagnosticsExportTests
                 export.AsButton().Invoke();
                 _output.WriteLine("step 2: invoked Export diagnostics");
 
-                var dialog = WaitFor(() => FindSaveDialog(ui), "Save dialog (class #32770)");
-                _output.WriteLine("step 3: Save dialog found, title '" + Win32.Title(dialog) + "'");
-
-                var dialogElement = ui.Automation.FromHandle(dialog);
-                var cf = ui.Automation.ConditionFactory;
-                var nameBox = WaitFor(() => dialogElement.FindFirstDescendant(cf.ByAutomationId("1001")), "file name edit (AutomationId 1001)");
-                _output.WriteLine($"step 4a: file name box class '{nameBox.ClassName}', value '{EditValue(nameBox)}'");
-                // Setting the value through UIA changed nothing the dialog used (it saved under the default name), so the
-                // path is typed like a user would, and read back before Save.
-                nameBox.Focus();
-                Thread.Sleep(200);
-                Keyboard.TypeSimultaneously(VirtualKeyShort.CONTROL, VirtualKeyShort.KEY_A);
-                Keyboard.Type(target);
-                Thread.Sleep(300);
-                _output.WriteLine($"step 4: file name box now '{EditValue(nameBox)}'");
-                var save = WaitFor(() => dialogElement.FindFirstDescendant(cf.ByAutomationId("1")), "Save button (AutomationId 1)");
-                save.AsButton().Invoke();
-                _output.WriteLine("step 5: invoked Save");
+                // The path is typed like a user would (setting the value through UIA changed nothing the dialog used) and read back before Save.
+                SaveDialog.SaveAs(ui, target, _output);
 
                 var status = WaitFor(() =>
                 {
@@ -125,33 +104,9 @@ public class DiagnosticsExportTests
         _output.WriteLine("step 9: no sentinel, no user name, no user folder, origin kept");
     }
 
-    private static string EditValue(AutomationElement e)
-    {
-        try { return e.Patterns.Value.PatternOrDefault?.Value.ValueOrDefault ?? e.Name; }
-        catch (Exception) { return "?"; }
-    }
-
     // ---- helpers ------------------------------------------------------------------------------
 
-    private static IntPtr FindSaveDialog(UiSession ui)
-        => Win32.TopLevelWindows(ui.AppProcess.Id, visibleOnly: true).FirstOrDefault(h => Win32.ClassName(h) == "#32770");
-
-    private static T WaitFor<T>(Func<T?> find, string what) where T : class
-    {
-        var result = Retry.WhileNull(() =>
-        {
-            try { return find(); }
-            catch (Exception) { return null; } // the element can vanish or not exist yet
-        }, Timeout, TimeSpan.FromMilliseconds(200));
-        return result.Result ?? throw new TimeoutException($"{what} not found within {Timeout.TotalSeconds:F0} s");
-    }
-
-    private static IntPtr WaitFor(Func<IntPtr> find, string what)
-    {
-        var found = IntPtr.Zero;
-        var result = Retry.WhileFalse(() => (found = find()) != IntPtr.Zero, Timeout, TimeSpan.FromMilliseconds(200));
-        return result.Success ? found : throw new TimeoutException($"{what} not found within {Timeout.TotalSeconds:F0} s");
-    }
+    private static T WaitFor<T>(Func<T?> find, string what) where T : class => UiWait.WaitFor(find, what);
 
     private static Dictionary<string, string> ReadZip(string path)
     {

@@ -54,6 +54,7 @@ public sealed class UiSession : IDisposable
     private readonly Action<AppSettings>? _customizeSettings;
     private readonly string? _plainApiKey;
     private readonly IReadOnlyList<string> _appArgs;
+    private readonly Action<string>? _seedDataDir;
 
     /// <param name="external">When given, this program is the selection target instead of the WPF test target window.</param>
     /// <param name="hotkeyEnabled">Registers the explicit hotkey (default Alt+Q) in the app; off for all other tests.</param>
@@ -63,11 +64,13 @@ public sealed class UiSession : IDisposable
     /// <param name="customizeSettings">Changes the settings before settings.json is written.</param>
     /// <param name="plainApiKey">Writes this API key into settings.json as the plain-text v1 field, which the app reads (and then protects) on start.</param>
     /// <param name="appArgs">Extra command-line arguments for the app, after --data-dir.</param>
+    /// <param name="seedDataDir">Called with the data directory before the app starts, to put files there (a vocabulary.json, say).</param>
     public UiSession(string testName, int? failWithStatus = null, ExternalTarget? external = null,
         bool hotkeyEnabled = false, bool uiaSelectionEvents = true, bool snipHotkeyEnabled = false,
         bool onboardingCompleted = true, Action<AppSettings>? customizeSettings = null, string? plainApiKey = null,
-        IReadOnlyList<string>? appArgs = null)
+        IReadOnlyList<string>? appArgs = null, Action<string>? seedDataDir = null)
     {
+        _seedDataDir = seedDataDir;
         _customizeSettings = customizeSettings;
         _plainApiKey = plainApiKey;
         _appArgs = appArgs ?? [];
@@ -85,6 +88,7 @@ public sealed class UiSession : IDisposable
             // A browser or Notepad window left over from an earlier test would take the focus and the selection.
             if (_external is not null) SelectionApps.CloseLeftovers();
             WriteSettings();
+            _seedDataDir?.Invoke(DataDir);
             StartTarget();
             StartApp();
         }
@@ -460,7 +464,7 @@ public sealed class UiSession : IDisposable
             // Only when the session has a UIA target window: a cold session must not query its target.
             if (_external is not null && _targetWindow is not null)
                 File.WriteAllText(Path.Combine(dir, _testName + ".uia-tree.txt"), UiaDiagnostics.DumpTree(Automation, _targetWindow));
-            foreach (var log in new[] { "diagnostics.log", "crash.log", "settings.json" })
+            foreach (var log in new[] { "diagnostics.log", "crash.log", "settings.json", "vocabulary.json" })
             {
                 var src = Path.Combine(DataDir, log);
                 if (!File.Exists(src)) continue;

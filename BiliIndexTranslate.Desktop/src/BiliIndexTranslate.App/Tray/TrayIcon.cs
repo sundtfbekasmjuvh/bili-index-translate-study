@@ -41,6 +41,8 @@ internal sealed class TrayIcon : IDisposable
         settings.Click += (_, _) => SettingsRequested?.Invoke();
         var diagnostics = new ToolStripMenuItem(Loc.T("Tray_Diagnostics"));
         diagnostics.Click += (_, _) => DiagnosticsRequested?.Invoke();
+        var vocabulary = new ToolStripMenuItem(Loc.T("Tray_Vocabulary"));
+        vocabulary.Click += (_, _) => VocabularyRequested?.Invoke();
         var welcome = new ToolStripMenuItem(Loc.T("Tray_Welcome"));
         welcome.Click += (_, _) => WelcomeRequested?.Invoke();
         var exit = new ToolStripMenuItem(Loc.T("Tray_Exit"));
@@ -56,7 +58,7 @@ internal sealed class TrayIcon : IDisposable
             _updateItem, _updateSeparator,
             _autoItem, _appItem, new ToolStripSeparator(),
             snip, ocrCopy, clipboard, new ToolStripSeparator(),
-            settings, diagnostics, welcome, new ToolStripSeparator(),
+            settings, diagnostics, vocabulary, welcome, new ToolStripSeparator(),
             exit,
         });
         _menu.Opening += (_, _) => RefreshAppItem();
@@ -80,6 +82,7 @@ internal sealed class TrayIcon : IDisposable
             clipboard.Text = Loc.T("Tray_Clipboard");
             settings.Text = Loc.T("Tray_Settings");
             diagnostics.Text = Loc.T("Tray_Diagnostics");
+            vocabulary.Text = Loc.T("Tray_Vocabulary");
             welcome.Text = Loc.T("Tray_Welcome");
             exit.Text = Loc.T("Tray_Exit");
             _updateItem.Text = Loc.T("Tray_RestartUpdate");
@@ -95,6 +98,7 @@ internal sealed class TrayIcon : IDisposable
     public event Action? TranslateClipboardRequested;
     public event Action? SettingsRequested;
     public event Action? DiagnosticsRequested;
+    public event Action? VocabularyRequested;
     public event Action? WelcomeRequested;
     public event Action? ExitRequested;
     public event Action? RestartUpdateRequested;

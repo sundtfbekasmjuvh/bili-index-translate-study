@@ -15,6 +15,7 @@ using BiliIndexTranslate.App.Tray;
 using BiliIndexTranslate.App.Uia;
 using BiliIndexTranslate.App.Updates;
 using BiliIndexTranslate.App.Vision;
+using BiliIndexTranslate.App.Vocabulary;
 using BiliIndexTranslate.Core.Diagnostics;
 using BiliIndexTranslate.Core.Geometry;
 using BiliIndexTranslate.Core.Localization;
@@ -23,6 +24,7 @@ using BiliIndexTranslate.Core.Session;
 using BiliIndexTranslate.Core.Settings;
 using BiliIndexTranslate.Core.Study;
 using BiliIndexTranslate.Core.Translation;
+using BiliIndexTranslate.Core.Vocabulary;
 using BiliIndexTranslate.App.Localization;
 
 namespace BiliIndexTranslate.App;
@@ -39,11 +41,13 @@ internal sealed class AppHost : IDisposable
     private readonly string _dataDir;
     private readonly bool _forceWelcome;
     private readonly bool _openDiagnostics;
+    private readonly bool _openVocabulary;
 
     private readonly DiagnosticsLog _log = new(300);
     private readonly TimingStats _timings = new(128);
     private readonly AppSupportRegistry _registry = new();
     private readonly SettingsStore _store;
+    private readonly VocabularyStore _vocabulary;
     private AppSettings _settings = new AppSettings().Normalize();
 
     private readonly TranslationCache _cache = new(500, TimeSpan.FromHours(24));
@@ -85,14 +89,16 @@ internal sealed class AppHost : IDisposable
     private bool _started;
     private bool _disposed;
 
-    public AppHost(Application app, string dataDir, bool forceWelcome, bool openDiagnostics = false)
+    public AppHost(Application app, string dataDir, bool forceWelcome, bool openDiagnostics = false, bool openVocabulary = false)
     {
+        _openVocabulary = openVocabulary;
         _app = app;
         _dispatcher = app.Dispatcher;
         _dataDir = dataDir;
         _forceWelcome = forceWelcome;
         _openDiagnostics = openDiagnostics;
         _store = new SettingsStore(Path.Combine(dataDir, "settings.json"), new DpapiSecretProtector());
+        _vocabulary = new VocabularyStore(Path.Combine(dataDir, "vocabulary.json"), _log);
         _translator = new OpenAiCompatibleTranslator(_transport, TimeSpan.FromSeconds(20));
         _studyService = new StudyCardService(_transport, TimeSpan.FromSeconds(30));
         _visionService = new VisionTranslationService(_transport, TimeSpan.FromSeconds(35));
@@ -112,7 +118,8 @@ internal sealed class AppHost : IDisposable
             s => ApplySettings(s, notifySession: true, notifySaveFailure: false),
             () => _updates,
             () => new AppStatus(_session.State, _hooks.HooksInstalled, _observer.IsAlive, _cache.Count, _cache.Hits, _cache.Misses, _coordinator.ActiveCount),
-            () => _saver.TrySave());
+            () => _saver.TrySave(),
+            _vocabulary);
     }
 
     private void Post(Action action)
@@ -158,7 +165,8 @@ internal sealed class AppHost : IDisposable
                 if (!string.IsNullOrWhiteSpace(modelOverride))
                     req = req with { Model = modelOverride };
                 return _studyService.GenerateAsync(req, ct, onPartial);
-            });
+            },
+            new VocabularyCardActions(_vocabulary, () => _settings));
         _popup.Configure(_settings.TextScale, _settings.ShowOriginalByDefault);
         _vision = new VisionController(
             _popup,
@@ -224,7 +232,8 @@ internal sealed class AppHost : IDisposable
         _tray.TranslateClipboardRequested += TranslateClipboard;
         _tray.SettingsRequested += _windows.OpenSettings;
         _tray.DiagnosticsRequested += _windows.OpenDiagnostics;
-        _tray.WelcomeRequested += () => _windows.OpenWelcome(force: true);
+        _tray.VocabularyRequested += _windows.OpenVocabulary;
+        _tray.WelcomeRequested +=() => _windows.OpenWelcome(force: true);
         _tray.ExitRequested += Exit;
 
         _stabTimer.Tick += (_, _) => { _stabTimer.Stop(); var id = _stabTimerId; _stabTimerId = 0; Dispatch(new SessionEvent.StabilizationElapsed(id)); };
@@ -251,6 +260,7 @@ internal sealed class AppHost : IDisposable
         _log.Info("app", $"ready · auto={_settings.AutoTranslate} delay={_settings.StabilizationDelayMs}ms target={_settings.TargetLanguage} model={_settings.Model} relay={_settings.UseRelay}");
         if (_forceWelcome || !_settings.OnboardingCompleted) _windows.OpenWelcome(force: false);
         if (_openDiagnostics) _windows.OpenDiagnostics();
+        if (_openVocabulary) _windows.OpenVocabulary();
 
         // Prepare the card window once the start-up work is done, so the first selection does not wait for it.
         System.Windows.Threading.Dispatcher.CurrentDispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.ApplicationIdle, () =>

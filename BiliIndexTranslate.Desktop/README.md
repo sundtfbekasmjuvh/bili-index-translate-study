@@ -37,10 +37,10 @@ background save reports it once through a tray notice; [docs/TESTING.md](docs/TE
 one cause (a checkout under a directory with a Low integrity label).
 
 The app lives in the notification area. Right-click the icon for: automatic translation on/off,
-"Don't translate in *app*", translate clipboard text, Settings, Diagnostics, Welcome, Exit (and, while a
+"Don't translate in *app*", translate clipboard text, Settings, Diagnostics, Vocabulary, Welcome, Exit (and, while a
 downloaded update is waiting, Restart and update).
 A second instance does not start twice; it opens the Settings window of the running one.
-`BiliIndexTranslate.exe --diagnostics` opens the Diagnostics window right after start.
+`BiliIndexTranslate.exe --diagnostics` opens the Diagnostics window right after start, and `--vocabulary` opens the Vocabulary window.
 
 **Read aloud.** The speaker button on the card reads the original text (never the translation); Shift+click reads it slowly. The voice language comes from the Source language setting, or is guessed from the text when that is "auto" (short texts and single words may be guessed wrong). It uses the voices installed in Windows, and nothing is ever spoken automatically.
 
@@ -67,7 +67,8 @@ The file is saved only where you choose in the Save dialog; nothing is uploaded.
    pronunciation via Windows SAPI, IPA/reading, register badge, synonym/usage nuance,
    etymology/mnemonic, collocations, bilingual example, sentence grammar note, pageable key-vocab
    flashcards, and `自测翻转` active recall).
-   Ctrl + mouse wheel over a card changes the text size (remembered).
+   Ctrl + mouse wheel over a card changes the text size (remembered). The star on a card adds it to the
+   vocabulary book (see below).
 
 Optional fallback: `Alt+Q` (configurable, can be disabled) asks for a translation on demand. If
 UI Automation cannot read the selection, this — and only this — sends a single Ctrl+C and
@@ -164,11 +165,39 @@ selected text.
 Settings file: `%LocalAppData%\BiliIndexTranslate\settings.json`. Malformed files are backed up as
 `settings.json.bad` and replaced with defaults; older files with a plain-text key are migrated.
 
+## Vocabulary and Anki
+
+Both cards have a star. On the selection card (hover the card; shown once the translation is complete) it
+saves the **sentence**: the original text and its translation. On the Study card it saves the **word card** being
+shown (term, reading, part of speech, register, meaning, nuance, memory aid, collocations, example and the card's
+source language). Click a filled star again to remove the entry. The star is the only way anything gets saved:
+nothing is recorded automatically, and selecting or translating text never writes to the book.
+
+**Where it lives.** `vocabulary.json` in the data directory, next to `settings.json`
+(`%LocalAppData%\BiliIndexTranslate\`). It is a plain, readable JSON file: not encrypted, never uploaded, and not
+part of the diagnostics bundle. Delete the file (or use **Clear all** in the Vocabulary window) to erase it.
+The app log only records how many entries there are, never their text.
+
+**Vocabulary window.** Tray menu → **Vocabulary…** (or start with `--vocabulary`). Search (text, translation, meaning),
+select entries and **Delete selected** (or press Delete), **Clear all…** (asks first). It updates when you click a star on a card.
+
+**Export to Anki.** **Export to Anki…** saves the whole book as a text file
+(`BiliIndexTranslate-anki-<date>.txt`; UTF-8, tab-separated, HTML on, with Anki file headers). In Anki 2.1.54 or newer choose
+**File → Import** and pick the file. The deck **Bili Index Translate** is created when it does not exist, and notes get
+tags (`bili-index-translate`, `word` or `sentence`, `lang-<source language>`). Sentences become Front = original,
+Back = translation; words become Front = term, Back = reading, part of speech, meaning, nuance, example, memory aid and
+collocations. Every note carries a stable GUID, so importing a newer export again updates the same notes instead of adding duplicates.
+
+**Newer file.** If `vocabulary.json` was written by a newer version of the app (a higher `schemaVersion`), it is opened
+read-only: you can view and export it, but stars and delete buttons do nothing, so nothing a newer version added is lost.
+A file that cannot be parsed is moved to `vocabulary.json.bad-<time>` and the book starts empty.
+
 ## Privacy
 
 Only the selected text and request metadata (model, target language) are sent to the configured
-translation endpoint. No telemetry, no history, no persisted cache; diagnostics never contain selected
-text, translations, or keys (only lengths and a short fingerprint).
+translation endpoint. No telemetry, no history, no persisted cache; the one thing the app writes about
+your reading is the vocabulary book, and only when you click a star (see "Vocabulary and Anki": a local file, never
+uploaded). Diagnostics never contain selected text, translations, vocabulary entries or keys (only lengths and a short fingerprint).
 
 Screen snip with local OCR (Automatic with a DeepLX or custom endpoint, or Always local OCR) does not
 upload the screenshot: the image is recognized in memory by Windows and only the recognized text is

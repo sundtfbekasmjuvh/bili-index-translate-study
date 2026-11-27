@@ -8,6 +8,7 @@ using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
 using BiliIndexTranslate.App.Native;
+using BiliIndexTranslate.App.Vocabulary;
 using BiliIndexTranslate.Core.Geometry;
 using BiliIndexTranslate.Core.Selection;
 using BiliIndexTranslate.Core.Translation;
@@ -64,6 +65,9 @@ public partial class PopupWindow : Window, IPopupSurface
     public string? CurrentTranslation { get; private set; }
     public string? CurrentSource { get; private set; }
 
+    /// <summary>What the star talks to; set by the presenter.</summary>
+    internal VocabularyCardActions? VocabularyActions { get; set; }
+
     public void EnsureHandle()
     {
         if (Hwnd != IntPtr.Zero) return;
@@ -112,6 +116,7 @@ public partial class PopupWindow : Window, IPopupSurface
         Footer.Visibility = Visibility.Collapsed;
         StudyButton.Visibility = Visibility.Collapsed;
         SpeakButton.Visibility = Visibility.Collapsed;
+        SaveWordButton.Visibility = Visibility.Collapsed;
         SetStudyOpen(false);
         Caption.Text = caption ?? string.Empty;
         CopyButton.IsEnabled = false;
@@ -140,6 +145,8 @@ public partial class PopupWindow : Window, IPopupSurface
         Footer.Visibility = Visibility.Visible;
         StudyButton.Visibility = hasSource && !partial ? Visibility.Visible : Visibility.Collapsed;
         SpeakButton.Visibility = StudyButton.Visibility;
+        SaveWordButton.Visibility = hasSource && !partial ? Visibility.Visible : Visibility.Collapsed;
+        if (hasSource && !partial) RefreshVocabularyStar();
         Caption.Text = caption ?? string.Empty;
         CopyButton.IsEnabled = !partial;
         PinButton.IsEnabled = !partial && !IsPinned;
@@ -187,6 +194,7 @@ public partial class PopupWindow : Window, IPopupSurface
         Footer.Visibility = Visibility.Visible;
         StudyButton.Visibility = Visibility.Collapsed;
         SpeakButton.Visibility = Visibility.Collapsed;
+        SaveWordButton.Visibility = Visibility.Collapsed;
         SetStudyOpen(false);
         Caption.Text = caption ?? string.Empty;
         CopyButton.IsEnabled = false;
@@ -350,6 +358,26 @@ public partial class PopupWindow : Window, IPopupSurface
         => SpeakRequested?.Invoke((Keyboard.Modifiers & ModifierKeys.Shift) != 0);
 
     private void OnStudyClick(object sender, RoutedEventArgs e) => StudyRequested?.Invoke();
+
+    /// <summary>The star: adds the sentence (the original and final translation this window holds) to the vocabulary book, or removes it.</summary>
+    private void OnSaveWordClick(object sender, RoutedEventArgs e)
+    {
+        if (VocabularyActions is null || string.IsNullOrWhiteSpace(CurrentSource) || CurrentTranslation is null) return;
+        FlashCaption(VocabularyActions.Message(VocabularyActions.ToggleSentence(CurrentSource, CurrentTranslation)));
+        RefreshVocabularyStar();
+    }
+
+    /// <summary>Filled star when the sentence on the card is in the vocabulary book. Called when a translation is shown and when the book changes.</summary>
+    public void RefreshVocabularyStar()
+    {
+        var saved = CurrentTranslation is not null && VocabularyActions?.IsSentenceSaved(CurrentSource) == true;
+        SaveWordButton.Content = saved ? "" : "";
+        var textKey = saved ? "Vocab_Remove" : "Vocab_Add";
+        Loc.Bind(SaveWordButton, FrameworkElement.ToolTipProperty, textKey);
+        Loc.Bind(SaveWordButton, AutomationProperties.NameProperty, textKey);
+        if (saved) SaveWordButton.Foreground = (Brush)FindResource("Popup.Accent");
+        else SaveWordButton.ClearValue(ForegroundProperty);
+    }
 
     private void OnOriginalClick(object sender, RoutedEventArgs e)
     {

@@ -97,6 +97,7 @@
             <Button x:Name="SpeakButton" Style="{StaticResource IconButton}" Content="&#xE767;" ToolTip="{loc:Tr Popup_Speak}" Click="OnSpeakClick" Visibility="Collapsed" AutomationProperties.Name="{loc:Tr Popup_Speak}" />
             <Button x:Name="CopyButton" Style="{StaticResource IconButton}" Content="&#xE8C8;" ToolTip="{loc:Tr Popup_Copy}" Click="OnCopyClick" AutomationProperties.Name="{loc:Tr Popup_Copy}" />
             <Button x:Name="PinButton" Style="{StaticResource IconButton}" Content="&#xE718;" ToolTip="{loc:Tr Popup_Pin}" Click="OnPinClick" AutomationProperties.Name="{loc:Tr Popup_PinAria}" />
+            <Button x:Name="SaveWordButton" Style="{StaticResource IconButton}" Content="&#xE734;" Visibility="Collapsed" ToolTip="{loc:Tr Vocab_Add}" Click="OnSaveWordClick" AutomationProperties.Name="{loc:Tr Vocab_Add}" />
             <Button x:Name="CloseButton" Style="{StaticResource IconButton}" Content="&#xE711;" ToolTip="{loc:Tr Popup_Close}" Click="OnCloseClick" AutomationProperties.Name="{loc:Tr Common_Close}" />
           </StackPanel>
         </Grid>
