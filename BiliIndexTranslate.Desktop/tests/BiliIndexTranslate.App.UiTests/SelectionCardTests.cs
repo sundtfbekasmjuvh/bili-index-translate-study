@@ -118,6 +118,20 @@ public class SelectionCardTests
             var chosen = outcomes.FirstOrDefault(o => logText.Contains(o, StringComparison.Ordinal));
             _output.WriteLine($"speech outcome: {chosen ?? "(none)"}");
             Assert.True(voiceFound, "no 'winrt voice', 'sapi voice' or 'no voice for' diagnostics line within 5 s");
+
+            // Evidence only (the runner may have no audio device): did WinRT synthesize, and did playback report a failure?
+            // Speech log lines carry engine, voice, sizes and error codes, never the text.
+            if (chosen == "winrt voice")
+            {
+                Retry.WhileFalse(() =>
+                {
+                    var t = ui.DiagnosticsLog();
+                    return t.Contains("winrt synthesized", StringComparison.Ordinal) || t.Contains("winrt synthesis failed", StringComparison.Ordinal);
+                }, TimeSpan.FromSeconds(5), TimeSpan.FromMilliseconds(200));
+                Thread.Sleep(1000); // a playback failure arrives after Play()
+            }
+            foreach (var line in ui.DiagnosticsLog().Split('\n').Where(l => l.Contains(" speech ", StringComparison.Ordinal)))
+                _output.WriteLine("speech log: " + line.Trim());
         });
     }
 

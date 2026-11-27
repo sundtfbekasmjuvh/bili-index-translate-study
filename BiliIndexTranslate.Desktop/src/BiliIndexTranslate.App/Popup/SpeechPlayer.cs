@@ -192,6 +192,7 @@ internal sealed class SpeechPlayer : IDisposable
                 return; // stale: Stop() or a newer request came first; the finally block disposes the stream
             }
             _pending = null;
+            Log?.Info("speech", $"winrt synthesized {stream.Size} bytes ({stream.ContentType})");
 
             var source = MediaSource.CreateFromStream(stream, stream.ContentType);
             _stream = stream;
