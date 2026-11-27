@@ -90,10 +90,25 @@ public static class AnkiExport
     private static string Tags(VocabularyEntry e)
     {
         var tags = new List<string> { "bili-index-translate", e.Kind == VocabularyKind.Word ? "word" : "sentence" };
-        var lang = TagPart(e.SourceLanguage);
+        var lang = LanguageTag(e.SourceLanguage);
         if (lang.Length > 0) tags.Add("lang-" + lang);
         return string.Join(' ', tags);
     }
+
+    /// <summary>
+    /// The language part of the tag. A BCP-47 tag keeps only its primary subtag (<c>ja-JP</c>, <c>ja</c> → <c>ja</c>;
+    /// <c>zh-Hant</c> → <c>zh</c>), so sentences and words of one language share a tag whichever region or script the
+    /// detection or the model gave. Anything else goes through <see cref="TagPart"/>.
+    /// </summary>
+    internal static string LanguageTag(string? value)
+    {
+        var v = (value ?? string.Empty).Trim();
+        if (Bcp47.IsMatch(v)) return v.Split('-', '_')[0].ToLowerInvariant();
+        return TagPart(v);
+    }
+
+    private static readonly System.Text.RegularExpressions.Regex Bcp47 =
+        new(@"^[A-Za-z]{2,3}(?:[-_][A-Za-z0-9]{1,8})*$", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
 
     /// <summary>Lowercase, spaces to hyphens, only <c>[a-z0-9_-]</c> kept.</summary>
     internal static string TagPart(string? value)

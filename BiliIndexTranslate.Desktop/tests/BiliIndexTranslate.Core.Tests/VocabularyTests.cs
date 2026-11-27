@@ -79,6 +79,14 @@ public class VocabularyEntryTests
         Assert.Equal("zh-Hans", e.TargetLanguage);
     }
 
+    [Theory]
+    [InlineData("今日は良い天気ですね", "auto", "ja-JP")]
+    [InlineData("¿Dónde está la estación de tren?", null, "es-ES")]
+    [InlineData("Hello", "auto", "")] // one ambiguous word: no language rather than a guessed en-US
+    [InlineData("Hello there, this is a test", "ja", "ja")] // an explicit setting wins over the text
+    public void ForSentence_with_auto_stores_the_language_the_text_clearly_shows(string text, string? setting, string expected)
+        => Assert.Equal(expected, VocabularyEntry.ForSentence(text, "x", setting, "zh-Hans").SourceLanguage);
+
     [Fact]
     public void Identity_ignores_case_and_whitespace_but_not_kind_or_target_language()
     {
@@ -533,6 +541,18 @@ public class AnkiExportTests
         Assert.Contains("\"bit-" + e.Id + "\"", first, StringComparison.Ordinal);
     }
 
+    [Theory]
+    [InlineData("ja-JP", "ja")]
+    [InlineData("ja", "ja")]
+    [InlineData("zh-Hant", "zh")]
+    [InlineData("zh_CN", "zh")]
+    [InlineData("es-419", "es")]
+    [InlineData("EN-us", "en")]
+    [InlineData("Japanese", "japanese")]
+    [InlineData("", "")]
+    public void Language_tag_keeps_the_primary_subtag_of_a_bcp47_tag(string sourceLanguage, string expected)
+        => Assert.Equal(expected, AnkiExport.LanguageTag(sourceLanguage));
+
     [Fact]
     public void Tags_are_sanitized_and_the_language_tag_is_left_out_when_unknown()
     {
@@ -569,7 +589,7 @@ public class AnkiExportTests
         Assert.Equal(
             "rʌn ʌp<br>phrasal verb · informal<br>to &lt;accumulate&gt; a bill<br>stronger<br>than add<br><i>She ran up a bill.<br>她欠了账单。</i><br>stairs &amp; bills<br>run up a bill · run up against",
             f[1]);
-        Assert.Equal("bili-index-translate word lang-en-us", f[2]);
+        Assert.Equal("bili-index-translate word lang-en", f[2]);
 
         var sparse = new VocabularyEntry { Kind = VocabularyKind.Word, Text = "tree", PartOfSpeech = "noun", Meaning = "a plant", ExampleTarget = "树" };
         Assert.Equal("noun<br>a plant<br><i>树</i>", Fields(Lines(AnkiExport.ToText([sparse]))[6])[1]);

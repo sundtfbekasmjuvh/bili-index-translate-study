@@ -46,12 +46,19 @@ public static class SpeechLanguage
             && Explicit.TryGetValue(setting.Replace('_', '-'), out var mapped))
             return mapped;
 
-        return Detect(text);
+        return Detect(text) ?? Fallback;
     }
 
-    private static string Detect(string? text)
+    /// <summary>
+    /// The language the text itself shows, or null when it shows none clearly (empty text, no letters, Latin text
+    /// whose common words tie or are missing). Unlike <see cref="Guess"/> it never falls back to en-US, so a label
+    /// built from it is not wrong just because a single word was ambiguous.
+    /// </summary>
+    public static string? TryDetect(string? text) => Detect(text);
+
+    private static string? Detect(string? text)
     {
-        if (string.IsNullOrWhiteSpace(text)) return Fallback;
+        if (string.IsNullOrWhiteSpace(text)) return null;
 
         int kana = 0, hangul = 0, han = 0, cyrillic = 0, greek = 0, arabic = 0, hebrew = 0, thai = 0, devanagari = 0, latin = 0;
         foreach (var r in text.EnumerateRunes())
@@ -75,7 +82,7 @@ public static class SpeechLanguage
 
         var best = Math.Max(Math.Max(Math.Max(hangul, han), Math.Max(cyrillic, greek)),
             Math.Max(Math.Max(arabic, hebrew), Math.Max(Math.Max(thai, devanagari), latin)));
-        if (best == 0) return Fallback;
+        if (best == 0) return null;
 
         if (hangul == best) return "ko-KR";
         if (han == best) return "zh-CN";
@@ -88,7 +95,7 @@ public static class SpeechLanguage
         return GuessLatin(text);
     }
 
-    private static string GuessLatin(string text)
+    private static string? GuessLatin(string text)
     {
         var lower = text.ToLowerInvariant();
         var words = new Dictionary<string, int>(StringComparer.Ordinal);
@@ -107,7 +114,7 @@ public static class SpeechLanguage
         }
         Flush();
 
-        var bestTag = Fallback;
+        string? bestTag = null;
         var bestScore = 0;
         var tie = false;
         foreach (var (tag, list, chars) in LatinProfiles)
@@ -121,6 +128,6 @@ public static class SpeechLanguage
             if (score > bestScore) { bestScore = score; bestTag = tag; tie = false; }
             else if (score == bestScore && score > 0) tie = true;
         }
-        return tie || bestScore == 0 ? Fallback : bestTag;
+        return tie || bestScore == 0 ? null : bestTag;
     }
 }
